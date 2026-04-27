@@ -1,0 +1,31 @@
+Software Engineer, New Grad — Stripe
+San Francisco, CA (Hybrid)
+
+About the role:
+We're looking for new grad software engineers to join our team building the
+infrastructure that powers internet commerce. You'll work on distributed systems
+that process millions of API requests per second, build developer tools, and
+help design the next generation of financial infrastructure.
+
+What you'll do:
+- Design, build, and maintain APIs, services, and systems across Stripe's engineering teams
+- Debug production issues across services and levels of the stack
+- Work with engineers across the company to build new features at large scale
+- Improve engineering standards, tooling, and processes
+
+Who you are:
+- You have a BS/MS in Computer Science or equivalent experience
+- You have strong programming skills (we primarily use Ruby, Java, Python, and Go)
+- You have experience with distributed systems, databases, or infrastructure
+- You are comfortable working in a Unix/Linux environment
+- You write clean, maintainable code and care about software design
+- You have strong communication skills and enjoy collaborating
+
+Nice to have:
+- Experience with AWS, GCP, or other cloud platforms
+- Familiarity with Docker, Kubernetes, or container orchestration
+- Experience with CI/CD pipelines and infrastructure as code
+- Contributions to open source projects
+- Experience building and consuming REST APIs
+
+Compensation: $180,000 - $220,000 base salary + equity + benefits
