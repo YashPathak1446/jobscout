@@ -1,9 +1,9 @@
 """
 Job Search Tools V2 — Serper.dev (primary) + Adzuna (fallback)
 
-Serper.dev: 2,500 free Google searches/month. Best quality.
-Adzuna: Unlimited free. Falls back automatically when Serper quota exhausted.
-Mock: For testing without any API keys.
+Serper: Site-targeted Google queries → individual job postings
+Adzuna: Generic job API → fallback when Serper exhausted
+Mock: Testing without API keys
 """
 
 import os
@@ -33,11 +33,15 @@ class JobListing:
     full_jd: str = ""
 
 
+# =========================================================================
+# SERPER.DEV
+# =========================================================================
+
 def search_serper(query: str, max_results: int = 10) -> list[JobListing]:
-    """Search Google via Serper.dev for job listings."""
+    """Search Google via Serper.dev."""
     api_key = os.getenv("SERPER_API_KEY", "")
     if not api_key:
-        logger.warning("SERPER_API_KEY not set. Get free key at https://serper.dev/")
+        logger.warning("SERPER_API_KEY not set.")
         return []
 
     try:
@@ -53,16 +57,50 @@ def search_serper(query: str, max_results: int = 10) -> list[JobListing]:
         resp.raise_for_status()
         data = resp.json()
 
-        listings = []
-        job_indicators = [
-            "job", "career", "greenhouse", "lever", "workday",
-            "linkedin.com/jobs", "indeed.com", "glassdoor.com",
-            "myworkdayjobs", "ashby", "smartrecruiters",
+        # Blocked sites — never job postings
+        blocked_sites = [
+            "reddit.com", "quora.com", "stackoverflow.com",
+            "medium.com", "youtube.com", "wikipedia.org",
+            "news.ycombinator.com", "geeksforgeeks.org",
+            "coursera.org", "udemy.com",
+            "github.com", "ziprecruiter.com",
+            "builtinnyc.com", "builtin.com",
         ]
+
+        # Blocked URL patterns — aggregator/search pages, not individual jobs
+        blocked_patterns = [
+            "indeed.com/q-",
+            "indeed.com/jobs?q=",
+            "linkedin.com/jobs/entry-level",
+            "linkedin.com/jobs/junior",
+            "linkedin.com/jobs/new-grad",
+            "linkedin.com/jobs/software-engineer",
+            "linkedin.com/jobs/machine-learning",
+            "linkedin.com/jobs/devops",
+            "linkedin.com/jobs/data-engineer",
+            "linkedin.com/jobs/full-stack",
+            "glassdoor.com/Job/",
+            "glassdoor.com/Reviews",
+            "glassdoor.com/Salary",
+        ]
+
+        listings = []
         for i, result in enumerate(data.get("organic", [])[:max_results]):
             link = result.get("link", "")
-            if not any(kw in link.lower() for kw in job_indicators):
+            link_lower = link.lower()
+
+            # Skip blocked sites
+            if any(b in link_lower for b in blocked_sites):
                 continue
+
+            # Skip aggregator search pages
+            if any(b in link_lower for b in blocked_patterns):
+                continue
+
+            # Skip very short snippets (likely category pages)
+            if len(result.get("snippet", "")) < 50:
+                continue
+
             listings.append(JobListing(
                 id=f"serper_{i}_{hash(link) % 10000}",
                 title=result.get("title", ""),
@@ -74,8 +112,10 @@ def search_serper(query: str, max_results: int = 10) -> list[JobListing]:
                 created=datetime.now(timezone.utc).isoformat(),
                 source="serper",
             ))
-        logger.info(f"Serper: {len(listings)} job results for '{query}'")
+
+        logger.info(f"Serper: {len(listings)} results for '{query}'")
         return listings
+
     except requests.exceptions.RequestException as e:
         logger.error(f"Serper error: {e}")
         return []
@@ -87,9 +127,17 @@ def _extract_company_from_url(url: str) -> str:
     if "greenhouse.io" in url_lower:
         parts = url.split("/")
         for i, part in enumerate(parts):
-            if "greenhouse" in part and i + 1 < len(parts):
+            if "greenhouse" in part.lower() and i + 1 < len(parts):
+                name = parts[i + 1].replace("-", " ").title()
+                if name.lower() not in ("jobs", "job", "embed"):
+                    return name
+    if "lever.co" in url_lower:
+        parts = url.split("/")
+        for i, part in enumerate(parts):
+            if "lever.co" in part.lower() and i + 1 < len(parts):
                 return parts[i + 1].replace("-", " ").title()
-    if "linkedin.com" in url_lower:
+    if "linkedin.com/jobs/view" in url_lower:
+        # Try to extract from title later; URL doesn't have company
         return "LinkedIn Posting"
     if "myworkdayjobs" in url_lower:
         domain = url.split("//")[1].split(".")[0] if "//" in url else ""
@@ -106,11 +154,15 @@ def _extract_company_from_url(url: str) -> str:
         return "Unknown"
 
 
+# =========================================================================
+# ADZUNA
+# =========================================================================
+
 def search_adzuna(
     query: str, country: str = "us", location: str = "",
     max_results: int = 10, max_days_old: int = 2,
 ) -> list[JobListing]:
-    """Search Adzuna. Fallback when Serper is exhausted."""
+    """Search Adzuna job API."""
     app_id = os.getenv("ADZUNA_APP_ID", "")
     app_key = os.getenv("ADZUNA_APP_KEY", "")
     if not app_id or not app_key:
@@ -133,9 +185,8 @@ def search_adzuna(
             params=params, timeout=15,
         )
         resp.raise_for_status()
-        data = resp.json()
         listings = []
-        for job in data.get("results", []):
+        for job in resp.json().get("results", []):
             listings.append(JobListing(
                 id=str(job.get("id", "")),
                 title=job.get("title", "Unknown"),
@@ -155,8 +206,12 @@ def search_adzuna(
         return []
 
 
+# =========================================================================
+# MOCK
+# =========================================================================
+
 def search_mock(query: str, max_results: int = 8) -> list[JobListing]:
-    """Mock listings for testing without API keys."""
+    """Mock listings for testing."""
     now = datetime.now(timezone.utc)
     mock_data = [
         ("Software Engineer, New Grad", "Stripe", "San Francisco, CA",
@@ -215,11 +270,7 @@ def search_mock(query: str, max_results: int = 8) -> list[JobListing]:
 # =========================================================================
 
 def scrape_full_jd(url: str, delay: float = 1.0) -> str:
-    """
-    Scrape full JD from apply URL. Returns text capped at 8000 chars.
-    Handles Greenhouse, LinkedIn, Lever, generic sites.
-    Gracefully fails for Workday (JS), Indeed (blocked), Handshake.
-    """
+    """Scrape full JD from apply URL. Capped at 8000 chars."""
     from bs4 import BeautifulSoup
 
     if "linkedin.com" in url:
@@ -235,8 +286,7 @@ def scrape_full_jd(url: str, delay: float = 1.0) -> str:
                     "Chrome/120.0.0.0 Safari/537.36"
                 )
             },
-            timeout=10,
-            allow_redirects=True,
+            timeout=10, allow_redirects=True,
         )
         if resp.status_code != 200:
             return ""
@@ -245,15 +295,10 @@ def scrape_full_jd(url: str, delay: float = 1.0) -> str:
         for tag in soup(["script", "style", "nav", "footer", "header"]):
             tag.decompose()
 
-        selectors = [
-            "[class*=description]",
-            ".posting-page",
-            "[class*=job-details]",
-            "article",
-            "main",
-            "[role=main]",
-        ]
-        for selector in selectors:
+        for selector in [
+            "[class*=description]", ".posting-page",
+            "[class*=job-details]", "article", "main", "[role=main]",
+        ]:
             elements = soup.select(selector)
             if elements:
                 text = elements[0].get_text(separator=" ", strip=True)
@@ -262,7 +307,6 @@ def scrape_full_jd(url: str, delay: float = 1.0) -> str:
 
         text = soup.get_text(separator=" ", strip=True)
         return text[:8000] if len(text) > 200 else ""
-
     except Exception as e:
         logger.debug(f"Scrape failed for {url}: {e}")
         return ""
@@ -271,7 +315,7 @@ def scrape_full_jd(url: str, delay: float = 1.0) -> str:
 def enrich_listings_with_full_jd(
     listings: list[JobListing], delay: float = 1.0,
 ) -> list[JobListing]:
-    """Try to scrape full JD for each listing. Modifies in-place."""
+    """Try to scrape full JD for each listing."""
     success = 0
     for listing in listings:
         if listing.apply_url:
@@ -284,54 +328,18 @@ def enrich_listings_with_full_jd(
 
 
 # =========================================================================
-# UNIFIED SEARCH
+# QUERY GENERATORS
 # =========================================================================
 
-def search_jobs(
-    queries: list[str],
-    country: str = "us",
-    locations: list[str] | None = None,
-    max_results_per_query: int = 10,
-    max_days_old: int = 2,
-    discovery_priority: list[str] | None = None,
-    max_total: int = 50,
-) -> list[JobListing]:
-    """Search with automatic fallback. Deduplicates by company+title."""
-    if discovery_priority is None:
-        discovery_priority = ["serper", "adzuna"]
-
-    all_listings = []
-    seen_titles = set()
-
-    for query in queries:
-        results = []
-        for api in discovery_priority:
-            if api == "serper":
-                results = search_serper(query, max_results_per_query)
-            elif api == "adzuna":
-                loc = locations[0] if locations else ""
-                results = search_adzuna(query, country, loc, max_results_per_query, max_days_old)
-            elif api == "mock":
-                results = search_mock(query, max_results_per_query)
-            if results:
-                break
-
-        for listing in results:
-            key = f"{listing.company}_{listing.title}".lower().strip()
-            if key not in seen_titles:
-                seen_titles.add(key)
-                all_listings.append(listing)
-        if len(all_listings) >= max_total:
-            break
-
-    return all_listings[:max_total]
-
-
-def generate_search_queries(
-    skills: list[str], base_titles: list[str],
-    experience_levels: list[str], max_queries: int = 8,
+def generate_serper_queries(
+    skills: list[str],
+    experience_levels: list[str],
+    max_queries: int = 9,
 ) -> list[str]:
-    """Auto-generate queries from resume skills."""
+    """
+    Generate site-targeted Google queries for Serper.
+    These return individual job postings, not aggregator pages.
+    """
     skill_clusters = {
         "backend": ["python", "java", "go", "rest api", "microservices", "sql"],
         "ml_ai": ["pytorch", "tensorflow", "nlp", "llm", "rag", "embeddings",
@@ -343,6 +351,7 @@ def generate_search_queries(
         "frontend": ["react", "angular", "vue", "javascript", "typescript",
                      "node.js", "frontend", "full-stack", "full stack"],
     }
+
     active = []
     for name, cs in skill_clusters.items():
         overlap = set(skills) & set(cs)
@@ -357,6 +366,63 @@ def generate_search_queries(
         "data": "data engineer",
         "frontend": "full stack developer",
     }
+
+    sites = [
+        "site:greenhouse.io",
+        "site:lever.co",
+        "site:linkedin.com/jobs/view",
+    ]
+
+    level = experience_levels[0] if experience_levels else "new grad"
+
+    queries = []
+    for cname, _ in active:
+        title = title_map.get(cname, "software engineer")
+        for site in sites:
+            q = f"{title} {level} 2026 {site}"
+            queries.append(q)
+            if len(queries) >= max_queries:
+                break
+        if len(queries) >= max_queries:
+            break
+
+    return queries
+
+
+def generate_adzuna_queries(
+    skills: list[str],
+    base_titles: list[str],
+    experience_levels: list[str],
+    max_queries: int = 8,
+) -> list[str]:
+    """Generate generic queries for Adzuna job API."""
+    skill_clusters = {
+        "backend": ["python", "java", "go", "rest api", "microservices", "sql"],
+        "ml_ai": ["pytorch", "tensorflow", "nlp", "llm", "rag", "embeddings",
+                   "huggingface", "transformers", "computer vision", "ai", "ml",
+                   "machine learning", "deep learning"],
+        "infra": ["aws", "docker", "kubernetes", "terraform", "ci/cd", "linux"],
+        "data": ["sql", "mongodb", "kafka", "spark", "airflow", "postgresql",
+                 "data pipelines", "etl"],
+        "frontend": ["react", "angular", "vue", "javascript", "typescript",
+                     "node.js", "frontend", "full-stack", "full stack"],
+    }
+
+    active = []
+    for name, cs in skill_clusters.items():
+        overlap = set(skills) & set(cs)
+        if len(overlap) >= 2:
+            active.append((name, overlap))
+    active.sort(key=lambda x: len(x[1]), reverse=True)
+
+    title_map = {
+        "backend": "software engineer",
+        "ml_ai": "machine learning engineer",
+        "infra": "devops engineer",
+        "data": "data engineer",
+        "frontend": "full stack developer",
+    }
+
     queries = []
     for cname, _ in active:
         title = title_map.get(cname, "software engineer")
@@ -371,13 +437,90 @@ def generate_search_queries(
 
     if len(queries) < max_queries:
         top = " ".join(skills[:3])
-        for t in base_titles[:2]:
+        for t in base_titles[:1]:
             q = f"{top} {t}"
             if q not in queries:
                 queries.append(q)
             if len(queries) >= max_queries:
                 break
+
     return queries
+
+
+# =========================================================================
+# UNIFIED SEARCH
+# =========================================================================
+
+def search_all(
+    all_skills: list[str],
+    base_titles: list[str],
+    experience_levels: list[str],
+    country: str = "us",
+    locations: list[str] | None = None,
+    max_results_per_query: int = 10,
+    max_days_old: int = 2,
+    discovery_priority: list[str] | None = None,
+    max_total: int = 50,
+) -> list[JobListing]:
+    """
+    Search with Serper → Adzuna → Mock fallback.
+    Serper uses site-targeted queries. Adzuna uses generic queries.
+    Deduplicates by company+title.
+    """
+    if discovery_priority is None:
+        discovery_priority = ["serper", "adzuna"]
+
+    all_listings = []
+    seen_titles = set()
+
+    def _dedup_add(results: list[JobListing]):
+        for listing in results:
+            key = f"{listing.company}_{listing.title}".lower().strip()
+            if key not in seen_titles:
+                seen_titles.add(key)
+                all_listings.append(listing)
+
+    for api in discovery_priority:
+        if api == "serper":
+            queries = generate_serper_queries(
+                all_skills, experience_levels, max_queries=9,
+            )
+            logger.info(f"Serper queries: {queries}")
+            for q in queries:
+                results = search_serper(q, max_results_per_query)
+                _dedup_add(results)
+                if len(all_listings) >= max_total:
+                    break
+
+        elif api == "adzuna":
+            queries = generate_adzuna_queries(
+                all_skills, base_titles, experience_levels, max_queries=8,
+            )
+            logger.info(f"Adzuna queries: {queries}")
+            for q in queries:
+                loc = locations[0] if locations else ""
+                results = search_adzuna(q, country, loc, max_results_per_query, max_days_old)
+                _dedup_add(results)
+                if len(all_listings) >= max_total:
+                    break
+
+        elif api == "mock":
+            results = search_mock("", max_results_per_query)
+            _dedup_add(results)
+
+        # If we got enough results, stop trying more APIs
+        if len(all_listings) >= max_total:
+            break
+
+    all_listings = all_listings[:max_total]
+
+    # Log source breakdown
+    sources = {}
+    for l in all_listings:
+        sources[l.source] = sources.get(l.source, 0) + 1
+    logger.info(f"Total: {len(all_listings)} jobs ({sources})")
+
+    return all_listings
 
 
 if __name__ == "__main__":
@@ -386,9 +529,8 @@ if __name__ == "__main__":
     load_dotenv()
     query = " ".join(sys.argv[1:]) or "software engineer new grad"
     print(f"Searching: '{query}'\n")
-    listings = search_jobs([query], discovery_priority=["serper", "adzuna", "mock"], max_results_per_query=5)
-    for i, j in enumerate(listings, 1):
+    results = search_serper(query, 5)
+    for i, j in enumerate(results, 1):
         print(f"{i}. [{j.source}] {j.company} — {j.title}")
         print(f"   {j.apply_url}")
-        print(f"   {j.description[:120]}...")
         print()

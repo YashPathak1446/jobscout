@@ -22,7 +22,7 @@ except ImportError:
 
 from jobscout.tools.resume_parser import parse_resume_file
 from jobscout.tools.job_search_tools import (
-    search_jobs, generate_search_queries,
+    search_all, search_mock,
     enrich_listings_with_full_jd, JobListing,
 )
 from jobscout.tools.embedding_scorer import (
@@ -42,7 +42,7 @@ def phase1_discover(parsed_resume, max_jobs: int, use_mock: bool) -> list[JobLis
     """Phase 1: Discover jobs via Serper → Adzuna → Mock."""
     print("📡 Phase 1: Discovering jobs...\n")
 
-    # Collect all skills for query generation
+    # Collect all skills
     all_skills = list(parsed_resume.skills_list)
     for exp in parsed_resume.experiences:
         all_skills.extend(exp.keywords)
@@ -50,38 +50,39 @@ def phase1_discover(parsed_resume, max_jobs: int, use_mock: bool) -> list[JobLis
         all_skills.extend(proj.keywords)
     unique_skills = sorted(set(all_skills))
 
-    queries = generate_search_queries(
-        skills=unique_skills,
+    if use_mock:
+        listings = search_mock("", max_jobs)
+        print(f"  ✅ Found {len(listings)} mock jobs\n")
+        return listings
+
+    priority = getattr(config, "JOB_DISCOVERY_PRIORITY", ["serper", "adzuna"])
+
+    listings = search_all(
+        all_skills=unique_skills,
         base_titles=config.BASE_TITLES,
         experience_levels=config.EXPERIENCE_LEVEL,
-        max_queries=8,
-    )
-
-    print("  Search queries (auto-generated from your resume):")
-    for i, q in enumerate(queries, 1):
-        print(f"    {i}. \"{q}\"")
-    print()
-
-    if use_mock:
-        priority = ["mock"]
-    else:
-        priority = getattr(config, "JOB_DISCOVERY_PRIORITY", ["serper", "adzuna"])
-
-    listings = search_jobs(
-        queries=queries,
         country=config.COUNTRY,
         locations=config.LOCATIONS if config.LOCATIONS else None,
-        max_results_per_query=max(3, max_jobs // len(queries) + 1),
+        max_results_per_query=max(3, max_jobs // 6 + 1),
         max_days_old=config.JOB_RECENCY_HOURS // 24,
         discovery_priority=priority,
         max_total=max_jobs,
     )
 
+    # Show source breakdown
     sources = {}
     for l in listings:
         sources[l.source] = sources.get(l.source, 0) + 1
     source_str = ", ".join(f"{v} from {k}" for k, v in sources.items())
     print(f"  ✅ Found {len(listings)} unique jobs ({source_str})\n")
+
+    # Show sample of what was found
+    for i, l in enumerate(listings[:5], 1):
+        print(f"    {i}. [{l.source}] {l.company} — {l.title[:50]}")
+    if len(listings) > 5:
+        print(f"    ... and {len(listings) - 5} more")
+    print()
+
     return listings
 
 
@@ -91,7 +92,8 @@ def phase2_enrich(listings: list[JobListing], skip: bool = False) -> list[JobLis
         print("📄 Phase 2: Enrichment skipped (mock mode)\n")
         return listings
 
-    print(f"📄 Phase 2: Enriching {len(listings)} jobs with full JDs...\n")
+    print(f"📄 Phase 2: Enriching {len(listings)} jobs with full JDs...")
+    print("  (This takes ~1-2 min for LinkedIn rate limiting)\n")
     listings = enrich_listings_with_full_jd(listings, delay=1.5)
 
     enriched = sum(1 for l in listings if l.full_jd)
@@ -108,7 +110,6 @@ def phase3_score(
     """Phase 3: Score all jobs using embeddings."""
     print(f"📊 Phase 3: Scoring {len(listings)} jobs with embeddings...\n")
 
-    # Embed resume components (one-time)
     if use_mock_embeddings:
         print("  Using mock embeddings (no API calls)\n")
         embeddings = embed_resume_components_mock(parsed_resume)
@@ -120,10 +121,8 @@ def phase3_score(
         print("  ❌ Failed to generate embeddings. Check GOOGLE_API_KEY.")
         return []
 
-    # Score each job
     scored = []
     for listing in listings:
-        # Use full JD if available, otherwise title + snippet
         jd_text = listing.full_jd if listing.full_jd else f"{listing.title} {listing.description}"
 
         if use_mock_embeddings:
@@ -143,18 +142,17 @@ def phase3_score(
             result.company = listing.company
             scored.append((listing, result))
 
-    # Sort by score
     scored.sort(key=lambda x: x[1].overall_score, reverse=True)
 
-    # Display results
     has_jd = lambda l: "📄" if l.full_jd else "📋"
-    print(f"  {'#':<4} {'Score':<8} {'JD':<4} {'Company':<20} {'Title':<35} {'Pass'}")
-    print("  " + "-" * 80)
+    print(f"  {'#':<4} {'Score':<8} {'JD':<4} {'Source':<8} {'Company':<20} {'Title':<35} {'Pass'}")
+    print("  " + "-" * 88)
     for i, (listing, result) in enumerate(scored, 1):
         passed = "✅" if result.overall_score >= threshold else "❌"
         print(
             f"  {i:<4} {result.overall_score:>5.1f}%  "
             f"{has_jd(listing):<4} "
+            f"{listing.source:<8} "
             f"{listing.company[:19]:<20} "
             f"{listing.title[:34]:<35} {passed}"
         )
@@ -174,14 +172,13 @@ def checkpoint_scoring(
         return passing
 
     if not passing:
-        print("  No jobs passed the threshold. Try lowering FIT_THRESHOLD in config.py.\n")
+        print("  No jobs passed threshold. Try lowering FIT_THRESHOLD in config.py.\n")
         return []
 
     print("🛑 Checkpoint: Review scored jobs\n")
 
-    # Show details for each passing job
     for i, (listing, result) in enumerate(passing, 1):
-        print(f"  --- #{i} [{result.overall_score:.1f}%] ---")
+        print(f"  --- #{i} [{result.overall_score:.1f}%] [{listing.source}] ---")
         print(f"  Company:  {listing.company}")
         print(f"  Title:    {listing.title}")
         if listing.location:
@@ -191,29 +188,29 @@ def checkpoint_scoring(
         print(f"  Apply:    {listing.apply_url}")
         print(f"  JD:       {'Full text scraped' if listing.full_jd else 'Snippet only'}")
 
-        # Show best-matching components
-        best_exp_names = []
+        # Best components
+        exp_names = []
         for eid in result.best_experience_ids:
             for exp in parsed_resume.experiences:
                 if exp.id == eid:
                     score = result.experience_scores.get(eid, 0)
-                    best_exp_names.append(f"{exp.title[:25]} ({score:.2f})")
-        best_proj_names = []
+                    exp_names.append(f"{exp.title[:25]} ({score:.2f})")
+        proj_names = []
         for pid in result.best_project_ids:
             for proj in parsed_resume.projects:
                 if proj.id == pid:
                     score = result.project_scores.get(pid, 0)
-                    best_proj_names.append(f"{proj.title[:25]} ({score:.2f})")
+                    proj_names.append(f"{proj.title[:25]} ({score:.2f})")
 
-        print(f"  Best exp: {' | '.join(best_exp_names)}")
-        print(f"  Best proj: {' | '.join(best_proj_names)}")
+        print(f"  Best exp: {' | '.join(exp_names)}")
+        print(f"  Best proj: {' | '.join(proj_names)}")
         print()
 
     print(f"  Options:")
-    print(f"    'all'      — proceed with all {len(passing)} jobs")
-    print(f"    '1,3,5'    — select specific jobs by number")
-    print(f"    'details N' — show full JD for job N")
-    print(f"    'none'     — skip resume generation")
+    print(f"    'all'       — proceed with all {len(passing)} jobs")
+    print(f"    '1,3,5'     — select specific jobs by number")
+    print(f"    'details N'  — show full JD for job N")
+    print(f"    'none'      — skip resume generation")
     print()
 
     while True:
@@ -260,20 +257,22 @@ def save_summary(
         f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
         f"**Jobs scored:** {len(scored)}",
         "",
-        "| # | Score | Company | Title | JD | Apply |",
-        "|---|-------|---------|-------|----|-------|",
+        "| # | Score | Source | Company | Title | JD | Apply |",
+        "|---|-------|--------|---------|-------|----|-------|",
     ]
 
     for i, (listing, result) in enumerate(scored, 1):
         jd_icon = "Full" if listing.full_jd else "Snippet"
         lines.append(
-            f"| {i} | {result.overall_score:.1f}% | {listing.company} | "
-            f"{listing.title} | {jd_icon} | [Link]({listing.apply_url}) |"
+            f"| {i} | {result.overall_score:.1f}% | {listing.source} | "
+            f"{listing.company} | {listing.title} | {jd_icon} | "
+            f"[Link]({listing.apply_url}) |"
         )
 
     lines.extend(["", "## Component Selection", ""])
     for i, (listing, result) in enumerate(scored, 1):
         lines.append(f"### {i}. {listing.company} — {listing.title} ({result.overall_score:.1f}%)")
+        lines.append(f"- **Source:** {listing.source}")
         lines.append(f"- **Apply:** {listing.apply_url}")
         lines.append(f"- **Best experiences:** {', '.join(result.best_experience_ids)}")
         lines.append(f"- **Best projects:** {', '.join(result.best_project_ids)}")
@@ -294,7 +293,7 @@ def main():
     parser.add_argument("--max-jobs", type=int, default=config.MAX_JOBS_TO_DISCOVER)
     parser.add_argument("--threshold", type=int, default=config.FIT_THRESHOLD)
     parser.add_argument("--dry-run", action="store_true", help="Skip resume generation")
-    parser.add_argument("--mock", action="store_true", help="Use mock data (zero API calls)")
+    parser.add_argument("--mock", action="store_true", help="Mock data (zero API calls)")
     parser.add_argument("--mock-embeddings", action="store_true", help="Mock embeddings only")
     parser.add_argument("--resume", default=config.MASTER_RESUME_PATH)
     args = parser.parse_args()
@@ -313,21 +312,21 @@ def main():
     # Phase 1: Discover
     listings = phase1_discover(parsed, args.max_jobs, use_mock=args.mock)
     if not listings:
-        print("  ❌ No jobs found. Check API keys or config.py settings.")
+        print("  ❌ No jobs found. Check API keys or config.py.\n")
         return
 
-    # Phase 2: Enrich with full JDs
+    # Phase 2: Enrich
     listings = phase2_enrich(listings, skip=args.mock)
 
-    # Phase 3: Score with embeddings
+    # Phase 3: Score
     use_mock_emb = args.mock or args.mock_embeddings
     passing = phase3_score(listings, parsed, args.threshold, use_mock_emb)
 
-    # Output directory
+    # Output
     timestamp = datetime.now().strftime("%Y-%m-%d")
     output_dir = os.path.join(config.OUTPUT_DIR, timestamp)
 
-    # Human checkpoint
+    # Checkpoint
     selected = checkpoint_scoring(passing, parsed)
 
     # Save summary
@@ -344,9 +343,9 @@ def main():
 
     # Phase 4: Resume generation (Phase 3 build)
     print(f"\n📝 Phase 4: Resume generation for {len(selected)} jobs...")
-    print("  ⚠️  Coming in Phase 3 build. Use summary + links to apply.\n")
+    print("  ⚠️  Coming in Phase 3 build.\n")
     for i, (listing, result) in enumerate(selected, 1):
-        print(f"  {i}. {listing.company} — {listing.title} ({result.overall_score:.1f}%)")
+        print(f"  {i}. [{listing.source}] {listing.company} — {listing.title} ({result.overall_score:.1f}%)")
         print(f"     Apply: {listing.apply_url}")
     print("\n✅ Done!\n")
 
