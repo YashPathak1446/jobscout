@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Multi-Agent Job Research & Fit Analyzer powered by Google ADK"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
 
 dependencies = [
     "google-adk>=1.0.0",
@@ -20,3 +20,6 @@ dev = ["pytest>=7.0.0", "ruff>=0.4.0"]
 
 [project.scripts]
 jobscout = "jobscout.main:main"
+
+[tool.setuptools.packages.find]
+include = ["jobscout*"]
