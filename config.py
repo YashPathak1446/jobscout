@@ -28,6 +28,12 @@ EXPERIENCE_LEVEL = ["new grad", "entry level", "junior", "associate"]
 JOB_APIS = ["adzuna"]
 # JOB_APIS = ["adzuna", "remotive", "the_muse"]  # Add more later
 
+# Discovery priority: tries in order, falls back automatically
+# Serper.dev = Google search (2,500 free/month, best quality)
+# Adzuna = job API (unlimited free, decent quality)
+# mock = fake data for testing (zero API calls)
+JOB_DISCOVERY_PRIORITY = ["serper", "adzuna"]
+
 # =============================================================================
 # FIT SCORING
 # =============================================================================

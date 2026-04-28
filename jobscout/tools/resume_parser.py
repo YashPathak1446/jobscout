@@ -75,6 +75,9 @@ TECH_KEYWORDS = [
     "openai", "gemini", "claude", "nlp", "computer vision",
     "scikit-learn", "pandas", "numpy", "matplotlib",
     "embeddings", "vector database", "fine-tuning",
+    "ai", "ml", "machine learning", "deep learning",
+    "full-stack", "full stack", "backend", "frontend",
+    "distributed systems", "data pipelines", "agents",
     # Tools & practices
     "git", "github", "gitlab", "ci/cd", "github actions", "jenkins",
     "jira", "agile", "scrum", "linux", "nginx", "apache",
@@ -101,7 +104,7 @@ def _extract_keywords(text: str) -> list[str]:
     for kw in TECH_KEYWORDS:
         if kw in text_lower:
             # Avoid partial matches (e.g., "r" inside "react")
-            if len(kw) <= 2:
+            if len(kw) <= 3:
                 # For very short keywords, require word boundaries
                 if re.search(rf"\b{re.escape(kw)}\b", text_lower):
                     found.append(kw)

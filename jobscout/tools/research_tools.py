@@ -104,7 +104,7 @@ def extract_keywords(text: str) -> dict:
     tech_keywords = {
         "languages": [
             "python", "java", "javascript", "typescript", "c++", "go", "rust",
-            "ruby", "scala", "kotlin", "swift", "php", "sql", "r", "c#",
+            "ruby", "scala", "kotlin", "swift", "php", "sql", "r", "c#", "node", "bash"
         ],
         "frameworks": [
             "react", "angular", "vue", "django", "flask", "fastapi", "spring",
@@ -120,13 +120,15 @@ def extract_keywords(text: str) -> dict:
             "bigquery", "vector database", "pinecone", "weaviate", "chromadb",
         ],
         "ai_ml": [
+            "machine learning", "deep learning", "ai", "ml",
             "llm", "rag", "fine-tuning", "embeddings", "transformers",
             "nlp", "computer vision", "agents", "agentic", "prompt engineering",
             "langchain", "llamaindex", "openai", "gemini", "claude", "huggingface",
         ],
         "practices": [
+            "full-stack", "full stack", "backend", "frontend", "distributed systems",
             "ci/cd", "agile", "scrum", "tdd", "microservices", "rest api",
-            "graphql", "grpc", "devops", "sre", "observability",
+            "graphql", "grpc", "devops", "sre", "observability", "data pipelines", "etl", "networking",
         ],
     }
 
@@ -142,7 +144,7 @@ def extract_keywords(text: str) -> dict:
     # "r" matches inside "or", "for", "are" etc. — too noisy to include
     EXCLUDE = {"r"}  # Remove entirely — too many false positives
     SHORT_KEYWORDS = {"go", "c#", "c++", "sql", "rag", "nlp", "sre", "tdd",
-                      "dbt", "gcp", "ecs", "eks", "jwt"}
+                  "dbt", "gcp", "ecs", "eks", "jwt", "ai", "ml"}
 
     for category, keywords in tech_keywords.items():
         matches = []
