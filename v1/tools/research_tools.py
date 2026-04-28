@@ -7,7 +7,6 @@ import json
 import os
 import requests
 from bs4 import BeautifulSoup
-import re as _re
 
 
 def search_web(query: str) -> dict:
@@ -132,30 +131,8 @@ def extract_keywords(text: str) -> dict:
 
     text_lower = text.lower()
     found = {}
-    # for category, keywords in tech_keywords.items():
-    #     matches = [kw for kw in keywords if kw in text_lower]
-    #     if matches:
-    #         found[category] = matches
-
-    # return {"status": "success", "keywords_found": found}
-    # Keywords that need word-boundary matching to avoid false positives
-    # "r" matches inside "or", "for", "are" etc. — too noisy to include
-    EXCLUDE = {"r"}  # Remove entirely — too many false positives
-    SHORT_KEYWORDS = {"go", "c#", "c++", "sql", "rag", "nlp", "sre", "tdd",
-                      "dbt", "gcp", "ecs", "eks", "jwt"}
-
     for category, keywords in tech_keywords.items():
-        matches = []
-        for kw in keywords:
-            if kw in EXCLUDE:
-                continue
-            if kw in SHORT_KEYWORDS or len(kw) <= 3:
-                # Use word boundaries for short keywords
-                if _re.search(rf"\b{_re.escape(kw)}\b", text_lower):
-                    matches.append(kw)
-            else:
-                if kw in text_lower:
-                    matches.append(kw)
+        matches = [kw for kw in keywords if kw in text_lower]
         if matches:
             found[category] = matches
 
