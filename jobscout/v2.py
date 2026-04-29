@@ -30,6 +30,7 @@ from jobscout.tools.embedding_scorer import (
     score_job_with_embeddings, score_job_mock,
     EmbeddingScore,
 )
+from jobscout.utils.dedup import mark_seen, mark_applied, get_seen_count
 
 import logging
 logger = logging.getLogger(__name__)
@@ -104,33 +105,31 @@ def llm_filter_jobs(listings: list[JobListing], use_mock: bool = False) -> list[
         for i, l in enumerate(listings, 1)
     )
 
-    prompt = f"""You are filtering job listings for a CS graduate (graduated Spring 2025) looking for entry-level software engineering roles in the United States. They are on F-1 visa — no US citizenship or security clearance.
+    prompt = f"""You are filtering job listings for a new CS graduate (Spring 2025, no citizenship, F-1 visa holder) looking for entry-level software engineering roles in the United States.
 
 KEEP jobs that are:
-- Entry level, new grad, junior, associate, or early career roles
-- Targeting 2025 OR 2026 graduates (both are fine)
-- Full-time permanent positions
-- Based in the United States or fully Remote
-- Software engineering, ML engineering, data engineering, DevOps, or related tech roles
+- Entry level, new grad, junior, or associate roles
+- Full-time (not internship, not contract)
+- Based in the United States (or Remote with US base)
+- In software engineering, ML engineering, data engineering, DevOps, or related tech roles
+- Open/active postings
 
 REMOVE jobs that are:
-- Explicitly senior (5+ years), principal, staff, lead, or director level
-- Require PhD or Masters degree as minimum qualification
-- Summer/Fall/Spring internships or co-ops
-- Based outside the United States (UK, Canada, Europe, Asia) with no US remote option
-- Require US citizenship, security clearance, or work authorization beyond F-1 OPT
-- Clearly expired ("no longer accepting applications", "position filled", "closed")
+- Senior, principal, staff, lead, or manager roles
+- Require 3+ years of experience
+- PhD or Masters degree required
+- Internships or co-ops
+- Outside the United States (UK, Canada, India, etc.)
+- Require US citizenship or security clearance
+- Clearly expired or unavailable ("no longer available", "position filled")
 
-IMPORTANT — do NOT remove:
-- Any role saying "New Grad 2026", "Graduate 2026", "New Grads 2026" — these are valid
-- Roles at US companies even if title says "Graduate" program
-- Remote roles based in the US
-
-Here are the jobs:
+Here are the jobs to evaluate:
 {job_list}
 
-Reply with ONLY JSON (no markdown):
-{{"keep": [1, 3, 5], "remove": [2, 4], "reasons": {{"2": "UK based", "4": "Internship"}}}}"""
+Reply with ONLY a JSON object like this (no markdown, no explanation):
+{{"keep": [1, 3, 5], "remove": [2, 4, 6], "reasons": {{"2": "Senior role", "4": "UK based", "6": "PhD required"}}}}
+
+Use the job NUMBER (1-based index), not the ID."""
 
     try:
         from google import genai as _genai
@@ -219,6 +218,13 @@ def phase1_discover(parsed_resume, max_jobs: int, use_mock: bool) -> list[JobLis
 
     # LLM relevance filter
     listings = llm_filter_jobs(listings, use_mock=False)
+
+    # Dedup — skip jobs already seen in previous runs
+    before = len(listings)
+    listings = mark_seen(listings)
+    skipped = before - len(listings)
+    if skipped:
+        print(f"  ⏭️  Skipped {skipped} already-seen jobs ({get_seen_count()} total seen)")
 
     # Show sample of what was found
     for i, l in enumerate(listings[:5], 1):
@@ -440,9 +446,15 @@ def main():
     parser.add_argument("--mock", action="store_true", help="Mock data (zero API calls)")
     parser.add_argument("--mock-embeddings", action="store_true", help="Mock embeddings only")
     parser.add_argument("--resume", default=config.MASTER_RESUME_PATH)
+    parser.add_argument("--reset-seen", action="store_true", help="Clear seen job history")
     args = parser.parse_args()
 
     display_banner()
+
+    if args.reset_seen:
+        from jobscout.utils.dedup import reset_seen
+        reset_seen()
+        print("✅ Seen job history cleared. All jobs will appear fresh.\n")
 
     # Load resume — prefer .tex over .txt for better quality
     print(f"📝 Loading resume: {args.resume}")
@@ -574,9 +586,12 @@ def main():
         print(f"  {i}. {listing.company} — {listing.title[:40]}")
         print(f"     Resume: {path}")
         print(f"     Apply:  {listing.apply_url}")
+        # Log to applied_jobs.csv for spreadsheet import
+        mark_applied(listing, resume_path=path)
         print()
     print(f"  📁 Output folder: {output_dir}")
     print(f"  📄 Summary: {output_dir}/summary.md")
+    print(f"  📊 Applied log: outputs/applied_jobs.csv (import to spreadsheet)")
     print("\n✅ Done!\n")
 
 

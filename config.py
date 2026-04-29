@@ -29,10 +29,11 @@ JOB_APIS = ["adzuna"]
 # JOB_APIS = ["adzuna", "remotive", "the_muse"]  # Add more later
 
 # Discovery priority: tries in order, falls back automatically
+# github_newgrad = curated GitHub repos (daily updated, verified entry-level US roles)
 # Serper.dev = Google search (2,500 free/month, best quality)
-# Adzuna = job API (unlimited free, decent quality)
+# Adzuna = job API (unlimited free, fallback)
 # mock = fake data for testing (zero API calls)
-JOB_DISCOVERY_PRIORITY = ["serper", "adzuna"]
+JOB_DISCOVERY_PRIORITY = ["github_newgrad", "serper", "adzuna"]
 
 # =============================================================================
 # FIT SCORING
