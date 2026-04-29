@@ -31,6 +31,54 @@ from jobscout.tools.embedding_scorer import (
     EmbeddingScore,
 )
 
+import logging
+logger = logging.getLogger(__name__)
+
+
+def _wrap_latex_resume(latex_resume):
+    """
+    Wrap a LatexResume into a ParsedResume-compatible object
+    so the rest of the pipeline works without changes.
+    """
+    from jobscout.tools.resume_parser import ParsedResume, ResumeComponent
+
+    def _make_component(item, comp_type: str) -> ResumeComponent:
+        title = getattr(item, "title", None) or getattr(item, "name", "")
+        return ResumeComponent(
+            id=item.id,
+            type=comp_type,
+            title=title,
+            organization=getattr(item, "company", ""),
+            date_range=item.dates,
+            tech_line=getattr(item, "tech", ""),
+            bullets=item.bullets,
+            raw_text=" ".join(item.bullets),
+            keywords=item.keywords,
+        )
+
+    experiences = [_make_component(e, "experience") for e in latex_resume.experiences]
+    projects = [_make_component(p, "project") for p in latex_resume.projects]
+
+    # Build flat skills list
+    skills_list = []
+    skills_text = ""
+    for label, value in latex_resume.skills.categories.items():
+        skills_text += f"{label}: {value}\n"
+        for skill in value.split(","):
+            s = skill.strip().lower()
+            if s:
+                skills_list.append(s)
+
+    return ParsedResume(
+        contact_info=f"{latex_resume.name}\n{latex_resume.email}\n{latex_resume.phone}",
+        education=f"{latex_resume.education_school} | {latex_resume.education_degree} | {latex_resume.education_dates}",
+        skills_text=skills_text,
+        skills_list=sorted(set(skills_list)),
+        experiences=experiences,
+        projects=projects,
+        raw_text=latex_resume.raw_tex,
+    )
+
 
 def display_banner():
     print("\n" + "=" * 60)
@@ -300,14 +348,37 @@ def main():
 
     display_banner()
 
-    # Load resume
+    # Load resume — prefer .tex over .txt for better quality
     print(f"📝 Loading resume: {args.resume}")
-    parsed = parse_resume_file(args.resume)
-    print(
-        f"  ✅ {len(parsed.experiences)} experiences, "
-        f"{len(parsed.projects)} projects, "
-        f"{len(parsed.skills_list)} skills\n"
-    )
+    tex_path = os.path.splitext(args.resume)[0] + ".tex"
+    if not tex_path.endswith(".tex"):
+        tex_path = args.resume.replace(".txt", ".tex")
+
+    # Try LaTeX parser first
+    latex_resume = None
+    if os.path.exists(tex_path):
+        try:
+            from jobscout.tools.latex_parser import parse_latex_resume
+            latex_resume = parse_latex_resume(tex_path)
+            print(
+                f"  ✅ {len(latex_resume.experiences)} experiences, "
+                f"{len(latex_resume.projects)} projects (from LaTeX)\n"
+            )
+        except Exception as e:
+            logger.warning(f"LaTeX parser failed: {e}, falling back to .txt")
+            latex_resume = None
+
+    # Fall back to txt parser
+    if latex_resume is None:
+        parsed = parse_resume_file(args.resume)
+        print(
+            f"  ✅ {len(parsed.experiences)} experiences, "
+            f"{len(parsed.projects)} projects, "
+            f"{len(parsed.skills_list)} skills\n"
+        )
+    else:
+        # Wrap LaTeX resume in a compatible interface for the pipeline
+        parsed = _wrap_latex_resume(latex_resume)
 
     # Phase 1: Discover
     listings = phase1_discover(parsed, args.max_jobs, use_mock=args.mock)
@@ -341,12 +412,81 @@ def main():
         print("\n  No jobs selected. Done.\n")
         return
 
-    # Phase 4: Resume generation (Phase 3 build)
-    print(f"\n📝 Phase 4: Resume generation for {len(selected)} jobs...")
-    print("  ⚠️  Coming in Phase 3 build.\n")
+    # Phase 4: Resume generation
+    print(f"\n📝 Phase 4: Generating resumes for {len(selected)} jobs...\n")
+
+    from jobscout.tools.resume_generator import generate_resume
+
+    generated = []
     for i, (listing, result) in enumerate(selected, 1):
-        print(f"  {i}. [{listing.source}] {listing.company} — {listing.title} ({result.overall_score:.1f}%)")
-        print(f"     Apply: {listing.apply_url}")
+        company_clean = "".join(c for c in listing.company if c.isalnum() or c in " -_").strip().replace(" ", "_")
+        title_clean = "".join(c for c in listing.title if c.isalnum() or c in " -_").strip().replace(" ", "_")[:30]
+        filename = f"Yash_Pathak_{title_clean}_{company_clean}.docx"
+        filepath = os.path.join(output_dir, filename)
+
+        print(f"  [{i}/{len(selected)}] {listing.company} — {listing.title[:40]}")
+
+        jd_text = listing.full_jd if listing.full_jd else f"{listing.title} {listing.description}"
+        
+        # Always keep Sorenson and 101gen as top 2 experiences
+        fixed_exp_ids = ["exp_sorenson_communications", "exp_101gen_ai"]
+        other_exp_ids = [e for e in result.best_experience_ids if e not in fixed_exp_ids]
+        final_exp_ids = fixed_exp_ids + other_exp_ids[:1]  # Add 1 more (best match)
+        
+        
+        resume_path = generate_resume(
+            parsed_resume=parsed,
+            jd_text=jd_text,
+            selected_experience_ids=final_exp_ids,
+            selected_project_ids=result.best_project_ids,
+            lead_skills=[],  # Let the LLM figure it out from JD
+            resume_rules=config.RESUME_RULES,
+            similar_tech_map=config.SIMILAR_TECH_MAP,
+            output_path=filepath,
+            model=config.MODEL,
+            fallback_model=config.FALLBACK_MODEL,
+            use_mock=args.mock,
+        )
+
+        if resume_path:
+            generated.append((listing, resume_path))
+
+            # Checkpoint: review generated resume
+            if config.CHECKPOINT_AFTER_GENERATION and not args.mock:
+                print(f"\n    → [S]ave  [R]egenerate  [N]ext (skip saving)")
+                choice = input("      Your choice: ").strip().lower()
+                if choice == "r":
+                    print("    Regenerating...")
+                    resume_path = generate_resume(
+                        parsed_resume=parsed,
+                        jd_text=jd_text,
+                        selected_experience_ids=result.best_experience_ids,
+                        selected_project_ids=result.best_project_ids,
+                        lead_skills=[],
+                        resume_rules=config.RESUME_RULES,
+                        similar_tech_map=config.SIMILAR_TECH_MAP,
+                        output_path=filepath,
+                        model=config.MODEL,
+                        fallback_model=config.FALLBACK_MODEL,
+                        use_mock=args.mock,
+                    )
+                elif choice == "n":
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                    generated.pop()
+                    print("    Skipped.")
+        print()
+
+    # Final summary
+    print("=" * 60)
+    print(f"  ✅ Generated {len(generated)} resumes\n")
+    for i, (listing, path) in enumerate(generated, 1):
+        print(f"  {i}. {listing.company} — {listing.title[:40]}")
+        print(f"     Resume: {path}")
+        print(f"     Apply:  {listing.apply_url}")
+        print()
+    print(f"  📁 Output folder: {output_dir}")
+    print(f"  📄 Summary: {output_dir}/summary.md")
     print("\n✅ Done!\n")
 
 
