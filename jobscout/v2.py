@@ -80,6 +80,99 @@ def _wrap_latex_resume(latex_resume):
     )
 
 
+def llm_filter_jobs(listings: list[JobListing], use_mock: bool = False) -> list[JobListing]:
+    """
+    Use a single Gemini call to filter out irrelevant jobs:
+    - Senior / principal / staff roles (5+ years experience)
+    - PhD / Masters required
+    - Internships (unless user wants them)
+    - Non-US based roles
+    - Citizenship/clearance required
+    - Closed/expired postings
+
+    Passes titles, companies, locations to Gemini — no JD text needed.
+    Very cheap: ~1-2K tokens for 20 jobs.
+    """
+    if use_mock or not listings:
+        return listings
+
+    print(f"\n  🤖 LLM relevance filter ({len(listings)} jobs)...")
+
+    # Build job list for Gemini
+    job_list = "\n".join(
+        f"{i}. [{l.id}] {l.company} | {l.title} | {l.location or 'Unknown'}"
+        for i, l in enumerate(listings, 1)
+    )
+
+    prompt = f"""You are filtering job listings for a CS graduate (graduated Spring 2025) looking for entry-level software engineering roles in the United States. They are on F-1 visa — no US citizenship or security clearance.
+
+KEEP jobs that are:
+- Entry level, new grad, junior, associate, or early career roles
+- Targeting 2025 OR 2026 graduates (both are fine)
+- Full-time permanent positions
+- Based in the United States or fully Remote
+- Software engineering, ML engineering, data engineering, DevOps, or related tech roles
+
+REMOVE jobs that are:
+- Explicitly senior (5+ years), principal, staff, lead, or director level
+- Require PhD or Masters degree as minimum qualification
+- Summer/Fall/Spring internships or co-ops
+- Based outside the United States (UK, Canada, Europe, Asia) with no US remote option
+- Require US citizenship, security clearance, or work authorization beyond F-1 OPT
+- Clearly expired ("no longer accepting applications", "position filled", "closed")
+
+IMPORTANT — do NOT remove:
+- Any role saying "New Grad 2026", "Graduate 2026", "New Grads 2026" — these are valid
+- Roles at US companies even if title says "Graduate" program
+- Remote roles based in the US
+
+Here are the jobs:
+{job_list}
+
+Reply with ONLY JSON (no markdown):
+{{"keep": [1, 3, 5], "remove": [2, 4], "reasons": {{"2": "UK based", "4": "Internship"}}}}"""
+
+    try:
+        from google import genai as _genai
+        import os, json
+
+        client = _genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        response = client.models.generate_content(
+            model=config.MODEL,
+            contents=prompt,
+        )
+
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+        if raw.endswith("```"):
+            raw = raw[:-3]
+        raw = raw.strip()
+
+        result = json.loads(raw)
+        keep_indices = set(result.get("keep", []))
+        reasons = result.get("reasons", {})
+
+        # Log what was removed
+        removed = result.get("remove", [])
+        if removed:
+            print(f"  Filtered out {len(removed)} irrelevant jobs:")
+            for idx in removed:
+                reason = reasons.get(str(idx), "Not relevant")
+                if 1 <= idx <= len(listings):
+                    print(f"    ✗ {listings[idx-1].title[:50]} — {reason}")
+
+        # Return only kept jobs
+        kept = [listings[i-1] for i in sorted(keep_indices) if 1 <= i <= len(listings)]
+        print(f"  ✅ {len(kept)} jobs passed relevance filter\n")
+        return kept
+
+    except Exception as e:
+        logger.warning(f"LLM filter failed ({e}), returning all jobs unfiltered")
+        print(f"  ⚠️  LLM filter failed, skipping filter step\n")
+        return listings
+
+
 def display_banner():
     print("\n" + "=" * 60)
     print("  🔍 JobScout V2 — AI-Powered Job Discovery & Resume Builder")
@@ -122,7 +215,10 @@ def phase1_discover(parsed_resume, max_jobs: int, use_mock: bool) -> list[JobLis
     for l in listings:
         sources[l.source] = sources.get(l.source, 0) + 1
     source_str = ", ".join(f"{v} from {k}" for k, v in sources.items())
-    print(f"  ✅ Found {len(listings)} unique jobs ({source_str})\n")
+    print(f"  ✅ Found {len(listings)} unique jobs ({source_str})")
+
+    # LLM relevance filter
+    listings = llm_filter_jobs(listings, use_mock=False)
 
     # Show sample of what was found
     for i, l in enumerate(listings[:5], 1):
@@ -427,17 +523,11 @@ def main():
         print(f"  [{i}/{len(selected)}] {listing.company} — {listing.title[:40]}")
 
         jd_text = listing.full_jd if listing.full_jd else f"{listing.title} {listing.description}"
-        
-        # Always keep Sorenson and 101gen as top 2 experiences
-        fixed_exp_ids = ["exp_sorenson_communications", "exp_101gen_ai"]
-        other_exp_ids = [e for e in result.best_experience_ids if e not in fixed_exp_ids]
-        final_exp_ids = fixed_exp_ids + other_exp_ids[:1]  # Add 1 more (best match)
-        
-        
+
         resume_path = generate_resume(
             parsed_resume=parsed,
             jd_text=jd_text,
-            selected_experience_ids=final_exp_ids,
+            selected_experience_ids=result.best_experience_ids,
             selected_project_ids=result.best_project_ids,
             lead_skills=[],  # Let the LLM figure it out from JD
             resume_rules=config.RESUME_RULES,

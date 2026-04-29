@@ -16,13 +16,13 @@ FALLBACK_MODEL = "gemini-2.5-flash"     # Used when primary hits rate limits
 MAX_JOBS_TO_DISCOVER = 5                # Start small (5), scale to 50 later
 JOB_RECENCY_HOURS = 48                  # Only jobs posted in last N hours
 COUNTRY = "us"                          # Adzuna country code
-LOCATIONS = ["California", "New York", "Washington", "Texas", "Illinois", "Massachusetts", "Remote"]  # Empty = nationwide. Ex: ["California", "Remote"]
+LOCATIONS = []                          # Empty = nationwide. Ex: ["California", "Remote"]
 
 # Role titles are auto-generated from your resume's skills.
 # These base words combine with your top skill clusters:
 #   "python engineer new grad", "ML developer entry level", etc.
 BASE_TITLES = ["engineer", "developer"]
-EXPERIENCE_LEVEL = ["new grad", "entry level", "junior", "associate", "0-2 years"]  # Used to generate role titles that match your experience level
+EXPERIENCE_LEVEL = ["new grad", "entry level", "junior", "associate"]
 
 # Job APIs to query (results are merged and deduplicated)
 JOB_APIS = ["adzuna"]
@@ -37,9 +37,9 @@ JOB_DISCOVERY_PRIORITY = ["serper", "adzuna"]
 # =============================================================================
 # FIT SCORING
 # =============================================================================
-FIT_THRESHOLD = 40                      # Minimum score (0-100) to proceed
+FIT_THRESHOLD = 75                      # Minimum score (0-100) to proceed
 MAX_EXPERIENCES_TO_SELECT = 3           # How many work experiences to include
-MAX_PROJECTS_TO_SELECT = 3             # How many projects to include
+MAX_PROJECTS_TO_SELECT = 4             # How many projects to include
 
 # Partial credit for similar technologies.
 # If JD says "React" and you have "Angular", Angular gets partial match credit.
@@ -108,34 +108,34 @@ SIMILAR_TECH_WEIGHT = 0.6
 # RESUME GENERATION
 # =============================================================================
 RESUME_RULES = """
-EXPERIENCES (strict rules):
-- ALWAYS include Sorenson Communications and 101gen.ai as the first two experiences
-- The third experience (AI Ensured, Outlier AI, or Tutor) gets 1 bullet max, 2 bullets only if space allows
-- Each of the first two experiences: at most 3 bullets, most relevant to the JD
-- Every bullet must follow XYZ formula: "Accomplished [X], as measured by [Y], by doing [Z]"
-- Strong action verbs only: Architected, Engineered, Optimized, Deployed, Implemented
-- Mirror exact JD terminology in bullets
-- Keep all metrics exactly as in original — never invent numbers
-- Never fabricate skills, tools, or experiences
-
-PROJECTS (strict rules):
-- Ideally 3 projects, Maximum 4 projects
-- Each project: Try for 3 bullets (Reduce to 2 bullets only if the resume does not fit on 1 page)
-- Select projects most relevant to the JD
-
-TECHNICAL SKILLS (strict rules):
-- Maximum 4 lines total
-- Languages MUST always be the first line
-- Combine related categories if needed to stay within 4 lines (e.g. combine AI & Data Science with Developer Tools)
-- Each line must fit on a single line — trim skills if too long
-- Reorder skills within each category to lead with JD-matched skills
-
-GENERAL:
-- Target: 1 page total. Cut weakest bullets before going to page 2
-- Each bullet: maximum 1.5 lines when rendered, ideally 1 line
-- Include both acronyms and full terms only for the most important ones
-- DO NOT fabricate, exaggerate, or add anything not in the master resume
-- DO NOT invent or inflate metrics
+- Target length: 1 page preferred, 2 pages acceptable for roles
+  requiring extensive relevant experience
+- Include up to {max_experiences} most relevant work experiences
+- Include up to {max_projects} most relevant projects
+- 3-5 bullets per work experience, 2-3 bullets per project
+- Every bullet MUST follow the XYZ formula:
+  "Accomplished [X], as measured by [Y], by doing [Z]"
+- Use strong action verbs: Architected, Engineered, Optimized, 
+  Deployed, Implemented, Designed, Automated, Built, Reduced,
+  Increased — NEVER "Worked on", "Helped with", "Assisted"
+- Mirror exact terminology from the JD in bullet points
+- Include both acronyms and full terms for key technologies
+  (e.g., "CI/CD (Continuous Integration/Continuous Deployment)")
+- Skills section: reorder to lead with JD-matched skills, max 
+  4 category rows
+- When the JD requires a technology the candidate doesn't have
+  but has experience with a SIMILAR technology (per the 
+  equivalency map), include the project using the ACTUAL 
+  technology — never claim skills you don't have. The recruiter
+  will recognize the transferable skill.
+- DO NOT fabricate, exaggerate, or add any skills, tools, 
+  metrics, or experiences not present in the master resume
+- DO NOT invent or inflate metrics. If the original bullet has
+  a number, keep it exactly. If it doesn't, do not add one.
+- DO NOT round up or embellish ("30 seconds" stays "30 seconds",
+  not "under 30 seconds" or "nearly instantaneous")
+- Keep all factual information exactly as provided in the 
+  master resume — every claim must be defensible in an interview
 """
 
 # Format the rules with current config values

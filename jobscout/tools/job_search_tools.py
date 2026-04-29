@@ -10,7 +10,7 @@ import os
 import time
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import requests
 
@@ -376,17 +376,10 @@ def generate_serper_queries(
     level = experience_levels[0] if experience_levels else "new grad"
 
     queries = []
-    cutoff = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
     for cname, _ in active:
         title = title_map.get(cname, "software engineer")
-        level = experience_levels[0] if experience_levels else "new grad"
         for site in sites:
-            q = (
-                f"{title} {level} 2026 {site} "
-                f"-senior -principal -staff -lead -manager "
-                f"-phd -masters -intern -uk -bristol -london "
-                f"after:{cutoff}"
-            )
+            q = f"{title} {level} 2026 {site}"
             queries.append(q)
             if len(queries) >= max_queries:
                 break
