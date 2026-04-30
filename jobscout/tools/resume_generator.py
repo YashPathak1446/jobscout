@@ -60,21 +60,30 @@ def tailor_resume_with_llm(
     prompt = f"""You are an expert resume writer specializing in ATS-optimized resumes.
 Your task is to tailor resume content for a specific job description, following the EXACT format below.
 
-CRITICAL RULES — FOLLOW EXACTLY:
-{resume_rules}
+BULLET LENGTH — CRITICAL:
+- Each bullet must fit on ONE line when rendered in LaTeX (~120 characters, hard cap 150)
+- Never end a bullet with filler: "ensuring X", "enabling Y", "allowing Z", "to facilitate X"
+- End on the metric or outcome — nothing after the number
+- BAD: "...reducing latency by 40%, ensuring faster response times for end users."
+- GOOD: "...reducing query latency by 40% across 36M+ document stores."
 
-BULLET COUNT RULES (STRICT):
+BULLET COUNT — STRICT:
 - Work experiences: 3-4 bullets MAXIMUM per role
 - Projects: 2-3 bullets MAXIMUM per project
 - Select only the most relevant and impactful bullets
 - Never repeat or pad bullets
 
-BULLET QUALITY RULES:
-- Use XYZ formula: "Accomplished [X], as measured by [Y], by doing [Z]"
-- Strong action verbs: Architected, Engineered, Optimized, Deployed, Implemented
+BULLET QUALITY:
+- XYZ formula: "Accomplished [X] by doing [Z], achieving [Y]"
+- Strong action verbs: Architected, Engineered, Optimized, Deployed, Implemented, Automated
 - Mirror exact JD terminology
 - Keep all metrics exactly as in original — never invent numbers
 - Never fabricate skills, tools, or experiences
+
+GOOD BULLET EXAMPLES (notice: short, one line, ends on outcome):
+- "Architected dual-Lambda REST API using Terraform IaC, cutting test execution from 10 min to 30 sec."
+- "Engineered observability pipeline decoding CloudWatch logs and forwarding SIP metrics to Dynatrace via DQL."
+- "Deployed Weaviate vector DB via Docker, enabling RAG search over 36M+ PubMed articles at ~150ms latency."
 
 SIMILAR TECHNOLOGY NOTE:
 If JD mentions a technology the candidate doesn't have but has a similar one,
@@ -112,9 +121,9 @@ Output ONLY valid JSON (no markdown, no backticks):
             "location": "Salt Lake City, UT",
             "dates": "June 2025 -- Oct. 2025",
             "bullets": [
-                "Bullet 1 (XYZ format)",
-                "Bullet 2 (XYZ format)",
-                "Bullet 3 (XYZ format)"
+                "Bullet 1 (XYZ format, max 150 chars)",
+                "Bullet 2 (XYZ format, max 150 chars)",
+                "Bullet 3 (XYZ format, max 150 chars)"
             ]
         }}
     ],
@@ -125,8 +134,8 @@ Output ONLY valid JSON (no markdown, no backticks):
             "tech": "Python, Google ADK, Gemini API, Docker",
             "dates": "Jan. 2026 - Current",
             "bullets": [
-                "Bullet 1 (XYZ format)",
-                "Bullet 2 (XYZ format)"
+                "Bullet 1 (XYZ format, max 150 chars)",
+                "Bullet 2 (XYZ format, max 150 chars)"
             ]
         }}
     ]
