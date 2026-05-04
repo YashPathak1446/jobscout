@@ -8,24 +8,38 @@ Tools for parsing, analyzing, and scoring resumes:
 - Component selection (choose experiences/projects for each job)
 """
 
-from .latex_parser import parse_latex_resume, extract_experiences, extract_projects
+from .latex_parser import (
+    parse_latex_resume,
+    print_latex_resume,
+    LatexResume,
+    LatexExperience,
+    LatexProject,
+    LatexSkills,
+)
 from .embedding_scorer import (
-    generate_embeddings,
-    compute_similarity,
-    score_job_resume_fit,
+    embed_resume_components,
+    embed_resume_components_mock,
+    score_job_with_embeddings,
+    score_job_mock,
+    EmbeddingScore,
 )
 from .resume_parser import ResumeParser
 
 __all__ = [
     # LaTeX parsing
     'parse_latex_resume',
-    'extract_experiences',
-    'extract_projects',
+    'print_latex_resume',
+    'LatexResume',
+    'LatexExperience',
+    'LatexProject',
+    'LatexSkills',
     
     # Embedding & scoring
-    'generate_embeddings',
-    'compute_similarity',
-    'score_job_resume_fit',
+    'embed_resume_components',
+    'embed_resume_components_mock',
+    'score_job_with_embeddings',
+    'score_job_mock',
+    'EmbeddingScore',
     
     # Unified parser
     'ResumeParser',

@@ -1,0 +1,379 @@
+"""
+LaTeX Resume Parser — Extracts structured components from main.tex.
+
+Parses Jake's Resume format to get experiences, projects, and skills
+with the correct company names, locations, dates, and improved bullets.
+This is the authoritative source — always use this over the .txt parser
+when a .tex file is available.
+"""
+
+import re
+import logging
+from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LatexExperience:
+    """A work experience entry from the LaTeX resume."""
+    id: str
+    title: str
+    dates: str
+    company: str
+    location: str
+    bullets: list[str]
+    keywords: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LatexProject:
+    """A project entry from the LaTeX resume."""
+    id: str
+    name: str
+    url: str
+    tech: str
+    dates: str
+    bullets: list[str]
+    keywords: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LatexSkills:
+    """Technical skills from the LaTeX resume."""
+    categories: dict[str, str]  # label -> value
+
+
+@dataclass
+class LatexResume:
+    """Fully parsed LaTeX resume."""
+    name: str
+    phone: str
+    email: str
+    github_url: str
+    linkedin_url: str
+    education_school: str
+    education_location: str
+    education_degree: str
+    education_dates: str
+    education_courses: str
+    experiences: list[LatexExperience]
+    projects: list[LatexProject]
+    skills: LatexSkills
+    raw_tex: str
+
+
+# Tech keywords to auto-extract for embedding scoring
+TECH_KEYWORDS = [
+    "python", "java", "javascript", "typescript", "c++", "c#", "go",
+    "rust", "ruby", "scala", "kotlin", "swift", "sql", "html", "css",
+    "react", "angular", "vue", "next.js", "django", "flask", "fastapi",
+    "spring", "express", "node.js", "rails",
+    "aws", "gcp", "azure", "docker", "kubernetes", "terraform",
+    "lambda", "ec2", "s3", "cloudwatch", "api gateway",
+    "mysql", "postgresql", "mongodb", "redis", "elasticsearch",
+    "dynamodb", "firebase", "weaviate", "pinecone", "chromadb",
+    "kafka", "rabbitmq", "spark", "airflow",
+    "pytorch", "tensorflow", "keras", "huggingface", "transformers",
+    "bert", "llm", "rag", "langchain", "nlp", "scikit-learn",
+    "pandas", "numpy", "matplotlib",
+    "git", "ci/cd", "github actions", "jenkins", "linux",
+    "rest api", "graphql", "oauth", "jwt",
+    "microservices", "serverless", "devops",
+    "google adk", "multi-agent", "gemini", "streamlit",
+    "ai", "ml", "machine learning", "deep learning",
+    "full-stack", "full stack", "backend", "frontend",
+    "distributed systems", "data pipelines",
+]
+
+
+def _extract_keywords(text: str) -> list[str]:
+    """Extract tech keywords from text."""
+    text_lower = text.lower()
+    found = []
+    short = {"ai", "ml", "go", "sql", "rag", "nlp"}
+    for kw in TECH_KEYWORDS:
+        if kw in short or len(kw) <= 3:
+            if re.search(rf"\b{re.escape(kw)}\b", text_lower):
+                found.append(kw)
+        else:
+            if kw in text_lower:
+                found.append(kw)
+    return sorted(set(found))
+
+
+def _clean_latex(text: str) -> str:
+    """Remove LaTeX formatting commands, return plain text."""
+    # Remove common commands but keep content
+    text = re.sub(r"\\textbf\{([^}]*)\}", r"\1", text)
+    text = re.sub(r"\\textit\{([^}]*)\}", r"\1", text)
+    text = re.sub(r"\\emph\{([^}]*)\}", r"\1", text)
+    text = re.sub(r"\\underline\{([^}]*)\}", r"\1", text)
+    text = re.sub(r"\\href\{[^}]*\}\{([^}]*)\}", r"\1", text)
+    text = re.sub(r"\\textbf\{\\href\{[^}]*\}\{\\underline\{([^}]*)\}\}\}", r"\1", text)
+    text = re.sub(r"\\\&", "&", text)
+    text = re.sub(r"\\%", "%", text)
+    text = re.sub(r"\\\$", "$", text)
+    text = re.sub(r"\\_", "_", text)
+    text = re.sub(r"\\#", "#", text)
+    text = re.sub(r"\\textasciitilde\{\}", "~", text)
+    text = re.sub(r"\$\|?\$", "|", text)
+    text = re.sub(r"\\small\s*", "", text)
+    text = text.replace("--", "–")
+    return text.strip()
+
+
+def _extract_url_from_href(text: str) -> str:
+    """Extract URL from \\href{url}{text}."""
+    match = re.search(r"\\href\{([^}]+)\}", text)
+    return match.group(1) if match else ""
+
+
+def _slugify(text: str) -> str:
+    """Convert text to ID slug."""
+    slug = re.sub(r"[^a-z0-9]+", "_", text.lower().strip())
+    return slug.strip("_")[:40]
+
+
+def parse_latex_resume(tex_path: str) -> LatexResume:
+    """
+    Parse a Jake's Resume LaTeX file into structured components.
+
+    Args:
+        tex_path: Path to the .tex file (e.g., data/master_resume.tex)
+
+    Returns:
+        LatexResume with all components extracted.
+    """
+    with open(tex_path, "r", encoding="utf-8") as f:
+        raw = f.read()
+
+    # ===== HEADING =====
+    name = ""
+    name_match = re.search(r"\\textbf\{\\Huge \\scshape ([^}]+)\}", raw)
+    if name_match:
+        name = _clean_latex(name_match.group(1))
+
+    phone = ""
+    phone_match = re.search(r"\\small ([0-9\-]+)", raw)
+    if phone_match:
+        phone = phone_match.group(1)
+
+    email = ""
+    # Find email in the heading center block, not the preamble
+    heading_block = re.search(r"\\begin\{center\}(.*?)\\end\{center\}", raw, re.DOTALL)
+    if heading_block:
+        email_match = re.search(r"\\href\{mailto:([^}]+)\}", heading_block.group(1))
+        if email_match:
+            email = email_match.group(1)
+
+    github_url = ""
+    github_match = re.search(r"\\href\{(https://github\.com/[^}]+)\}", raw)
+    if github_match:
+        github_url = github_match.group(1)
+
+    linkedin_url = ""
+    linkedin_match = re.search(r"\\href\{(https://www\.linkedin\.com/[^}]+)\}", raw)
+    if linkedin_match:
+        linkedin_url = linkedin_match.group(1)
+
+    # ===== EDUCATION =====
+    edu_school = edu_location = edu_degree = edu_dates = edu_courses = ""
+    edu_match = re.search(
+        r"\\resumeSubheading\s*\{([^}]*)\}\{([^}]*)\}\s*\{([^}]*)\}\{([^}]*)\}\s*\\resumeItemListStart\s*\\resumeItem\{\\textbf\{[^}]*\} ([^}]*)\}",
+        raw
+    )
+    if edu_match:
+        edu_school = _clean_latex(edu_match.group(1))
+        edu_location = _clean_latex(edu_match.group(2))
+        edu_degree = _clean_latex(edu_match.group(3))
+        edu_dates = _clean_latex(edu_match.group(4))
+        edu_courses = _clean_latex(edu_match.group(5))
+
+    # ===== EXPERIENCES =====
+    experiences = []
+
+    # Find the Experience section
+    exp_section_match = re.search(
+        r"\\section\{Experience\}(.*?)\\section\{",
+        raw, re.DOTALL
+    )
+
+    if exp_section_match:
+        exp_section = exp_section_match.group(1)
+
+        # Find all resumeSubheading entries
+        subheading_pattern = re.compile(
+            r"\\resumeSubheading\s*\{([^}]*)\}\{([^}]*)\}\s*\{([^}]*)\}\{([^}]*)\}\s*"
+            r"\\resumeItemListStart(.*?)\\resumeItemListEnd",
+            re.DOTALL
+        )
+
+        for match in subheading_pattern.finditer(exp_section):
+            title = _clean_latex(match.group(1))
+            dates = _clean_latex(match.group(2))
+            company = _clean_latex(match.group(3))
+            location = _clean_latex(match.group(4))
+            bullets_raw = match.group(5)
+
+            # Extract bullet items
+            bullets = []
+            bullet_matches = re.findall(r"\\resumeItem\{(.*?)\}(?:\s*\\resumeItem|\s*$)", bullets_raw + "\n\\resumeItem", re.DOTALL)
+            for b in bullet_matches:
+                cleaned = _clean_latex(b).strip()
+                if cleaned:
+                    bullets.append(cleaned)
+
+            if not bullets:
+                # Fallback: simpler extraction
+                for b in re.findall(r"\\resumeItem\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}", bullets_raw):
+                    cleaned = _clean_latex(b).strip()
+                    if cleaned:
+                        bullets.append(cleaned)
+
+            exp_id = f"exp_{_slugify(company or title)}"
+            all_text = f"{title} {company} {' '.join(bullets)}"
+            keywords = _extract_keywords(all_text)
+
+            experiences.append(LatexExperience(
+                id=exp_id,
+                title=title,
+                dates=dates,
+                company=company,
+                location=location,
+                bullets=bullets,
+                keywords=keywords,
+            ))
+
+    # ===== PROJECTS =====
+    projects = []
+
+    proj_section_match = re.search(
+        r"\\section\{Projects\}(.*?)\\section\{",
+        raw, re.DOTALL
+    )
+
+    if proj_section_match:
+        proj_section = proj_section_match.group(1)
+
+        proj_pattern = re.compile(
+            r"\\resumeProjectHeading\s*\{(.*?)\}\{([^}]*)\}\s*"
+            r"\\resumeItemListStart(.*?)\\resumeItemListEnd",
+            re.DOTALL
+        )
+
+        for match in proj_pattern.finditer(proj_section):
+            heading_raw = match.group(1)
+            dates = _clean_latex(match.group(2))
+            bullets_raw = match.group(3)
+
+            # Extract URL from heading before cleaning
+            url = _extract_url_from_href(heading_raw)
+
+            # Extract name: handle \textbf{\href{url}{\underline{Name}}} pattern
+            # and simple \textbf{Name} pattern
+            name_part = ""
+            tech_part = ""
+
+            # Try nested href+underline pattern first
+            nested_match = re.search(
+                r"\\textbf\{\\href\{[^}]*\}\{\\underline\{([^}]*)\}\}\}",
+                heading_raw
+            )
+            if nested_match:
+                name_part = _clean_latex(nested_match.group(1))
+            else:
+                # Try simple textbf
+                simple_match = re.search(r"\\textbf\{([^}]*)\}", heading_raw)
+                if simple_match:
+                    name_part = _clean_latex(simple_match.group(1))
+
+            # Extract tech after $|$ \emph{...}
+            tech_match = re.search(r"\\emph\{([^}]*)\}", heading_raw)
+            if tech_match:
+                tech_part = _clean_latex(tech_match.group(1))
+
+            # Extract bullets
+            bullets = []
+            for b in re.findall(r"\\resumeItem\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}", bullets_raw):
+                cleaned = _clean_latex(b).strip()
+                if cleaned:
+                    bullets.append(cleaned)
+
+            if not bullets:
+                bullet_matches = re.findall(r"\\resumeItem\{(.*?)\}(?=\s*\\resumeItem|\s*$)", bullets_raw + "\n\\resumeItem", re.DOTALL)
+                for b in bullet_matches:
+                    cleaned = _clean_latex(b).strip()
+                    if cleaned:
+                        bullets.append(cleaned)
+
+            proj_id = f"proj_{_slugify(name_part)}"
+            all_text = f"{name_part} {tech_part} {' '.join(bullets)}"
+            keywords = _extract_keywords(all_text)
+
+            projects.append(LatexProject(
+                id=proj_id,
+                name=name_part,
+                url=url,
+                tech=tech_part,
+                dates=dates,
+                bullets=bullets,
+                keywords=keywords,
+            ))
+
+    # ===== SKILLS =====
+    skills_categories = {}
+    skills_match = re.search(
+        r"\\section\{Technical Skills\}(.*?)(?:\\section\{|\\end\{document\})",
+        raw, re.DOTALL
+    )
+    if skills_match:
+        skills_section = skills_match.group(1)
+        for m in re.finditer(r"\\textbf\{([^}]+)\}\{:\s*([^\\]+)\}", skills_section):
+            label = _clean_latex(m.group(1))
+            value = _clean_latex(m.group(2)).strip().rstrip("\\").strip()
+            if label and value:
+                skills_categories[label] = value
+
+    return LatexResume(
+        name=name,
+        phone=phone,
+        email=email,
+        github_url=github_url,
+        linkedin_url=linkedin_url,
+        education_school=edu_school,
+        education_location=edu_location,
+        education_degree=edu_degree,
+        education_dates=edu_dates,
+        education_courses=edu_courses,
+        experiences=experiences,
+        projects=projects,
+        skills=LatexSkills(categories=skills_categories),
+        raw_tex=raw,
+    )
+
+
+def print_latex_resume(resume: LatexResume) -> None:
+    """Pretty-print parsed LaTeX resume for debugging."""
+    print(f"Name: {resume.name}")
+    print(f"Email: {resume.email} | Phone: {resume.phone}")
+    print(f"GitHub: {resume.github_url}")
+    print(f"\nEducation: {resume.education_school} | {resume.education_degree} | {resume.education_dates}")
+    print(f"\nExperiences ({len(resume.experiences)}):")
+    for exp in resume.experiences:
+        print(f"  [{exp.id}] {exp.title} @ {exp.company}, {exp.location} ({exp.dates})")
+        print(f"    {len(exp.bullets)} bullets | keywords: {', '.join(exp.keywords[:8])}")
+    print(f"\nProjects ({len(resume.projects)}):")
+    for proj in resume.projects:
+        print(f"  [{proj.id}] {proj.name} ({proj.dates})")
+        print(f"    Tech: {proj.tech[:60]}")
+        print(f"    {len(proj.bullets)} bullets | keywords: {', '.join(proj.keywords[:8])}")
+    print(f"\nSkills categories: {list(resume.skills.categories.keys())}")
+
+
+# === CLI for testing ===
+if __name__ == "__main__":
+    import sys
+    tex_path = sys.argv[1] if len(sys.argv) > 1 else "data/master_resume.tex"
+    resume = parse_latex_resume(tex_path)
+    print_latex_resume(resume)
