@@ -9,5 +9,6 @@ Multi-agent job application pipeline:
 """
 
 from .discovery_agent import DiscoveryAgent
+from .enrichment_agent import EnrichmentAgent
 
-__all__ = ['DiscoveryAgent']
+__all__ = ['DiscoveryAgent', 'EnrichmentAgent']
