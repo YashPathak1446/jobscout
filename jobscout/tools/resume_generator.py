@@ -57,62 +57,57 @@ def tailor_resume_with_llm(
             for bullet in proj.bullets:
                 selected_proj_text += f"- {bullet}\n"
 
-    prompt = f"""You are an expert resume writer specializing in ATS-optimized resumes.
-Your task is to tailor resume content for a specific job description, following the EXACT format below.
+    prompt = f"""You are a resume tailoring assistant. Your job is to SELECT the best bullets from the candidate's master resume for a specific job description, then format them as LaTeX.
 
-BULLET LENGTH — CRITICAL:
-- Each bullet must fit on ONE line when rendered in LaTeX (~120 characters, hard cap 150)
-- Never end a bullet with filler: "ensuring X", "enabling Y", "allowing Z", "to facilitate X"
+=============================================================
+CORE RULE: SELECT, DON'T REWRITE
+- Pick the best bullets from the list provided
+- You may lightly trim a bullet only if it exceeds 150 characters — trim at a natural break
+- Never rephrase, reorder words, or change the meaning
+- All metrics, numbers, and technical terms must be preserved exactly
+=============================================================
+
+SELECTION RULES:
+- Sorenson Communications: select EXACTLY 4 bullets — always include all 4 if available
+- 101gen.ai: select EXACTLY 4 bullets — always include all 4 if available
+- Any third experience (AI Ensured, Outlier AI, Tutor): select 1-2 bullets maximum
+- Projects: select 2-3 bullets per project, prioritize most relevant to the JD
+
+BULLET LENGTH:
+- Target ~120 chars per bullet, hard cap 150 chars
 - End on the metric or outcome — nothing after the number
-- BAD: "...reducing latency by 40%, ensuring faster response times for end users."
+- BAD: "...reducing latency by 40%, ensuring faster response times."
 - GOOD: "...reducing query latency by 40% across 36M+ document stores."
 
-BULLET COUNT — STRICT:
-- Work experiences: 3-4 bullets MAXIMUM per role
-- Projects: 2-3 bullets MAXIMUM per project
-- Select only the most relevant and impactful bullets
-- Never repeat or pad bullets
+BULLET OUTPUT FORMAT — PLAIN TEXT ONLY:
+- Output bullets as plain text — NO LaTeX commands (no backslash commands, no braces)
+- The pipeline automatically applies bold formatting to key terms
+- BAD example:  "Architected dual-Lambda REST API using Terraform, cutting to 30 sec." with backslash-textbf around terms
+- GOOD example: "Architected dual-Lambda REST API using Terraform IaC, cutting execution from 10 min to 30 sec."
 
-BULLET QUALITY:
-- XYZ formula: "Accomplished [X] by doing [Z], achieving [Y]"
-- Strong action verbs: Architected, Engineered, Optimized, Deployed, Implemented, Automated
-- Mirror exact JD terminology
-- Keep all metrics exactly as in original — never invent numbers
-- Never fabricate skills, tools, or experiences
-
-GOOD BULLET EXAMPLES (notice: short, one line, ends on outcome):
-- "Architected dual-Lambda REST API using Terraform IaC, cutting test execution from 10 min to 30 sec."
-- "Engineered observability pipeline decoding CloudWatch logs and forwarding SIP metrics to Dynatrace via DQL."
-- "Deployed Weaviate vector DB via Docker, enabling RAG search over 36M+ PubMed articles at ~150ms latency."
-
-SIMILAR TECHNOLOGY NOTE:
-If JD mentions a technology the candidate doesn't have but has a similar one,
-include the project with the ACTUAL technology. Never claim skills they don't have.
+SKILLS RULES:
+- "Languages" MUST always be the FIRST skill category in output JSON
+- Limit to 4 skill categories total — combine if needed
+- Values must be plain comma-separated text
+- Reorder skills within each category to lead with JD-matched ones
 
 === JOB DESCRIPTION ===
 {jd_text[:5000]}
 
-=== SELECTED EXPERIENCES (pick 3-4 bullets each, most relevant to JD) ===
+=== MASTER BULLETS — EXPERIENCES ===
 {selected_exp_text}
 
-=== SELECTED PROJECTS (pick 2-3 bullets each, most relevant to JD) ===
+=== MASTER BULLETS — PROJECTS ===
 {selected_proj_text}
 
-=== CANDIDATE SKILLS (reorder to lead with JD-matched skills) ===
+=== CANDIDATE SKILLS ===
 {parsed_resume.skills_text}
-
-=== JD-MATCHED LEAD SKILLS ===
-{', '.join(lead_skills[:10]) if lead_skills else 'Use your judgment based on JD'}
 
 Output ONLY valid JSON (no markdown, no backticks):
 {{
     "skills": {{
-        "Languages": "Python, Java, ...",
-        "Cloud & Infrastructure": "AWS, Docker, ...",
-        "Databases & Search": "MongoDB, ...",
-        "Frameworks & Libraries": "Flask, Node.js, ...",
-        "AI & Data Science": "PyTorch, ...",
-        "Developer Tools": "Git, CI/CD, ..."
+        "Languages": "Python, Java, C++, ...",
+        "Cloud & Infrastructure": "AWS, Docker, ..."
     }},
     "experiences": [
         {{
@@ -121,9 +116,10 @@ Output ONLY valid JSON (no markdown, no backticks):
             "location": "Salt Lake City, UT",
             "dates": "June 2025 -- Oct. 2025",
             "bullets": [
-                "Bullet 1 (XYZ format, max 150 chars)",
-                "Bullet 2 (XYZ format, max 150 chars)",
-                "Bullet 3 (XYZ format, max 150 chars)"
+                "Architected dual-Lambda REST API using Terraform IaC, cutting test execution from 10 min to 30 sec.",
+                "Engineered observability pipeline decoding CloudWatch logs and forwarding SIP metrics to Dynatrace via DQL.",
+                "Streamlined CI/CD lifecycle automating regression testing with Docker and GitHub Actions, ensuring 100% repeatable validation.",
+                "Accelerated debugging by deploying Dockerized test harnesses on EC2 and Lambda, centralizing metrics into Grafana dashboards."
             ]
         }}
     ],
@@ -134,8 +130,8 @@ Output ONLY valid JSON (no markdown, no backticks):
             "tech": "Python, Google ADK, Gemini API, Docker",
             "dates": "Jan. 2026 - Current",
             "bullets": [
-                "Bullet 1 (XYZ format, max 150 chars)",
-                "Bullet 2 (XYZ format, max 150 chars)"
+                "Architected multi-agent pipeline using Google ADK achieving 92% semantic matching accuracy.",
+                "Engineered hybrid search combining BM25 and cosine similarity, reducing resume generation time by 60%."
             ]
         }}
     ]
@@ -204,6 +200,18 @@ def tailor_resume_mock(
             location = m.group(2).strip()
             if company and location:
                 location_map[company.lower()] = location
+
+    # Hardcoded fallback for known companies
+    location_fallback = {
+        "sorenson communications": "Salt Lake City, UT",
+        "101gen.ai": "Remote",
+        "ai ensured": "Bangalore, India",
+        "outlier.ai": "Remote",
+        "outlier ai": "Remote",
+        "tutor.com": "Remote",
+    }
+    # File scan overrides fallback if it finds values
+    location_map = {**location_fallback, **location_map}
 
     experiences = []
     for exp in parsed_resume.experiences:
@@ -786,7 +794,7 @@ def _build_resume_python_docx(data: dict, output_path: str) -> str:
 # =========================================================================
 
 def _escape_latex(text: str) -> str:
-    """Escape special LaTeX characters."""
+    """Escape special LaTeX characters in plain text."""
     chars = {
         '&': r'\&', '%': r'\%', '$': r'\$', '#': r'\#',
         '_': r'\_', '{': r'\{', '}': r'\}', '~': r'\textasciitilde{}',
@@ -795,6 +803,58 @@ def _escape_latex(text: str) -> str:
     for char, replacement in chars.items():
         text = text.replace(char, replacement)
     return text
+
+
+# Keywords and metrics to automatically bold in bullets
+# Note: list longer variants before shorter ones to avoid nesting issues
+BOLD_KEYWORDS = [
+    # Metrics
+    "10 min", "10 minutes", "30 sec", "30 seconds",
+    "sub-100ms", "p95", "92%", "60%", "80k+", "99.9%",
+    "40%", "30k+", "100+", "95%+", "20%", "15%", "35%", "503ms",
+    "36M+", "150ms", "300ms",
+    # Tech — use full names to avoid partial matches
+    "dual-Lambda REST API", "dual-Lambda",
+    "Terraform IaC", "Terraform",
+    "GitHub Actions",
+    "CloudWatch", "Dynatrace", "Grafana",
+    "Docker", "Kubernetes",
+    "API Gateway",
+    "Weaviate", "Flask",
+    "Sentence-Vector Transformers", "Med-BERT", "DistilBERT",
+    "Master-Slave", "TF-IDF", "SimHash",
+    "BM25",
+    "Mineflayer", "PrismarineJS",
+    "OSPF", "ISIS", "BGP", "EdgeShark",
+]
+
+
+def _apply_bold(text: str) -> str:
+    """
+    Wrap known keywords/metrics in \\textbf{}.
+    Processes longest keywords first, skips if keyword already inside any \\textbf{}.
+    """
+    for kw in sorted(BOLD_KEYWORDS, key=len, reverse=True):
+        escaped_kw = _escape_latex(kw)
+        wrapped = f"\\textbf{{{escaped_kw}}}"
+        # Skip if already wrapped OR if this keyword appears inside any \textbf{...}
+        if wrapped in text:
+            continue
+        # Skip if keyword is a substring of something already bolded
+        if f"\\textbf{{{escaped_kw}" in text or f"{escaped_kw}}}" in text:
+            continue
+        if escaped_kw in text:
+            text = text.replace(escaped_kw, wrapped, 1)
+    return text
+
+
+def _format_bullet(bullet: str) -> str:
+    """
+    Take a plain-text bullet from the LLM JSON,
+    escape it for LaTeX, then apply bold to known keywords.
+    """
+    escaped = _escape_latex(bullet)
+    return _apply_bold(escaped)
 
 
 def _build_experience_latex(experiences: list[dict]) -> str:
@@ -813,7 +873,8 @@ def _build_experience_latex(experiences: list[dict]) -> str:
       \\resumeItemListStart\n"""
 
         for bullet in exp.get("bullets", []):
-            latex += f"        \\resumeItem{{{esc(bullet)}}}\n"
+            formatted = _format_bullet(bullet)
+            latex += f"        \\resumeItem{{{formatted}}}\n"
 
         latex += "      \\resumeItemListEnd\n\n"
     return latex
@@ -829,8 +890,8 @@ def _build_project_latex(projects: list[dict]) -> str:
         tech = esc(proj.get("tech", ""))
         dates = esc(proj.get("dates", ""))
 
-        # Create hyperlinked name if URL provided
-        if url:
+        # Create hyperlinked name if URL provided and valid
+        if url and url not in ("N/A", "n/a", ""):
             name_latex = f"\\textbf{{\\href{{{url}}}{{\\underline{{{esc(name)}}}}}}}"
         else:
             name_latex = f"\\textbf{{{esc(name)}}}"
@@ -845,19 +906,25 @@ def _build_project_latex(projects: list[dict]) -> str:
           \\resumeItemListStart\n"""
 
         for bullet in proj.get("bullets", []):
-            latex += f"            \\resumeItem{{{esc(bullet)}}}\n"
+            formatted = _format_bullet(bullet)
+            latex += f"            \\resumeItem{{{formatted}}}\n"
 
         latex += "          \\resumeItemListEnd\n\n"
     return latex
 
 
 def _build_skills_latex(skills: dict) -> str:
-    """Build LaTeX for technical skills section."""
+    """Build LaTeX for technical skills section. Languages always first."""
     esc = _escape_latex
     lines = ""
+    # Always put Languages first
+    if "Languages" in skills and skills["Languages"].strip():
+        lines += f"     \\textbf{{Languages}}{{: {skills['Languages']}}} \\\\\n"
     for label, value in skills.items():
+        if label == "Languages":
+            continue  # Already added above
         if value and value.strip():
-            lines += f"     \\textbf{{{esc(label)}}}{{: {esc(value)}}} \\\\\n"
+            lines += f"     \\textbf{{{esc(label)}}}{{: {value}}} \\\\\n"
     return lines
 
 

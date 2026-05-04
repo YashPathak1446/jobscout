@@ -105,31 +105,34 @@ def llm_filter_jobs(listings: list[JobListing], use_mock: bool = False) -> list[
         for i, l in enumerate(listings, 1)
     )
 
-    prompt = f"""You are filtering job listings for a new CS graduate (Spring 2025, no citizenship, F-1 visa holder) looking for entry-level software engineering roles in the United States.
+    prompt = f"""You are filtering job listings for a CS graduate (graduated Spring 2025, Green-Card Holder, Permanent Resident, no US citizenship) seeking entry-level and new grad software engineering, data science, data engineer, AI engineer, ML Engineer, and other similar roles in the United States.
 
 KEEP jobs that are:
-- Entry level, new grad, junior, or associate roles
-- Full-time (not internship, not contract)
-- Based in the United States (or Remote with US base)
-- In software engineering, ML engineering, data engineering, DevOps, or related tech roles
-- Open/active postings
+- Entry level, new grad, junior, associate, or early career (0-1 years experience)
+- Targeting 2025 OR 2026 graduates — both are valid for this candidate
+- Full-time permanent positions
+- US-based or Remote (with US operations)
+- Software engineering, ML/AI engineering, data engineering, DevOps, or related tech
 
 REMOVE jobs that are:
-- Senior, principal, staff, lead, or manager roles
-- Require 3+ years of experience
-- PhD or Masters degree required
-- Internships or co-ops
-- Outside the United States (UK, Canada, India, etc.)
-- Require US citizenship or security clearance
-- Clearly expired or unavailable ("no longer available", "position filled")
+- Explicitly senior, principal, staff, lead, or manager level
+- Require 2+ years of experience as minimum
+- PhD or Masters as minimum qualification (MS preferred is OK to keep)
+- Summer/Fall internships or co-ops
+- Located outside the US with no US remote option (UK, Canada, Europe, India, etc.)
+- Require US citizenship, security clearance, or defense contractor work
+- Expired ("no longer accepting applications", "position closed", "filled")
 
-Here are the jobs to evaluate:
+NEVER REMOVE solely because:
+- Title says "2026 New Grad" or "Graduate 2026" — these are valid
+- Role is at a US company even if labeled "Graduate Program"
+- Graduation window says Dec 2025–June 2026 (candidate graduated June 2025, qualifies)
+
+Here are the jobs:
 {job_list}
 
-Reply with ONLY a JSON object like this (no markdown, no explanation):
-{{"keep": [1, 3, 5], "remove": [2, 4, 6], "reasons": {{"2": "Senior role", "4": "UK based", "6": "PhD required"}}}}
-
-Use the job NUMBER (1-based index), not the ID."""
+Reply with ONLY valid JSON (no markdown):
+{{"keep": [1, 3, 5], "remove": [2, 4], "reasons": {{"2": "Senior role 5+ yrs", "4": "UK based"}}}}"""
 
     try:
         from google import genai as _genai
@@ -535,11 +538,23 @@ def main():
         print(f"  [{i}/{len(selected)}] {listing.company} — {listing.title[:40]}")
 
         jd_text = listing.full_jd if listing.full_jd else f"{listing.title} {listing.description}"
-
+        # Always include Sorenson + 101gen as top 2 experiences
+        fixed_exp_ids = ["exp_sorenson_communications", "exp_101gen_ai"]
+        jd_lower = jd_text.lower()
+        healthcare_jd = any(kw in jd_lower for kw in [
+            "healthcare", "biomedical", "nlp", "medical", "clinical",
+            "rlhf", "radiology", "health", "patient"
+        ])
+        if healthcare_jd:
+            other_exp_ids = [e for e in result.best_experience_ids if e not in fixed_exp_ids]
+            final_exp_ids = fixed_exp_ids + other_exp_ids[:1]
+        else:
+            final_exp_ids = fixed_exp_ids
+            
         resume_path = generate_resume(
             parsed_resume=parsed,
             jd_text=jd_text,
-            selected_experience_ids=result.best_experience_ids,
+            selected_experience_ids=final_exp_ids,
             selected_project_ids=result.best_project_ids,
             lead_skills=[],  # Let the LLM figure it out from JD
             resume_rules=config.RESUME_RULES,
