@@ -13,7 +13,7 @@ Features:
 - Summary generation (markdown report)
 - Error handling (graceful recovery)
 
-Location: jobscout_v3/orchestrator.py
+Location: jobscout_v3/agents/orchestrator.py
 """
 
 import os
@@ -31,8 +31,8 @@ try:
 except ImportError:
     pass  # dotenv not installed, skip
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add project root to path (parent of agents/)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.profile import load_profile
 from tools.resume import ResumeParser
@@ -59,6 +59,7 @@ class JobScoutOrchestrator:
         checkpoint: bool = False,
         mock_mode: bool = False,
         mock_generation: bool = False,
+        mock_embeddings: bool = False,
     ):
         """
         Initialize orchestrator.
@@ -69,11 +70,13 @@ class JobScoutOrchestrator:
             checkpoint: If True, pause for human review between stages
             mock_mode: If True, use mock data for entire pipeline
             mock_generation: If True, use mock for generation only
+            mock_embeddings: If True, use mock embeddings for analysis
         """
         self.profile_name = profile_name
         self.checkpoint = checkpoint
         self.mock_mode = mock_mode
         self.mock_generation = mock_generation
+        self.mock_embeddings = mock_embeddings or mock_mode
         
         # Load profile
         logger.info(f"📋 Loading profile: {profile_name}")
@@ -81,30 +84,28 @@ class JobScoutOrchestrator:
         logger.info(f"✅ Loaded profile: {self.profile.personal_info.name}")
         
         # Setup output directory
-        timestamp = datetime.now().strftime("%Y-%m-%d")
-        self.output_path = Path(output_dir) / timestamp
+        self.timestamp = datetime.now().strftime("%Y-%m-%d")
+        self.output_path = Path(output_dir) / self.timestamp
         self.output_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"📁 Output directory: {self.output_path}")
         
         # State tracking
         self.state = {
             'profile': profile_name,
-            'timestamp': timestamp,
+            'timestamp': self.timestamp,
             'discovered_jobs': [],
             'enriched_jobs': [],
             'analysis_results': [],
             'generation_results': [],
         }
         
-        # Resume parser (shared across agents)
+        # Resume path (resolved relative to project root)
         resume_path = self.profile.resume_preferences.master_resume_path
-        if not resume_path.startswith('/'):
-            resume_path = Path(__file__).parent / resume_path
+        if not Path(resume_path).is_absolute():
+            resume_path = str(Path(__file__).parent.parent / resume_path)
+        self.resume_path = resume_path
         
-        logger.info(f"📄 Loading resume: {resume_path}")
-        self.resume_parser = ResumeParser(str(resume_path))
-        logger.info(f"✅ Resume loaded: {len(self.resume_parser.get_experiences())} exp, "
-                   f"{len(self.resume_parser.get_projects())} proj")
+        logger.info(f"📄 Resume: {resume_path}")
     
     def run(self, max_jobs: int = 20) -> Dict:
         """
@@ -123,6 +124,8 @@ class JobScoutOrchestrator:
         logger.info(f"Max jobs: {max_jobs}")
         logger.info(f"Checkpoints: {'Enabled' if self.checkpoint else 'Disabled'}")
         logger.info(f"Mock mode: {self.mock_mode}")
+        logger.info(f"Mock embeddings: {self.mock_embeddings}")
+        logger.info(f"Mock generation: {self.mock_generation}")
         logger.info("")
         
         try:
@@ -158,6 +161,10 @@ class JobScoutOrchestrator:
             self._save_state()
             raise
     
+    # =====================================================================
+    # PIPELINE STAGES
+    # =====================================================================
+
     def _run_discovery(self, max_jobs: int):
         """Stage 1: Discover jobs."""
         logger.info("=" * 80)
@@ -186,7 +193,9 @@ class JobScoutOrchestrator:
             logger.warning("⚠️  No jobs to enrich")
             return
         
-        agent = EnrichmentAgent(mock_mode=True)  # Always mock for now
+        # Enrichment respects mock_mode. When real scraping is
+        # implemented, this will use Greenhouse/Lever/Ashby scrapers.
+        agent = EnrichmentAgent(mock_mode=self.mock_mode)
         enriched = agent.enrich_jobs(jobs)
         
         self.state['enriched_jobs'] = enriched
@@ -194,7 +203,7 @@ class JobScoutOrchestrator:
         
         # Save enriched jobs
         enriched_path = self.output_path / "enriched_jobs.json"
-        with open(enriched_path, 'w') as f:
+        with open(enriched_path, 'w', encoding='utf-8') as f:
             json.dump(enriched, f, indent=2, default=str)
         logger.info(f"💾 Saved to: {enriched_path}")
         
@@ -216,7 +225,8 @@ class JobScoutOrchestrator:
         
         agent = AnalysisAgent(
             self.profile,
-            str(self.resume_parser.resume_path)
+            str(self.resume_path),
+            mock_embeddings=self.mock_embeddings,
         )
         results = agent.analyze_jobs(jobs)
         
@@ -225,7 +235,7 @@ class JobScoutOrchestrator:
         
         # Save analysis results
         analysis_path = self.output_path / "analysis_results.json"
-        with open(analysis_path, 'w') as f:
+        with open(analysis_path, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, default=str)
         logger.info(f"💾 Saved to: {analysis_path}")
         
@@ -246,21 +256,37 @@ class JobScoutOrchestrator:
             return
         
         mock_gen = self.mock_mode or self.mock_generation
+
+        # Generation Agent gets its own ResumeParser with skip_embeddings
+        # since it only needs parsed resume data, not scoring.
+        gen_parser = ResumeParser(str(self.resume_path), skip_embeddings=True)
+
         agent = GenerationAgent(
             self.profile,
-            self.resume_parser,
-            mock_mode=mock_gen
+            gen_parser,
+            mock_mode=mock_gen,
         )
+
+        # Pass output_dir (not output_path) — generation agent adds
+        # its own date subdirectory via generate_resumes().
         results = agent.generate_resumes(
             analysis_results,
-            output_dir=str(self.output_path)
+            output_dir=str(self.output_path.parent),
         )
         
         self.state['generation_results'] = results
-        logger.info(f"✅ Generated {len(results)} resumes")
+        
+        valid = sum(1 for r in results if r.get('status') == 'valid')
+        review = sum(1 for r in results if r.get('status') == 'needs_review')
+        failed = sum(1 for r in results if r.get('status') == 'failed')
+        logger.info(f"✅ Generation: {valid} valid, {review} needs review, {failed} failed")
         
         self._save_state()
     
+    # =====================================================================
+    # CHECKPOINTS
+    # =====================================================================
+
     def _checkpoint_review_jobs(self, jobs: List, stage: str):
         """Pause for human review of discovered/enriched jobs."""
         print("\n" + "=" * 80)
@@ -269,16 +295,13 @@ class JobScoutOrchestrator:
         
         print(f"\nFound {len(jobs)} jobs:\n")
         
-        for i, job in enumerate(jobs[:10], 1):  # Show first 10
-            # Handle both JobListing objects and dicts
+        for i, job in enumerate(jobs[:10], 1):
             if hasattr(job, 'title'):
-                # JobListing object
                 print(f"{i}. [{job.source}] {job.title} @ {job.company}")
                 print(f"   Location: {job.location}")
                 if job.salary_min:
                     print(f"   Salary: ${job.salary_min:,.0f} - ${job.salary_max:,.0f}")
             else:
-                # Dict
                 print(f"{i}. [{job.get('source', 'unknown')}] {job['title']} @ {job['company']}")
                 print(f"   Location: {job['location']}")
                 if 'salary_min' in job and job['salary_min']:
@@ -302,7 +325,7 @@ class JobScoutOrchestrator:
         
         print(f"\n{len(results)} jobs passed threshold:\n")
         
-        for i, result in enumerate(results[:5], 1):  # Show top 5
+        for i, result in enumerate(results[:5], 1):
             job = result['job']
             score = result['score']
             selected = result['selected_components']
@@ -322,11 +345,18 @@ class JobScoutOrchestrator:
             self._save_state()
             sys.exit(0)
     
+    # =====================================================================
+    # STATE & REPORTING
+    # =====================================================================
+
     def _save_state(self):
         """Save current state to JSON."""
         state_path = self.output_path / "state.json"
-        with open(state_path, 'w') as f:
-            json.dump(self.state, f, indent=2, default=str)
+        try:
+            with open(state_path, 'w', encoding='utf-8') as f:
+                json.dump(self.state, f, indent=2, default=str)
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to save state: {e}")
     
     def _generate_summary(self):
         """Generate markdown summary report."""
@@ -336,7 +366,7 @@ class JobScoutOrchestrator:
         
         summary_path = self.output_path / "summary.md"
         
-        with open(summary_path, 'w') as f:
+        with open(summary_path, 'w', encoding='utf-8') as f:
             f.write(f"# JobScout V3 - Pipeline Summary\n\n")
             f.write(f"**Profile:** {self.profile.personal_info.name}\n")
             f.write(f"**Date:** {self.state['timestamp']}\n")
@@ -352,9 +382,7 @@ class JobScoutOrchestrator:
             if jobs:
                 f.write("### Top Jobs:\n\n")
                 for i, job in enumerate(jobs[:10], 1):
-                    # Handle both JobListing objects and dicts
                     if hasattr(job, 'title'):
-                        # JobListing object
                         f.write(f"{i}. **{job.title}** @ **{job.company}**\n")
                         f.write(f"   - Location: {job.location}\n")
                         f.write(f"   - Source: {job.source}\n")
@@ -362,7 +390,6 @@ class JobScoutOrchestrator:
                             f.write(f"   - Salary: ${job.salary_min:,.0f} - ${job.salary_max:,.0f}\n")
                         f.write(f"   - URL: {job.apply_url}\n\n")
                     else:
-                        # Dict
                         f.write(f"{i}. **{job['title']}** @ **{job['company']}**\n")
                         f.write(f"   - Location: {job['location']}\n")
                         f.write(f"   - Source: {job.get('source', 'unknown')}\n")
@@ -397,20 +424,35 @@ class JobScoutOrchestrator:
             # Generation summary
             f.write("## 📝 Generation\n\n")
             gen_results = self.state['generation_results']
-            f.write(f"**Resumes generated:** {len(gen_results)}\n\n")
+            
+            valid = sum(1 for r in gen_results if r.get('status') == 'valid')
+            review = sum(1 for r in gen_results if r.get('status') == 'needs_review')
+            failed = sum(1 for r in gen_results if r.get('status') == 'failed')
+            
+            f.write(f"**Valid:** {valid}\n")
+            f.write(f"**Needs review:** {review}\n")
+            f.write(f"**Failed:** {failed}\n\n")
             
             if gen_results:
                 f.write("### Generated Files:\n\n")
                 for i, result in enumerate(gen_results, 1):
                     job = result['job']
-                    latex_path = Path(result['latex_path'])
-                    validation = result['validation']
+                    validation = result.get('validation', {})
                     
-                    status = "✅" if validation['valid'] else "⚠️"
+                    if result.get('status') == 'valid':
+                        status = "✅"
+                    elif result.get('status') == 'needs_review':
+                        status = "⚠️"
+                    else:
+                        status = "❌"
+                    
                     f.write(f"{i}. {status} **{job['company']}** - {job['title']}\n")
-                    f.write(f"   - File: `{latex_path.name}`\n")
-                    if validation['errors']:
-                        f.write(f"   - Validation errors: {len(validation['errors'])}\n")
+                    
+                    if result.get('latex_path'):
+                        f.write(f"   - File: `{Path(result['latex_path']).name}`\n")
+                    
+                    if validation.get('errors'):
+                        f.write(f"   - Errors: {len(validation['errors'])}\n")
                     f.write("\n")
             
             f.write("\n---\n\n")
@@ -429,25 +471,33 @@ class JobScoutOrchestrator:
         print(f"Output directory: {self.output_path}")
         print()
         print("📊 Results:")
-        print(f"  • Jobs discovered: {len(self.state['discovered_jobs'])}")
-        print(f"  • Jobs enriched: {len(self.state['enriched_jobs'])}")
-        print(f"  • Jobs analyzed: {len(self.state['analysis_results'])}")
-        print(f"  • Resumes generated: {len(self.state['generation_results'])}")
-        print()
-        print("📁 Output files:")
-        print(f"  • Summary: {self.output_path / 'summary.md'}")
-        print(f"  • Analysis: {self.output_path / 'analysis_results.json'}")
-        print(f"  • Resumes: {self.output_path / '*.tex'}")
+        print(f"  Jobs discovered: {len(self.state['discovered_jobs'])}")
+        print(f"  Jobs enriched: {len(self.state['enriched_jobs'])}")
+        print(f"  Jobs analyzed: {len(self.state['analysis_results'])}")
+        
+        gen = self.state['generation_results']
+        valid = sum(1 for r in gen if r.get('status') == 'valid')
+        review = sum(1 for r in gen if r.get('status') == 'needs_review')
+        failed = sum(1 for r in gen if r.get('status') == 'failed')
+        print(f"  Resumes: {valid} valid, {review} needs review, {failed} failed")
         print()
         
-        if self.state['generation_results']:
+        print("📁 Output files:")
+        print(f"  Summary:  {self.output_path / 'summary.md'}")
+        print(f"  Analysis: {self.output_path / 'analysis_results.json'}")
+        print(f"  Resumes:  {self.output_path / '*.tex'}")
+        print()
+        
+        if gen:
             print("📄 Generated resumes:")
-            for result in self.state['generation_results'][:5]:
+            for result in gen[:10]:
                 job = result['job']
-                print(f"  • {job['company']} - {job['title']}")
+                status = result.get('status', 'unknown')
+                icon = "✅" if status == "valid" else ("⚠️" if status == "needs_review" else "❌")
+                print(f"  {icon} {job['company']} - {job['title']}")
             
-            if len(self.state['generation_results']) > 5:
-                print(f"  ... and {len(self.state['generation_results']) - 5} more")
+            if len(gen) > 10:
+                print(f"  ... and {len(gen) - 10} more")
         
         print()
         print("=" * 80)
@@ -463,17 +513,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Run full pipeline with 20 jobs
-  python orchestrator.py --profile yash_pathak --max-jobs 20
+  # Full mock pipeline (zero API calls)
+  python -m agents.orchestrator --profile yash_pathak --max-jobs 5 --mock
   
-  # Run with checkpoints (human review at each stage)
-  python orchestrator.py --profile yash_pathak --max-jobs 20 --checkpoint
+  # Real discovery + mock embeddings + real generation
+  python -m agents.orchestrator --profile yash_pathak --max-jobs 5 --mock-embeddings
   
-  # Run in mock mode (no API calls)
-  python orchestrator.py --profile yash_pathak --max-jobs 10 --mock
+  # Full pipeline with checkpoints
+  python -m agents.orchestrator --profile yash_pathak --max-jobs 10 --checkpoint
   
-  # Use real discovery, mock generation
-  python orchestrator.py --profile yash_pathak --max-jobs 15 --mock-generation
+  # Real pipeline, mock generation only
+  python -m agents.orchestrator --profile yash_pathak --max-jobs 10 --mock-generation
         """
     )
     
@@ -485,8 +535,8 @@ Examples:
     parser.add_argument(
         "--max-jobs",
         type=int,
-        default=20,
-        help="Maximum jobs to process (default: 20)"
+        default=10,
+        help="Maximum jobs to process (default: 10)"
     )
     parser.add_argument(
         "--output",
@@ -501,12 +551,17 @@ Examples:
     parser.add_argument(
         "--mock",
         action="store_true",
-        help="Use mock mode for entire pipeline"
+        help="Use mock mode for entire pipeline (zero API calls)"
     )
     parser.add_argument(
         "--mock-generation",
         action="store_true",
         help="Use mock for generation only"
+    )
+    parser.add_argument(
+        "--mock-embeddings",
+        action="store_true",
+        help="Use mock embeddings for analysis (saves embedding API calls)"
     )
     parser.add_argument(
         "--verbose",
@@ -530,6 +585,7 @@ Examples:
         checkpoint=args.checkpoint,
         mock_mode=args.mock,
         mock_generation=args.mock_generation,
+        mock_embeddings=args.mock_embeddings,
     )
     
     orchestrator.run(max_jobs=args.max_jobs)
