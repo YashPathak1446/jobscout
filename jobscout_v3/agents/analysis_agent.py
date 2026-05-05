@@ -37,13 +37,14 @@ class AnalysisAgent:
     4. Returns analysis results with scores and selected components
     """
     
-    def __init__(self, profile: UserProfile, resume_path: str):
+    def __init__(self, profile: UserProfile, resume_path: str, mock_embeddings: bool = False):
         """
         Initialize Analysis Agent.
         
         Args:
             profile: User profile with selection rules
             resume_path: Path to master resume (.tex file)
+            mock_embeddings: If True, use deterministic local mock embeddings instead of Gemini embeddings.
         """
         self.profile = profile
         self.resume_path = Path(resume_path)
@@ -51,9 +52,13 @@ class AnalysisAgent:
         logger.info("📊 Initializing Analysis Agent...")
         logger.info(f"Profile: {profile.personal_info.name}")
         logger.info(f"Resume: {self.resume_path.name}")
+        logger.info(f"Mock embeddings: {mock_embeddings}")
         
         # Parse resume and compute embeddings
-        self.resume_parser = ResumeParser(str(self.resume_path))
+        self.resume_parser = ResumeParser(
+            str(self.resume_path),
+            mock_embeddings=mock_embeddings,
+        )
         
         logger.info(f"✅ Ready to analyze jobs")
     
@@ -115,6 +120,10 @@ class AnalysisAgent:
                     profile=self.profile,
                     embedding_score=score,
                 )
+
+                # Convert any profile aliases/fuzzy IDs into canonical parser IDs
+                # before saving analysis results for downstream agents.
+                selected = self._canonicalize_selected_components(selected)
                 
                 logger.info(f"   Selected: {len(selected['experiences'])} exp, "
                           f"{len(selected['projects'])} proj")
@@ -151,6 +160,60 @@ class AnalysisAgent:
         
         return results
     
+    def _canonicalize_selected_components(self, selected: Dict[str, List[str]]) -> Dict[str, List[str]]:
+        """
+        Resolve selected component aliases into canonical ResumeParser IDs.
+
+        Profile rules may use short aliases like ``exp_sorenson`` or
+        ``proj_jobscout`` for readability. Downstream artifacts should use
+        the canonical IDs owned by the resume parser, such as
+        ``exp_sorenson_communications`` or ``proj_jobscout_ai_job_automation``.
+        """
+        canonical = dict(selected)
+
+        canonical["experiences"] = self._resolve_experience_ids(
+            selected.get("experiences", [])
+        )
+        canonical["projects"] = self._resolve_project_ids(
+            selected.get("projects", [])
+        )
+
+        return canonical
+
+    def _resolve_experience_ids(self, experience_ids: List[str]) -> List[str]:
+        """Resolve experience aliases to canonical parser IDs, preserving order."""
+        resolved = []
+
+        for exp_id in experience_ids:
+            exp = self.resume_parser.get_experience_by_id(exp_id)
+
+            if exp:
+                if exp.id != exp_id:
+                    logger.debug(f"   Resolved experience ID: {exp_id} -> {exp.id}")
+                resolved.append(exp.id)
+            else:
+                logger.warning(f"   ⚠️  Could not resolve selected experience ID: {exp_id}")
+                resolved.append(exp_id)
+
+        return resolved
+
+    def _resolve_project_ids(self, project_ids: List[str]) -> List[str]:
+        """Resolve project aliases to canonical parser IDs, preserving order."""
+        resolved = []
+
+        for proj_id in project_ids:
+            proj = self.resume_parser.get_project_by_id(proj_id)
+
+            if proj:
+                if proj.id != proj_id:
+                    logger.debug(f"   Resolved project ID: {proj_id} -> {proj.id}")
+                resolved.append(proj.id)
+            else:
+                logger.warning(f"   ⚠️  Could not resolve selected project ID: {proj_id}")
+                resolved.append(proj_id)
+
+        return resolved
+
     def _generate_reasoning(
         self,
         job: Dict,
@@ -176,10 +239,17 @@ class AnalysisAgent:
             exp = self.resume_parser.get_experience_by_id(exp_id)
             if exp:
                 # Check if it was always_include
-                if exp_id in self.profile.resume_preferences.experiences.always_include:
+                always_include_exp_ids = self._resolve_experience_ids(
+                    self.profile.resume_preferences.experiences.always_include
+                )
+                conditional_exp_ids = self._resolve_experience_ids(
+                    self.profile.get_experience_selection_rules(job.get('full_jd', ''))['conditional']
+                )
+
+                if exp_id in always_include_exp_ids:
                     reason = f"Always included (profile rule)"
                 # Check if conditional
-                elif exp_id in self.profile.get_experience_selection_rules(job.get('full_jd', ''))['conditional']:
+                elif exp_id in conditional_exp_ids:
                     reason = f"Conditional match (JD keywords)"
                 # Otherwise it's score-based
                 else:
@@ -196,10 +266,17 @@ class AnalysisAgent:
             proj = self.resume_parser.get_project_by_id(proj_id)
             if proj:
                 # Check if it was always_include
-                if proj_id in self.profile.resume_preferences.projects.always_include:
+                always_include_proj_ids = self._resolve_project_ids(
+                    self.profile.resume_preferences.projects.always_include
+                )
+                high_priority_proj_ids = self._resolve_project_ids(
+                    self.profile.resume_preferences.projects.high_priority
+                )
+
+                if proj_id in always_include_proj_ids:
                     reason = f"Always included (profile rule)"
                 # Check if high_priority
-                elif proj_id in self.profile.resume_preferences.projects.high_priority:
+                elif proj_id in high_priority_proj_ids:
                     reason = f"High priority (profile)"
                 # Otherwise score-based
                 else:
@@ -254,7 +331,12 @@ def main():
     parser.add_argument(
         "--mock",
         action="store_true",
-        help="Use mock data for entire pipeline"
+        help="Use mock data for discovery/enrichment when no --input is provided"
+    )
+    parser.add_argument(
+        "--mock-embeddings",
+        action="store_true",
+        help="Use deterministic local mock embeddings for analysis scoring (zero Gemini embedding calls)"
     )
     
     args = parser.parse_args()
@@ -279,7 +361,7 @@ def main():
     if args.input:
         # Load from file
         print(f"📂 Loading enriched jobs from {args.input}")
-        with open(args.input, 'r') as f:
+        with open(args.input, 'r', encoding='utf-8') as f:
             enriched_jobs = json.load(f)
         print(f"✅ Loaded {len(enriched_jobs)} enriched jobs\n")
     else:
@@ -290,20 +372,20 @@ def main():
         print(f"✅ Found {len(jobs)} jobs\n")
         
         print("📝 Running Enrichment Agent...")
-        enrichment = EnrichmentAgent(mock_mode=True)  # Always mock enrichment for now
+        enrichment = EnrichmentAgent(mock_mode=args.mock)
         enriched_jobs = enrichment.enrich_jobs(jobs)
         print(f"✅ Enriched {len(enriched_jobs)} jobs\n")
     
     # Analyze jobs
     print("📊 Running Analysis Agent...")
-    agent = AnalysisAgent(profile, str(resume_path))
+    agent = AnalysisAgent(profile, str(resume_path), mock_embeddings=args.mock_embeddings)
     results = agent.analyze_jobs(enriched_jobs[:args.max_jobs])
     
     # Save results
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    with open(output_path, 'w') as f:
+    with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(results, f, indent=2)
     
     print()

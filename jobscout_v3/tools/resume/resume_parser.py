@@ -43,12 +43,16 @@ class ResumeParser:
         >>> selected = parser.select_components(jd_text, profile)
     """
     
-    def __init__(self, resume_path: str):
+    def __init__(self, resume_path: str, skip_embeddings: bool = False, mock_embeddings: bool = False):
         """
         Initialize parser with a LaTeX resume.
         
         Args:
             resume_path: Path to .tex file
+            skip_embeddings: If True, skip embedding computation (saves API calls).
+                           Use when you only need parsed resume data, not scoring.
+            mock_embeddings: If True, use deterministic local mock embeddings for testing
+                             analysis/scoring without calling the Gemini Embeddings API.
         """
         self.resume_path = Path(resume_path)
         
@@ -63,11 +67,53 @@ class ResumeParser:
         logger.info(f"✅ Parsed: {len(self.parsed_resume.experiences)} experiences, "
                    f"{len(self.parsed_resume.projects)} projects")
         
-        # Pre-compute embeddings for all components
+        if skip_embeddings:
+            logger.info("⏭️  Skipping embeddings (--input mode, saves API calls)")
+            self.component_embeddings = {}
+            self.using_mock_embeddings = False
+            return
+
+        from .embedding_scorer import embed_resume_components, embed_resume_components_mock
+
+        if mock_embeddings:
+            logger.info("🧪 Using mock embeddings for analysis (zero API calls)")
+            self.component_embeddings = embed_resume_components_mock(self.parsed_resume)
+            self.using_mock_embeddings = True
+            logger.info(f"✅ Embedded {len(self.component_embeddings)} components (mock)")
+            return
+        
+        # ---------------------------------------------------------------
+        # Real embeddings with cache
+        # ---------------------------------------------------------------
+        # Check cache first — if the master resume hasn't changed,
+        # reuse the cached embeddings instead of making 25 API calls.
+        from ..cache.embedding_cache import EmbeddingCache
+
+        cache = EmbeddingCache()
+        cached = cache.get(self.resume_path)
+
+        if cached and cached.get('embeddings'):
+            cached_embeddings = cached['embeddings']
+            # Verify cache has embeddings for all current components
+            current_ids = (
+                {exp.id for exp in self.parsed_resume.experiences}
+                | {proj.id for proj in self.parsed_resume.projects}
+                | {'__skills__'}
+            )
+            cached_ids = set(cached_embeddings.keys())
+
+            if current_ids <= cached_ids:
+                logger.info(f"📦 Cache hit — reusing {len(cached_embeddings)} embeddings (0 API calls)")
+                self.component_embeddings = cached_embeddings
+                self.using_mock_embeddings = False
+                return
+            else:
+                missing = current_ids - cached_ids
+                logger.info(f"📦 Cache partial — missing {len(missing)} components, recomputing")
+
+        # Cache miss or partial — compute real embeddings
         logger.info("🔢 Computing embeddings for resume components...")
         
-        # Try real embeddings first
-        from .embedding_scorer import embed_resume_components, embed_resume_components_mock
         self.component_embeddings: Dict[str, List[float]] = embed_resume_components(
             self.parsed_resume
         )
@@ -81,6 +127,12 @@ class ResumeParser:
             self.using_mock_embeddings = True
         else:
             self.using_mock_embeddings = False
+            # Save to cache for next run
+            cache.set(
+                resume_path=self.resume_path,
+                parsed_data={},  # We don't cache parsed data, just embeddings
+                embeddings=self.component_embeddings,
+            )
         
         logger.info(f"✅ Embedded {len(self.component_embeddings)} components" +
                    (" (mock)" if self.using_mock_embeddings else ""))
@@ -94,16 +146,39 @@ class ResumeParser:
         return self.parsed_resume.projects
     
     def get_experience_by_id(self, exp_id: str) -> LatexExperience | None:
-        """Get a specific experience by ID."""
+        """Get a specific experience by ID. Supports fuzzy matching for backwards compatibility."""
+        # Exact match first
         for exp in self.parsed_resume.experiences:
             if exp.id == exp_id:
+                return exp
+        # Prefix match (e.g., 'exp_sorenson' matches 'exp_sorenson_communications')
+        for exp in self.parsed_resume.experiences:
+            if exp.id.startswith(exp_id) or exp_id.startswith(exp.id):
+                return exp
+        # Substring match (e.g., 'exp_minecraft_agent' matches 'exp_autonomous_minecraft_agent')
+        for exp in self.parsed_resume.experiences:
+            # Strip prefix for comparison
+            search_key = exp_id.replace('exp_', '')
+            full_key = exp.id.replace('exp_', '')
+            if search_key in full_key or full_key in search_key:
                 return exp
         return None
     
     def get_project_by_id(self, proj_id: str) -> LatexProject | None:
-        """Get a specific project by ID."""
+        """Get a specific project by ID. Supports fuzzy matching for backwards compatibility."""
+        # Exact match first
         for proj in self.parsed_resume.projects:
             if proj.id == proj_id:
+                return proj
+        # Prefix match (e.g., 'proj_jobscout' matches 'proj_jobscout_ai_job_automation')
+        for proj in self.parsed_resume.projects:
+            if proj.id.startswith(proj_id) or proj_id.startswith(proj.id):
+                return proj
+        # Substring match (e.g., 'proj_minecraft_agent' matches 'proj_autonomous_minecraft_agent')
+        for proj in self.parsed_resume.projects:
+            search_key = proj_id.replace('proj_', '')
+            full_key = proj.id.replace('proj_', '')
+            if search_key in full_key or full_key in search_key:
                 return proj
         return None
     

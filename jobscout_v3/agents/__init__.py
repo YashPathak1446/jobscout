@@ -11,5 +11,6 @@ Multi-agent job application pipeline:
 from .discovery_agent import DiscoveryAgent
 from .enrichment_agent import EnrichmentAgent
 from .analysis_agent import AnalysisAgent
+from .generation_agent import GenerationAgent
 
-__all__ = ['DiscoveryAgent', 'EnrichmentAgent', 'AnalysisAgent']
+__all__ = ['DiscoveryAgent', 'EnrichmentAgent', 'AnalysisAgent', 'GenerationAgent']

@@ -121,9 +121,9 @@ class AgentPreferences(BaseModel):
     """Agent behavior preferences."""
     discovery_sources: List[str]
     discovery_source_priority: Optional[Dict[str, int]] = None
-    scoring_threshold: int = 70
-    max_jobs_to_discover: int = 30
-    max_jobs_to_enrich: int = 25
+    scoring_threshold: int = 50
+    max_jobs_to_discover: int = 10
+    max_jobs_to_enrich: int = 10
     max_jobs_to_generate: int = 10
     checkpoint_after_discovery: bool = False
     checkpoint_after_enrichment: bool = False

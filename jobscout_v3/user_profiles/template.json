@@ -102,7 +102,7 @@
   
   "agent_preferences": {
     "discovery_sources": ["github_newgrad", "serper", "adzuna"],
-    "scoring_threshold": 70,
+    "scoring_threshold": 50,
     "max_jobs_to_discover": 30,
     "checkpoint_after_scoring": true,
     "use_mock_embeddings": false,
