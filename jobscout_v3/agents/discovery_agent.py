@@ -32,6 +32,7 @@ from tools.search import (
     search_mock,
     build_serper_query,
 )
+from tools.cache.job_cache import JobCache
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -85,6 +86,13 @@ class DiscoveryAgent:
             logger.info("🧪 MOCK MODE - Using fake data")
             return self._search_mock(max_jobs)
         
+        # Load job cache for cross-run deduplication
+        job_cache = JobCache()
+        cache_stats = job_cache.stats()
+        logger.info(
+            f"📦 Job cache: {cache_stats['seen_urls']} previously seen URLs"
+        )
+
         # Get search sources from profile preferences
         sources = self.profile.agent_preferences.discovery_sources
         logger.info(f"📡 Search order: {' → '.join(sources)}")
@@ -104,9 +112,18 @@ class DiscoveryAgent:
             else:
                 logger.warning(f"⚠️  Unknown source: {source}")
         
-        # Final filtering and deduplication
-        filtered_jobs = self._filter_by_profile(self.all_jobs)
+        # Filter out previously seen jobs (cross-run deduplication)
+        new_jobs = job_cache.filter_new_jobs(self.all_jobs)
+        skipped = len(self.all_jobs) - len(new_jobs)
+        if skipped:
+            logger.info(f"   Skipped {skipped} previously seen jobs")
+
+        # Final profile filtering and ranking
+        filtered_jobs = self._filter_by_profile(new_jobs)
         
+        # Persist updated seen URLs
+        job_cache.save()
+
         logger.info(f"✅ Discovery complete: {len(filtered_jobs)} jobs after filtering")
         return filtered_jobs[:max_jobs]
     
@@ -202,51 +219,87 @@ class DiscoveryAgent:
     
     def _filter_by_profile(self, jobs: List[JobListing]) -> List[JobListing]:
         """
-        Filter jobs using profile criteria.
-        
+        Filter and rank jobs using profile criteria via JobFilter service.
+
         Filters:
-        - Must match target roles (fuzzy)
-        - Must match seniority level (new grad, entry, junior)
-        - Exclude senior, lead, principal roles
-        - Exclude PhD requirements
-        
+        - Excluded keywords (senior, PhD, etc.)
+        - Seniority level
+        - Location (whitelist-based: detected country must be in profile.countries)
+
+        Ranking (after filtering):
+        - Priority state / remote → score 3
+        - Acceptable state       → score 2
+        - Other US               → score 0
+        - Unknown location       → score -1 (kept but ranked last)
+
         Args:
             jobs: List of jobs to filter
-            
+
         Returns:
-            Filtered list of jobs
+            Filtered and ranked list of jobs
         """
-        logger.info("🔍 Filtering jobs by profile criteria...")
-        
-        filtered = []
+        from tools.jobs.job_filter import evaluate
+
+        logger.info("🔍 Filtering and ranking jobs by profile criteria...")
+
+        kept = []
         excluded_reasons = {}
-        
+
         for i, job in enumerate(jobs):
-            # Use profile's should_exclude_job method
-            should_exclude, reason = self.profile.should_exclude_job(job.title, job.description)
-            
-            # Verbose logging for first 3 jobs to debug
+            decision = evaluate(job, self.profile)
+
+            # Verbose logging for first 3 jobs
             if i < 3:
                 logger.info(f"   Job {i+1}: '{job.title}' @ {job.company}")
-                logger.info(f"      Description: {job.description[:100]}...")
-                logger.info(f"      Exclude: {should_exclude} | Reason: {reason or 'N/A'}")
-            
-            if should_exclude:
-                # Track exclusion reasons for debugging
+                logger.info(f"      Location: '{job.location}' "
+                           f"→ {decision.location_result or '(unparsed)'}")
+                logger.info(f"      Decision: {'EXCLUDE' if decision.exclude else 'KEEP'} "
+                           f"| Reason: {decision.reason or 'N/A'}")
+                logger.info(f"      Score: loc={decision.location_score} "
+                           f"role={decision.role_score} "
+                           f"seniority={decision.seniority_score} "
+                           f"overall={decision.overall_score}")
+
+            if decision.exclude:
+                reason = decision.reason or "Unknown reason"
                 excluded_reasons[reason] = excluded_reasons.get(reason, 0) + 1
                 continue
-            
-            filtered.append(job)
-        
-        excluded = len(jobs) - len(filtered)
-        logger.info(f"   Kept {len(filtered)}, excluded {excluded}")
-        
-        # Log exclusion reasons if any
+
+            # Attach decision for ranking
+            job._filter_decision = decision
+            kept.append(job)
+
+        excluded = len(jobs) - len(kept)
+        logger.info(f"   Kept {len(kept)}, excluded {excluded}")
+
         if excluded_reasons:
-            for reason, count in excluded_reasons.items():
+            for reason, count in sorted(excluded_reasons.items(), key=lambda x: -x[1]):
                 logger.info(f"      - {reason}: {count} jobs")
-        
-        return filtered
+
+        # Rank by overall_score: priority states first
+        ranked = sorted(
+            kept,
+            key=lambda j: getattr(j, '_filter_decision', None) and
+                          j._filter_decision.overall_score or 0,
+            reverse=True,
+        )
+
+        if ranked:
+            priority = sum(
+                1 for j in ranked
+                if hasattr(j, '_filter_decision')
+                and j._filter_decision.location_score >= 3
+            )
+            acceptable = sum(
+                1 for j in ranked
+                if hasattr(j, '_filter_decision')
+                and j._filter_decision.location_score == 2
+            )
+            other = len(ranked) - priority - acceptable
+            logger.info(f"   📍 Ranking: {priority} priority, "
+                       f"{acceptable} acceptable, {other} other")
+
+        return ranked
 
 
 def main():

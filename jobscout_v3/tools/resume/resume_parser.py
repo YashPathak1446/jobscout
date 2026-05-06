@@ -231,101 +231,148 @@ class ResumeParser:
         embedding_score: EmbeddingScore = None
     ) -> Dict[str, List[str]]:
         """
-        Select which experiences and projects to include based on:
-        1. Profile rules (always_include, conditional_inclusion)
-        2. Embedding similarity scores
-        3. Max counts from profile
-        
-        Args:
-            jd_text: Full job description text
-            profile: UserProfile with selection rules
-            embedding_score: Pre-computed score (optional, will compute if not provided)
-            
+        Select which experiences and projects to include using composite scoring.
+
+        Score per component:
+            final_score =
+                embedding_score          (semantic similarity)
+              + keyword_match_bonus      (exact tech/skill matches in JD)
+              + conditional_bonus        (profile conditional rules triggered)
+              + importance_boost         (user-defined component importance)
+              + always_include_boost     (profile always_include)
+              never_include → excluded entirely
+
+        This replaces the old waterfall (always → high_priority → conditional
+        → score-based) which blocked JD-specific matches when high-priority
+        slots were full.
+
         Returns:
-            Dict with:
-                'experiences': List of experience IDs to include
-                'projects': List of project IDs to include
-                'skills': List of skills to emphasize
+            Dict with 'experiences', 'projects', 'skills' lists of canonical IDs.
         """
         # Get or compute embedding score
         if embedding_score is None:
             embedding_score = self.score_job(jd_text)
-        
-        # Get selection rules from profile
+
         exp_rules = profile.get_experience_selection_rules(jd_text)
         proj_rules = profile.get_project_selection_rules(jd_text)
-        
-        # === SELECT EXPERIENCES ===
-        selected_experiences = []
-        
-        # 1. Always include (from profile)
-        selected_experiences.extend(exp_rules['always'])
-        
-        # 2. Conditional inclusion (triggered by JD keywords)
-        selected_experiences.extend(exp_rules['conditional'])
-        
-        # 3. Fill remaining slots with top-scored experiences
+
+        importance_cfg = profile.resume_preferences.component_importance
+        exp_importance = dict(importance_cfg.experiences)
+        proj_importance = dict(importance_cfg.projects)
+
+        jd_lower = jd_text.lower()
+        jd_keywords = _extract_jd_keywords(jd_lower)
+
         max_exp = profile.resume_preferences.experiences.max_count
-        remaining_slots = max_exp - len(selected_experiences)
-        
-        if remaining_slots > 0:
-            # Get top scored experiences not already selected
-            for exp_id in embedding_score.best_experience_ids:
-                if exp_id not in selected_experiences:
-                    selected_experiences.append(exp_id)
-                    remaining_slots -= 1
-                    if remaining_slots == 0:
-                        break
-        
-        # Trim to max count
-        selected_experiences = selected_experiences[:max_exp]
-        
-        # === SELECT PROJECTS ===
-        selected_projects = []
-        
-        # 1. Always include
-        selected_projects.extend(proj_rules['always'])
-        
-        # 2. High priority
-        selected_projects.extend(proj_rules['high_priority'])
-        
-        # 3. Conditional inclusion
-        selected_projects.extend(proj_rules['conditional'])
-        
-        # 4. Fill remaining with top-scored
         max_proj = profile.resume_preferences.projects.max_count
-        remaining_slots = max_proj - len(selected_projects)
-        
-        if remaining_slots > 0:
-            for proj_id in embedding_score.best_project_ids:
-                if proj_id not in selected_projects:
-                    selected_projects.append(proj_id)
-                    remaining_slots -= 1
-                    if remaining_slots == 0:
-                        break
-        
-        # Trim to max count
-        selected_projects = selected_projects[:max_proj]
-        
-        # === SELECT SKILLS ===
-        # Extract keywords from selected components
+
+        # ── Experience selection ──────────────────────────────────────────────
+        never_exp = set(
+            self._resolve_exp_canonical(eid)
+            for eid in (profile.resume_preferences.experiences.never_include or [])
+        )
+
+        exp_scores = {}
+        for exp in self.parsed_resume.experiences:
+            if exp.id in never_exp:
+                continue
+
+            score = _composite_score(
+                comp_id=exp.id,
+                embedding_scores=embedding_score.experience_scores,
+                jd_keywords=jd_keywords,
+                comp_text=f"{exp.title} {exp.company} {' '.join(exp.bullets)}",
+                comp_tech="",
+                comp_keywords=exp.keywords,
+                always_ids=set(
+                    self._resolve_exp_canonical(eid)
+                    for eid in exp_rules['always']
+                ),
+                conditional_ids=set(
+                    self._resolve_exp_canonical(eid)
+                    for eid in exp_rules['conditional']
+                ),
+                importance_map=exp_importance,
+            )
+            exp_scores[exp.id] = score
+
+        selected_experiences = _pick_top(exp_scores, max_exp)
+
+        # ── Project selection ─────────────────────────────────────────────────
+        never_proj = set(
+            self._resolve_proj_canonical(pid)
+            for pid in (profile.resume_preferences.projects.never_include or [])
+        )
+        always_proj = set(
+            self._resolve_proj_canonical(pid)
+            for pid in proj_rules['always']
+        )
+        conditional_proj = set(
+            self._resolve_proj_canonical(pid)
+            for pid in proj_rules['conditional']
+        )
+
+        proj_scores = {}
+        for proj in self.parsed_resume.projects:
+            if proj.id in never_proj:
+                continue
+
+            score = _composite_score(
+                comp_id=proj.id,
+                embedding_scores=embedding_score.project_scores,
+                jd_keywords=jd_keywords,
+                comp_text=f"{proj.name} {' '.join(proj.bullets)}",
+                comp_tech=proj.tech,
+                comp_keywords=proj.keywords,
+                always_ids=always_proj,
+                conditional_ids=conditional_proj,
+                importance_map=proj_importance,
+            )
+            proj_scores[proj.id] = score
+
+        selected_projects = _pick_top(proj_scores, max_proj)
+
+        # Log score breakdown for selected components
+        logger.debug("   🎯 Component selection scores:")
+        for cid, score_detail in sorted(
+            {**exp_scores, **proj_scores}.items(),
+            key=lambda x: -x[1]['final']
+        )[:8]:
+            s = score_detail
+            selected = cid in selected_experiences or cid in selected_projects
+            marker = "✅" if selected else "  "
+            short = cid[:30]
+            logger.debug(
+                f"   {marker} {short}: "
+                f"emb={s['embedding']:.2f} kw={s['keyword']:.2f} "
+                f"cond={s['conditional']:.2f} imp={s['importance']:.2f} "
+                f"→ {s['final']:.2f}"
+            )
+
+        # ── Skills ───────────────────────────────────────────────────────────
         selected_skills = set()
-        
         for exp_id in selected_experiences:
             exp = self.get_experience_by_id(exp_id)
             if exp:
                 selected_skills.update(exp.keywords)
-        
         for proj_id in selected_projects:
             proj = self.get_project_by_id(proj_id)
             if proj:
                 selected_skills.update(proj.keywords)
-        
+
         return {
             'experiences': selected_experiences,
             'projects': selected_projects,
             'skills': sorted(list(selected_skills)),
         }
+
+    def _resolve_exp_canonical(self, eid: str) -> str:
+        exp = self.get_experience_by_id(eid)
+        return exp.id if exp else eid
+
+    def _resolve_proj_canonical(self, pid: str) -> str:
+        proj = self.get_project_by_id(pid)
+        return proj.id if proj else pid
     
     def get_component_text(self, component_id: str) -> str:
         """Get the full text of a component (for debugging/logging)."""
@@ -345,6 +392,152 @@ class ResumeParser:
 
 
 # CLI for testing
+
+# =============================================================================
+# COMPOSITE SCORING HELPERS
+# =============================================================================
+
+# Generic terms that are too common to count as meaningful JD keyword matches.
+# These appear in almost every SWE JD and don't differentiate components.
+_GENERIC_TERMS = {
+    "api", "backend", "frontend", "software", "application", "system",
+    "data", "service", "server", "client", "code", "build", "team",
+    "work", "experience", "strong", "knowledge", "skills", "ability",
+    "development", "engineering", "developer", "engineer", "project",
+    "solution", "support", "management", "process", "performance",
+    "design", "architecture", "implement", "deploy", "test", "debug",
+}
+
+
+def _extract_jd_keywords(jd_lower: str) -> set:
+    """
+    Extract meaningful tech keywords from the JD text.
+
+    Uses the same TECH_KEYWORDS list from latex_parser to stay consistent
+    with what gets embedded in component keywords.
+    """
+    from tools.resume.latex_parser import TECH_KEYWORDS
+    found = set()
+    for kw in TECH_KEYWORDS:
+        kw_lower = kw.lower()
+        if kw_lower in _GENERIC_TERMS:
+            continue
+        if kw_lower in jd_lower:
+            found.add(kw_lower)
+    return found
+
+
+def _keyword_match_score(
+    jd_keywords: set,
+    comp_tech: str,
+    comp_keywords: list,
+    comp_text: str,
+) -> float:
+    """
+    Score a component based on exact keyword overlap with JD.
+
+    Weights:
+    - Tech stack match (pipe-separated list in project heading): +0.08 each
+    - Component keywords match: +0.05 each
+    - Capped at 0.25 total to avoid dominating embedding score.
+
+    Generic terms are excluded to avoid everything matching everything.
+    """
+    if not jd_keywords:
+        return 0.0
+
+    score = 0.0
+
+    # Tech stack matches (highest weight — explicit technology listing)
+    if comp_tech:
+        tech_terms = {t.strip().lower() for t in comp_tech.split(",")}
+        tech_terms -= _GENERIC_TERMS
+        overlap = jd_keywords & tech_terms
+        score += len(overlap) * 0.08
+
+    # Component keyword matches
+    kw_set = {k.lower() for k in comp_keywords} - _GENERIC_TERMS
+    overlap = jd_keywords & kw_set
+    score += len(overlap) * 0.05
+
+    return min(score, 0.25)
+
+
+def _composite_score(
+    comp_id: str,
+    embedding_scores: dict,
+    jd_keywords: set,
+    comp_text: str,
+    comp_tech: str,
+    comp_keywords: list,
+    always_ids: set,
+    conditional_ids: set,
+    importance_map: dict,
+) -> dict:
+    """
+    Compute the composite selection score for one component.
+
+    Components:
+        embedding    : semantic similarity (0.0–1.0)
+        keyword      : exact tech match bonus (0.0–0.25, capped)
+        conditional  : +0.20 if conditional rule triggered
+        importance   : high=+0.15, medium=+0.05, low=+0.00
+        always       : +0.30 if in always_include list
+        final        : sum of above
+
+    Args:
+        comp_id: Canonical component ID
+        embedding_scores: Dict of {comp_id: float} from EmbeddingScore
+        jd_keywords: Set of meaningful keywords extracted from JD
+        comp_text: Combined text of component (title + company + bullets)
+        comp_tech: Tech stack string (for projects)
+        comp_keywords: Pre-extracted keyword list from parser
+        always_ids: Set of canonical IDs in always_include
+        conditional_ids: Set of canonical IDs triggered by conditional rules
+        importance_map: Dict of {comp_id: 'high'|'medium'|'low'}
+
+    Returns:
+        Dict with 'embedding', 'keyword', 'conditional', 'importance',
+        'always', 'final' keys for logging/debugging.
+    """
+    emb = embedding_scores.get(comp_id, 0.0)
+
+    kw = _keyword_match_score(jd_keywords, comp_tech, comp_keywords, comp_text)
+
+    cond = 0.20 if comp_id in conditional_ids else 0.0
+
+    imp_tier = importance_map.get(comp_id, "medium")
+    imp = {"high": 0.15, "medium": 0.05, "low": 0.0}.get(imp_tier, 0.05)
+
+    always = 0.30 if comp_id in always_ids else 0.0
+
+    final = emb + kw + cond + imp + always
+
+    return {
+        "embedding": emb,
+        "keyword": kw,
+        "conditional": cond,
+        "importance": imp,
+        "always": always,
+        "final": final,
+    }
+
+
+def _pick_top(score_details: dict, n: int) -> list:
+    """
+    Return IDs of top-N components by final score.
+
+    Args:
+        score_details: Dict of {comp_id: score_dict_with_'final'_key}
+        n: Number of components to select
+
+    Returns:
+        List of comp_ids, highest score first.
+    """
+    ranked = sorted(score_details.items(), key=lambda x: -x[1]["final"])
+    return [cid for cid, _ in ranked[:n]]
+
+
 if __name__ == "__main__":
     import sys
     

@@ -127,12 +127,17 @@ class GenerationAgent:
             try:
                 # Compute bullet budgets (used for real Gemini and final validation)
                 bullet_budgets = None
+                budgeted_components = selected  # default: use all selected
                 if not self.mock_mode:
                     bullet_budgets = self._compute_bullet_budgets(analysis)
+                    # Use the filtered component list (after any project drops)
+                    budgeted_components = bullet_budgets.get(
+                        "budgeted_components", selected
+                    )
 
                 tailored = self._tailor_resume(
                     job=job,
-                    selected_components=selected,
+                    selected_components=budgeted_components,
                     analysis=analysis,
                     bullet_budgets=bullet_budgets,
                 )
@@ -155,7 +160,7 @@ class GenerationAgent:
                     continue
 
                 validation = validate_resume_output(tailored, bullet_budgets=bullet_budgets)
-                self._validate_selected_ids(tailored, selected, validation)
+                self._validate_selected_ids(tailored, budgeted_components, validation)
 
                 filename = self._generate_filename(company, job_title)
 
@@ -328,56 +333,258 @@ class GenerationAgent:
 
         return budgets
 
-    def _allocate_bullets(
+    def _compute_bullet_budgets(self, analysis: Dict) -> Dict:
+        """
+        Compute per-component bullet budgets using importance tiers + JD scores.
+
+        Algorithm:
+        1. Resolve selected component IDs to canonical parser IDs.
+        2. Get user importance tier per component from profile.
+        3. Compute allocation priority = importance_weight + jd_score.
+        4. Decide whether to use 3 or 4 projects (depth vs breadth).
+        5. Allocate bullets within global budget using blended priority.
+        6. Low-importance components are capped at 1 bullet.
+
+        This is fully dynamic — it uses only component counts, JD scores,
+        and user-defined importance tiers. No component names are hardcoded.
+        """
+        selected = analysis.get("selected_components", {})
+        score_data = analysis.get("score", {})
+
+        exp_scores = score_data.get("experience_scores", {})
+        proj_scores = score_data.get("project_scores", {})
+
+        # Resolve selected IDs to canonical parser IDs
+        selected_exp_ids = [
+            self._resolve_to_canonical_exp(eid)
+            for eid in selected.get("experiences", [])
+        ]
+        selected_proj_ids = [
+            self._resolve_to_canonical_proj(pid)
+            for pid in selected.get("projects", [])
+        ]
+
+        # Get importance tiers from profile (resolve aliases defensively)
+        imp = self.profile.resume_preferences.component_importance
+        exp_importance = self._resolve_importance_map(imp.experiences, "exp")
+        proj_importance = self._resolve_importance_map(imp.projects, "proj")
+
+        # --- Dynamic project count decision ---
+        # If using all selected projects would force the lowest-importance
+        # project to 1 bullet while a higher-importance project could use it,
+        # drop the weakest project and give remaining ones more depth.
+        selected_proj_ids = self._decide_project_count(
+            selected_proj_ids, proj_scores, proj_importance
+        )
+
+        num_exp = len(selected_exp_ids)
+        num_proj = len(selected_proj_ids)
+
+        # --- Global bullet budgets from component counts ---
+        exp_budget_table = {1: 3, 2: 5, 3: 6, 4: 7}
+        proj_budget_table = {1: 3, 2: 5, 3: 6, 4: 7}
+
+        total_exp_budget = exp_budget_table.get(num_exp, num_exp * 2)
+        total_proj_budget = proj_budget_table.get(num_proj, num_proj * 2)
+
+        # Per-component caps based on importance
+        # High importance → can get up to 3 bullets
+        # Low importance → capped at 1 bullet regardless of budget
+        exp_budgets = self._allocate_with_importance(
+            component_ids=selected_exp_ids,
+            scores=exp_scores,
+            importance=exp_importance,
+            total_budget=total_exp_budget,
+            global_max=3,
+        )
+
+        proj_budgets = self._allocate_with_importance(
+            component_ids=selected_proj_ids,
+            scores=proj_scores,
+            importance=proj_importance,
+            total_budget=total_proj_budget,
+            global_max=2 if num_proj >= 4 else 3,
+        )
+
+        actual_exp_total = sum(exp_budgets.values())
+        actual_proj_total = sum(proj_budgets.values())
+
+        budgets = {
+            "experiences": exp_budgets,
+            "projects": proj_budgets,
+            "totals": {
+                "experiences": actual_exp_total,
+                "projects": actual_proj_total,
+                "overall": actual_exp_total + actual_proj_total,
+            },
+            # Filtered component lists after dynamic project drop.
+            # Generation MUST use these everywhere downstream instead of
+            # the original selected_components from Analysis.
+            "budgeted_components": {
+                "experiences": selected_exp_ids,
+                "projects": selected_proj_ids,  # already trimmed by _decide_project_count
+                "skills": selected.get("skills", []),
+            },
+        }
+
+        logger.info(
+            f"   📊 Bullet budget: {actual_exp_total} exp + "
+            f"{actual_proj_total} proj = {actual_exp_total + actual_proj_total} total"
+        )
+        for cid, count in exp_budgets.items():
+            imp_tier = exp_importance.get(cid, "medium")
+            short_id = cid.replace("exp_", "")[:22]
+            logger.info(f"      exp  {short_id} [{imp_tier}]: {count} bullets")
+        for cid, count in proj_budgets.items():
+            imp_tier = proj_importance.get(cid, "medium")
+            short_id = cid.replace("proj_", "")[:22]
+            logger.info(f"      proj {short_id} [{imp_tier}]: {count} bullets")
+
+        return budgets
+
+    # ── Importance tier weights ──────────────────────────────────────────────
+    _IMPORTANCE_WEIGHTS = {"high": 2.0, "medium": 1.0, "low": 0.0}
+    _LOW_MAX_BULLETS = 1  # Low-importance components never exceed this
+
+    def _resolve_importance_map(
+        self,
+        raw_map: Dict[str, str],
+        prefix: str,
+    ) -> Dict[str, str]:
+        """
+        Resolve alias-based importance map to canonical parser IDs.
+
+        e.g. {"exp_sorenson": "high"} → {"exp_sorenson_communications": "high"}
+
+        Unknown aliases are kept as-is (won't match any component, harmless).
+        """
+        resolved = {}
+        for raw_id, tier in raw_map.items():
+            tier = tier.lower().strip()
+            if tier not in self._IMPORTANCE_WEIGHTS:
+                logger.warning(f"   ⚠️  Unknown importance tier '{tier}' for {raw_id}, treating as medium")
+                tier = "medium"
+
+            if prefix == "exp":
+                comp = self.resume_parser.get_experience_by_id(raw_id)
+            else:
+                comp = self.resume_parser.get_project_by_id(raw_id)
+
+            canonical = comp.id if comp else raw_id
+            resolved[canonical] = tier
+
+        return resolved
+
+    def _decide_project_count(
+        self,
+        proj_ids: List[str],
+        proj_scores: Dict[str, float],
+        proj_importance: Dict[str, str],
+    ) -> List[str]:
+        """
+        Decide whether to use fewer projects for more depth.
+
+        Rule: if we have 4+ projects and the lowest-ranked project is
+        low importance AND dropping it would free a bullet for a
+        higher-importance project, drop it.
+
+        This gives the user depth on strong projects rather than
+        spreading thin across 4 shallow ones.
+
+        Returns the (possibly shorter) list of project IDs to use.
+        """
+        if len(proj_ids) < 4:
+            return proj_ids  # Nothing to drop
+
+        # Rank projects by allocation priority (importance + score)
+        def priority(pid):
+            imp_tier = proj_importance.get(pid, "medium")
+            imp_weight = self._IMPORTANCE_WEIGHTS.get(imp_tier, 1.0)
+            score = proj_scores.get(pid, 0.0)
+            return imp_weight + score
+
+        ranked = sorted(proj_ids, key=priority, reverse=True)
+        weakest = ranked[-1]
+        weakest_tier = proj_importance.get(weakest, "medium")
+
+        # Only drop if: weakest is low importance
+        # AND at least one other project is high importance (would benefit)
+        has_high = any(
+            proj_importance.get(pid, "medium") == "high"
+            for pid in ranked[:-1]
+        )
+
+        if weakest_tier == "low" and has_high:
+            logger.info(
+                f"   📐 Dropped lowest-priority project for depth: "
+                f"{weakest.replace('proj_', '')}"
+            )
+            return [pid for pid in proj_ids if pid != weakest]
+
+        return proj_ids
+
+    def _allocate_with_importance(
         self,
         component_ids: List[str],
         scores: Dict[str, float],
+        importance: Dict[str, str],
         total_budget: int,
-        max_per_component: int,
+        global_max: int,
     ) -> Dict[str, int]:
         """
-        Rank-based bullet allocation.
+        Allocate bullets using blended importance + JD score priority.
 
-        1. Every component starts with 1 bullet.
-        2. Sort components by score (highest first).
-        3. Give 1 extra bullet to each component in score order,
-           repeating until budget is used or all are at max.
+        Priority = importance_weight + jd_score
+          high   = 2.0
+          medium = 1.0
+          low    = 0.0
 
-        Args:
-            component_ids: List of canonical component IDs.
-            scores: Dict mapping component_id -> relevance score.
-            total_budget: Maximum total bullets for this section.
-            max_per_component: Maximum bullets any single component gets.
+        Low-importance components are hard-capped at _LOW_MAX_BULLETS (1).
+        High/medium components share remaining budget by priority rank.
 
-        Returns:
-            Dict mapping component_id -> allocated bullet count.
+        Steps:
+        1. Give every component 1 bullet.
+        2. Hard-cap low-importance components at 1 (no extras).
+        3. Distribute remaining budget to high/medium by priority rank.
+        4. Respect global_max per component.
         """
         if not component_ids:
             return {}
 
+        # Compute blended priority scores
+        def blended_priority(cid):
+            imp_tier = importance.get(cid, "medium")
+            imp_weight = self._IMPORTANCE_WEIGHTS.get(imp_tier, 1.0)
+            jd_score = scores.get(cid, 0.0)
+            return imp_weight + jd_score
+
         # Start everyone at 1
         allocation = {cid: 1 for cid in component_ids}
+
+        # Low-importance components are frozen at 1 — no extras
+        eligible = [
+            cid for cid in component_ids
+            if importance.get(cid, "medium") != "low"
+        ]
+
+        # Remaining budget after giving 1 to everyone
         remaining = total_budget - len(component_ids)
 
-        # Sort by score descending (unknown scores treated as 0)
-        ranked = sorted(
-            component_ids,
-            key=lambda cid: scores.get(cid, 0.0),
-            reverse=True,
-        )
+        # Sort eligible by blended priority
+        ranked_eligible = sorted(eligible, key=blended_priority, reverse=True)
 
-        # Distribute remaining bullets round-robin by rank
+        # Round-robin: give 1 extra bullet at a time to highest priority
         while remaining > 0:
             gave_any = False
-            for cid in ranked:
+            for cid in ranked_eligible:
                 if remaining <= 0:
                     break
-                if allocation[cid] < max_per_component:
+                if allocation[cid] < global_max:
                     allocation[cid] += 1
                     remaining -= 1
                     gave_any = True
             if not gave_any:
-                break  # All at max, can't give more
+                break  # All eligible at max
 
         return allocation
 
@@ -513,7 +720,6 @@ Source bullets:
         # Dropped: gemini-1.5-flash (legacy/discontinued),
         #          gemini-3-flash-preview (only 100 RPD)
         models = [
-            "gemini-3-flash-preview",
             "gemini-2.5-flash",
             "gemini-2.0-flash",
         ]
@@ -547,6 +753,8 @@ Source bullets:
                     '429' in error_msg
                     or 'RESOURCE_EXHAUSTED' in error_msg
                     or 'quota' in error_msg.lower()
+                    or 'rate limit exceeded' in error_msg.lower()  # from our RateLimitError
+                    or isinstance(e, RateLimitError)
                 )
 
                 if is_quota:

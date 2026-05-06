@@ -21,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.search import JobListing
 from tools.scraping import mock_scrape_jd
+from tools.scraping.jd_scraper import scrape_jd
+from tools.cache.job_cache import JobCache
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -70,6 +72,11 @@ class EnrichmentAgent:
         if self.mock_mode:
             logger.info("🧪 MOCK MODE - Using fake job descriptions")
         
+        # Load job cache for JD scrape result caching
+        job_cache = None
+        if not self.mock_mode:
+            job_cache = JobCache()
+
         enriched_jobs = []
         
         for i, job in enumerate(jobs, 1):
@@ -80,7 +87,20 @@ class EnrichmentAgent:
                 if self.mock_mode:
                     scrape_result = self._mock_scrape(job)
                 else:
-                    scrape_result = self._real_scrape(job)
+                    # Check JD cache first
+                    cached = job_cache.get_jd(job.apply_url) if job_cache else None
+                    if cached:
+                        scrape_result = {
+                            "full_jd": cached["full_jd"],
+                            "requirements": cached["requirements"],
+                            "scraped_successfully": True,
+                            "scraper_used": f"cache ({cached['scraper_used']})",
+                        }
+                    else:
+                        scrape_result = self._real_scrape(job)
+                        # Save to cache if successful
+                        if job_cache and scrape_result.get("scraped_successfully"):
+                            job_cache.save_jd(job.apply_url, scrape_result)
                 
                 # Create enriched job dict
                 enriched_job = {
@@ -137,6 +157,10 @@ class EnrichmentAgent:
         
         logger.info(f"✅ Enrichment complete: {self.success_count} success, {self.failure_count} failed")
         
+        # Persist JD cache
+        if job_cache:
+            job_cache.save()
+
         return enriched_jobs
     
     def _mock_scrape(self, job: JobListing) -> Dict:
@@ -145,18 +169,37 @@ class EnrichmentAgent:
     
     def _real_scrape(self, job: JobListing) -> Dict:
         """
-        Use real scrapers based on URL.
-        
-        Will be implemented in next iteration with:
-        - Greenhouse scraper
-        - Lever scraper
-        - LinkedIn scraper
-        - Generic fallback
+        Scrape a real job description using ATS-specific scrapers.
+
+        Flow:
+        1. Follow redirect (jobright.ai → real ATS URL)
+        2. Detect ATS from final URL
+        3. Use Greenhouse/Lever/Ashby/Workday/generic scraper
+        4. Extract structured requirements
+        5. Fall back to mock if scraping fails
+
+        Args:
+            job: JobListing with apply_url to scrape
+
+        Returns:
+            Scrape result dict with full_jd and requirements
         """
-        # TODO: Implement real scraping in next phase
-        # For now, fall back to mock
-        logger.warning("   ⚠️  Real scraping not yet implemented, using mock")
-        return mock_scrape_jd(job.apply_url, job.title, job.company)
+        result = scrape_jd(
+            apply_url=job.apply_url,
+            job_title=job.title,
+            company=job.company,
+        )
+
+        if result["scraped_successfully"]:
+            logger.info(f"   🌐 Real scrape: {result['scraper_used']} "
+                       f"({len(result['full_jd'])} chars)")
+            return result
+
+        # Fall back to mock if scraping failed
+        logger.warning(f"   ⚠️  Real scrape failed, using mock fallback")
+        mock_result = mock_scrape_jd(job.apply_url, job.title, job.company)
+        mock_result["scraper_used"] = "mock_fallback"
+        return mock_result
 
 
 def main():

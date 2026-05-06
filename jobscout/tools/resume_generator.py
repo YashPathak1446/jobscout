@@ -34,148 +34,117 @@ def tailor_resume_with_llm(
     similar_tech_map: dict,
     model: str = "gemini-2.5-flash",
     fallback_model: str = "gemini-2.5-flash",
+    max_retries: int = 2,
 ) -> dict | None:
     """
     Use Gemini to tailor resume content for a specific JD.
+    
+    V2: Now uses generic prompt + validation + retry logic.
 
     Returns structured dict with tailored sections, or None on failure.
     """
-    # Build component context
-    selected_exp_text = ""
-    for exp in parsed_resume.experiences:
-        if exp.id in selected_experience_ids:
-            selected_exp_text += f"\n--- {exp.title} @ {exp.organization} ({exp.date_range}) ---\n"
-            selected_exp_text += f"Tech: {exp.tech_line}\n"
-            for bullet in exp.bullets:
-                selected_exp_text += f"- {bullet}\n"
+    # Import the new modules
+    from jobscout.tools.prompt_builder import (
+        build_generic_tailoring_prompt,
+        build_experience_context,
+        build_project_context
+    )
+    from jobscout.tools.validation import validate_resume_output
+    
+    # Build component context using new helper functions
+    selected_exp_text = build_experience_context(parsed_resume, selected_experience_ids)
+    selected_proj_text = build_project_context(parsed_resume, selected_project_ids)
+    
+    # Build the generic prompt (no hardcoded companies!)
+    prompt = build_generic_tailoring_prompt(
+        parsed_resume,
+        jd_text,
+        selected_exp_text,
+        selected_proj_text
+    )
+    
+    # Try with validation and retry logic
+    for attempt in range(max_retries):
+        logger.info(f"Resume tailoring attempt {attempt + 1}/{max_retries}")
+        
+        # Try primary model, fallback on error
+        for attempt_model in [model, fallback_model]:
+            try:
+                from google import genai
 
-    selected_proj_text = ""
-    for proj in parsed_resume.projects:
-        if proj.id in selected_project_ids:
-            selected_proj_text += f"\n--- {proj.title} ({proj.date_range}) ---\n"
-            selected_proj_text += f"Tech: {proj.tech_line}\n"
-            for bullet in proj.bullets:
-                selected_proj_text += f"- {bullet}\n"
+                client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+                response = client.models.generate_content(
+                    model=attempt_model,
+                    contents=prompt,
+                )
 
-    prompt = f"""You are a resume tailoring assistant. Your job is to SELECT the best bullets from the candidate's master resume for a specific job description, then format them as LaTeX.
+                raw_text = response.text.strip()
+                # Strip markdown code fences if present
+                if raw_text.startswith("```"):
+                    raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text[3:]
+                if raw_text.endswith("```"):
+                    raw_text = raw_text[:-3]
+                raw_text = raw_text.strip()
+                if raw_text.startswith("json"):
+                    raw_text = raw_text[4:].strip()
 
-=============================================================
-CORE RULE: SELECT, DON'T REWRITE
-- Pick the best bullets from the list provided
-- You may lightly trim a bullet only if it exceeds 150 characters — trim at a natural break
-- Never rephrase, reorder words, or change the meaning
-- All metrics, numbers, and technical terms must be preserved exactly
-=============================================================
+                data = json.loads(raw_text)
+                
+                # VALIDATE the output
+                validation_result = validate_resume_output(data, master_resume_text)
+                
+                if validation_result.valid:
+                    logger.info(f"Resume tailored with {attempt_model} - validation passed")
+                    if validation_result.warnings:
+                        logger.warning(f"Validation warnings: {len(validation_result.warnings)}")
+                        for warning in validation_result.warnings[:3]:
+                            logger.warning(f"  - {warning}")
+                    return data
+                else:
+                    # Validation failed - retry with feedback
+                    logger.warning(f"Validation failed on attempt {attempt + 1}")
+                    logger.warning(str(validation_result))
+                    
+                    if attempt < max_retries - 1:
+                        # Add validation errors to prompt and retry
+                        error_feedback = "\n".join(validation_result.errors[:5])
+                        prompt = prompt + f"""
 
-SELECTION RULES:
-- Sorenson Communications: select EXACTLY 4 bullets — always include all 4 if available
-- 101gen.ai: select EXACTLY 4 bullets — always include all 4 if available
-- Any third experience (AI Ensured, Outlier AI, Tutor): select 1-2 bullets maximum
-- Projects: select 2-3 bullets per project, prioritize most relevant to the JD
+IMPORTANT: Your previous attempt had validation errors. Fix these issues:
 
-BULLET LENGTH:
-- Target ~120 chars per bullet, hard cap 150 chars
-- End on the metric or outcome — nothing after the number
-- BAD: "...reducing latency by 40%, ensuring faster response times."
-- GOOD: "...reducing query latency by 40% across 36M+ document stores."
+{error_feedback}
 
-BULLET OUTPUT FORMAT — PLAIN TEXT ONLY:
-- Output bullets as plain text — NO LaTeX commands (no backslash commands, no braces)
-- The pipeline automatically applies bold formatting to key terms
-- BAD example:  "Architected dual-Lambda REST API using Terraform, cutting to 30 sec." with backslash-textbf around terms
-- GOOD example: "Architected dual-Lambda REST API using Terraform IaC, cutting execution from 10 min to 30 sec."
-
-SKILLS RULES:
-- "Languages" MUST always be the FIRST skill category in output JSON
-- Limit to 4 skill categories total — combine if needed
-- Values must be plain comma-separated text
-- Reorder skills within each category to lead with JD-matched ones
-
-=== JOB DESCRIPTION ===
-{jd_text[:5000]}
-
-=== MASTER BULLETS — EXPERIENCES ===
-{selected_exp_text}
-
-=== MASTER BULLETS — PROJECTS ===
-{selected_proj_text}
-
-=== CANDIDATE SKILLS ===
-{parsed_resume.skills_text}
-
-Output ONLY valid JSON (no markdown, no backticks):
-{{
-    "skills": {{
-        "Languages": "Python, Java, C++, ...",
-        "Cloud & Infrastructure": "AWS, Docker, ..."
-    }},
-    "experiences": [
-        {{
-            "title": "Software Engineer Intern",
-            "company": "Sorenson Communications",
-            "location": "Salt Lake City, UT",
-            "dates": "June 2025 -- Oct. 2025",
-            "bullets": [
-                "Architected dual-Lambda REST API using Terraform IaC, cutting test execution from 10 min to 30 sec.",
-                "Engineered observability pipeline decoding CloudWatch logs and forwarding SIP metrics to Dynatrace via DQL.",
-                "Streamlined CI/CD lifecycle automating regression testing with Docker and GitHub Actions, ensuring 100% repeatable validation.",
-                "Accelerated debugging by deploying Dockerized test harnesses on EC2 and Lambda, centralizing metrics into Grafana dashboards."
-            ]
-        }}
-    ],
-    "projects": [
-        {{
-            "name": "JobScout - AI Job Automation",
-            "url": "https://github.com/YashPathak1446/jobscout",
-            "tech": "Python, Google ADK, Gemini API, Docker",
-            "dates": "Jan. 2026 - Current",
-            "bullets": [
-                "Architected multi-agent pipeline using Google ADK achieving 92% semantic matching accuracy.",
-                "Engineered hybrid search combining BM25 and cosine similarity, reducing resume generation time by 60%."
-            ]
-        }}
-    ]
-}}
+Pay close attention to:
+- Character counts (experiences: 140-280 chars, projects: 120-140 chars)
+- Bullet counts (2-4 per experience, 2-3 per project)
+- Preserve ALL metrics exactly
 """
+                        logger.info("Retrying with validation feedback...")
+                        break  # Break model loop to retry with updated prompt
+                    else:
+                        # Max retries reached - return best attempt even if invalid
+                        logger.warning("Max retries reached, returning output despite validation failures")
+                        return data
 
-    # Try primary model, fallback on error
-    for attempt_model in [model, fallback_model]:
-        try:
-            from google import genai
-
-            client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-            response = client.models.generate_content(
-                model=attempt_model,
-                contents=prompt,
-            )
-
-            raw_text = response.text.strip()
-            # Strip markdown code fences if present
-            if raw_text.startswith("```"):
-                raw_text = raw_text.split("\n", 1)[1] if "\n" in raw_text else raw_text[3:]
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3]
-            raw_text = raw_text.strip()
-            if raw_text.startswith("json"):
-                raw_text = raw_text[4:].strip()
-
-            data = json.loads(raw_text)
-            logger.info(f"Resume tailored with {attempt_model}")
-            return data
-
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parse error from {attempt_model}: {e}")
-            logger.debug(f"Raw response: {raw_text[:500]}")
-            if attempt_model == fallback_model:
-                return None
-        except Exception as e:
-            error_str = str(e).lower()
-            if "429" in error_str or "rate limit" in error_str:
-                logger.warning(f"{attempt_model} rate limited, trying fallback")
-                continue
-            logger.error(f"LLM error with {attempt_model}: {e}")
-            if attempt_model == fallback_model:
-                return None
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parse error from {attempt_model}: {e}")
+                logger.debug(f"Raw response: {raw_text[:500]}")
+                if attempt_model == fallback_model:
+                    if attempt < max_retries - 1:
+                        break  # Retry with same prompt
+                    else:
+                        return None
+            except Exception as e:
+                error_str = str(e).lower()
+                if "429" in error_str or "rate limit" in error_str:
+                    logger.warning(f"{attempt_model} rate limited, trying fallback")
+                    continue
+                logger.error(f"LLM error with {attempt_model}: {e}")
+                if attempt_model == fallback_model:
+                    if attempt < max_retries - 1:
+                        break  # Retry
+                    else:
+                        return None
 
     return None
 

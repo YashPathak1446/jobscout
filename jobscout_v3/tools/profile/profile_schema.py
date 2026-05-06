@@ -90,6 +90,7 @@ class ProjectPreferences(BaseModel):
     selection_strategy: str = "jd_dependent"
     always_include: List[str] = Field(default_factory=list)
     high_priority: List[str] = Field(default_factory=list)
+    never_include: List[str] = Field(default_factory=list)
     conditional_inclusion: Dict[str, ConditionalInclusion] = Field(default_factory=dict)
     bullets_per_project: Dict[str, int] = Field(default_factory=dict)
     comments: Optional[str] = None
@@ -109,12 +110,46 @@ class FormattingPreferences(BaseModel):
     required_elements: List[str] = Field(default_factory=list)
 
 
+class ComponentImportance(BaseModel):
+    """
+    User-defined importance tiers for resume components.
+
+    Controls bullet allocation — how much space a component gets
+    when it is selected for a resume.
+
+    Importance is separate from selection (which is JD-relevance driven).
+    A component can be:
+      - conditionally selected (appears only for relevant JDs)
+      - but always low importance (only gets 1 bullet when it appears)
+
+    Tiers:
+      high   — component is one of the user's strongest; gets priority bullets
+      medium — standard allocation; default if unspecified
+      low    — weak or supporting component; gets minimum bullets (1)
+
+    Supports both canonical IDs and short aliases (resolved via ResumeParser).
+    Maps cleanly to a future UI: "Rate your experiences: Strongest / Normal / Supporting"
+    """
+    experiences: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of experience_id -> 'high' | 'medium' | 'low'"
+    )
+    projects: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Map of project_id -> 'high' | 'medium' | 'low'"
+    )
+
+
 class ResumePreferences(BaseModel):
     """Resume generation preferences."""
     master_resume_path: str
     experiences: ExperiencePreferences
     projects: ProjectPreferences
     formatting: FormattingPreferences
+    component_importance: ComponentImportance = Field(
+        default_factory=ComponentImportance,
+        description="User importance tiers for bullet budget allocation"
+    )
 
 
 class AgentPreferences(BaseModel):
@@ -241,37 +276,33 @@ class UserProfile(BaseModel):
         
         return result
 
-    def should_exclude_job(self, job_title: str, job_description: str) -> tuple[bool, str]:
+    def should_exclude_job(self, job_title: str, job_description: str, job_location: str = "") -> tuple[bool, str]:
         """
-        Determine if a job should be excluded based on profile rules.
-        
-        Args:
-            job_title: Job title
-            job_description: Job description text
-            
-        Returns:
-            (should_exclude: bool, reason: str)
+        Thin wrapper — delegates to JobFilter service.
+
+        Kept for backward compatibility. New code should call
+        tools.jobs.job_filter.evaluate(job, profile) directly.
         """
-        text = f"{job_title} {job_description}".lower()
-        
-        # Check exclude keywords (e.g., "PhD required", "10+ years")
-        for keyword in self.job_preferences.exclude_keywords:
-            if keyword.lower() in text:
-                return (True, f"Contains excluded keyword: {keyword}")
-        
-        # Check for explicitly senior roles (more aggressive filtering)
-        senior_indicators = ['senior', 'sr.', 'sr ', 'staff', 'principal', 'lead', 'director', 'manager', 'head of']
-        if any(indicator in text for indicator in senior_indicators):
-            # But allow if it also mentions entry-level keywords
-            entry_indicators = ['new grad', 'entry level', 'junior', 'early career', 'associate', '0-2 years', '0-1 years', 'recent graduate']
-            if not any(entry in text for entry in entry_indicators):
-                return (True, "Seniority level too high (senior/staff/principal)")
-        
-        # REMOVED: Don't require seniority keywords to be present
-        # GitHub jobs have short descriptions without these keywords
-        # We'll catch senior roles with the check above instead
-        
-        return (False, "")
+        from tools.jobs.job_filter import evaluate
+        from tools.search.job_listing import JobListing
+        from datetime import datetime, timezone
+
+        # Build a minimal JobListing for the filter
+        job = JobListing(
+            id="temp",
+            title=job_title,
+            company="",
+            location=job_location,
+            description=job_description,
+            apply_url="",
+            salary_min=None,
+            salary_max=None,
+            created=datetime.now(timezone.utc).isoformat(),
+            source="temp",
+        )
+
+        decision = evaluate(job, self)
+        return (decision.exclude, decision.reason or "")
 
 
 # Export for convenience
