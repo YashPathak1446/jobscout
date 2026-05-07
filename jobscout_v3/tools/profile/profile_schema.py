@@ -221,59 +221,164 @@ class UserProfile(BaseModel):
             raise ValueError('version must follow semantic versioning (e.g., 1.0.0)')
         return v
 
+    def _normalize_jd_for_matching(self, jd_text: str) -> str:
+        """
+        Strip non-role sections from JD text to reduce false-positive trigger matches.
+
+        Many JDs contain "healthcare benefits", "mental health support", or perks/values
+        sections that contain medical/domain words unrelated to the actual role. We
+        truncate the JD at the first occurrence of any benefits/perks/about-us marker
+        so triggers only fire on language describing the *role*, not the company perks.
+        """
+        import re
+
+        jd_lower = jd_text.lower()
+
+        # Markers that typically begin non-role sections.
+        # Order matters less than coverage — we cut at the earliest match.
+        section_markers = [
+            # Benefits section variants
+            "benefits\n",
+            "benefits:",
+            "benefits include",
+            "perks and benefits",
+            "perks & benefits",
+            "compensation and benefits",
+            "our benefits",
+            "company benefits",
+            "what we offer",
+            "what you'll get",
+            "what you will get",
+            "what we provide",
+            "what you can expect",
+            "we offer",
+            # Compensation
+            "salary range",
+            "pay range",
+            "compensation range",
+            "compensation:",
+            "compensation\n",
+            # Equal opportunity / values / about
+            "equal opportunity",
+            "equal employment",
+            "we are an equal",
+            "diversity, equity",
+            "diversity and inclusion",
+            "we are committed to",
+            "about our company",
+            "about us",
+            "about the company",
+            "our values",
+            "our mission",
+            "our culture",
+            "why join",
+            "why work",
+            # Insurance / time off (often appear as standalone benefits)
+            "medical, dental",
+            "dental, and vision",
+            "dental and vision",
+            "401(k)",
+            "401k",
+            "paid time off",
+            "pto policy",
+            "parental leave",
+        ]
+
+        # Find the earliest section marker and truncate there
+        cut_at = len(jd_lower)
+        for marker in section_markers:
+            idx = jd_lower.find(marker)
+            if idx >= 0 and idx < cut_at:
+                cut_at = idx
+
+        return jd_lower[:cut_at]
+
+    def _trigger_matches(self, trigger: str, jd_normalized: str) -> bool:
+        """
+        Check if a trigger word/phrase appears in the JD as a whole word.
+
+        Uses word boundaries so 'ai' doesn't match 'available', 'training', etc.
+        Multi-word triggers ('reinforcement learning') match as exact phrases.
+        """
+        import re
+
+        trigger_lower = trigger.lower().strip()
+        if not trigger_lower:
+            return False
+
+        # Multi-word phrases — match as substring (already specific enough)
+        if " " in trigger_lower or "-" in trigger_lower:
+            return trigger_lower in jd_normalized
+
+        # Single words — require word boundaries
+        # \b doesn't work for things like "c++" or "c#" so handle those specially
+        if any(c in trigger_lower for c in "+#"):
+            return trigger_lower in jd_normalized
+
+        pattern = r'\b' + re.escape(trigger_lower) + r'\b'
+        return bool(re.search(pattern, jd_normalized))
+
     def get_experience_selection_rules(self, jd_text: str) -> Dict[str, List[str]]:
         """
         Get which experiences to include based on JD content.
-        
+
+        Triggers match against the *role-relevant* portion of the JD only
+        (benefits/perks/about-us sections are stripped). Single-word triggers
+        require word boundaries so 'ai' doesn't match 'available'.
+
         Args:
-            jd_text: Job description text (lowercase for matching)
-            
+            jd_text: Job description text
+
         Returns:
             Dict with 'always', 'conditional', 'rarely' lists
         """
-        jd_lower = jd_text.lower()
-        
+        jd_normalized = self._normalize_jd_for_matching(jd_text)
+
         result = {
             'always': self.resume_preferences.experiences.always_include.copy(),
             'conditional': [],
             'rarely': []
         }
-        
+
         # Check conditional inclusion rules
         for exp_id, rule in self.resume_preferences.experiences.conditional_inclusion.items():
-            if any(keyword in jd_lower for keyword in rule.include_if_jd_contains):
+            if any(self._trigger_matches(kw, jd_normalized) for kw in rule.include_if_jd_contains):
                 result['conditional'].append(exp_id)
-        
+
         # Check rarely include rules
         for exp_id, rule in self.resume_preferences.experiences.rarely_include.items():
-            if any(keyword in jd_lower for keyword in rule.include_if_jd_contains):
+            if any(self._trigger_matches(kw, jd_normalized) for kw in rule.include_if_jd_contains):
                 result['rarely'].append(exp_id)
-        
+
         return result
 
     def get_project_selection_rules(self, jd_text: str) -> Dict[str, List[str]]:
         """
         Get which projects to include based on JD content.
-        
+
+        Triggers match against the *role-relevant* portion of the JD only
+        (benefits/perks/about-us sections are stripped). Single-word triggers
+        require word boundaries so 'ai' doesn't match 'training'.
+
         Args:
-            jd_text: Job description text (lowercase for matching)
-            
+            jd_text: Job description text
+
         Returns:
             Dict with 'always', 'high_priority', 'conditional' lists
         """
-        jd_lower = jd_text.lower()
-        
+        jd_normalized = self._normalize_jd_for_matching(jd_text)
+
         result = {
             'always': self.resume_preferences.projects.always_include.copy(),
             'high_priority': self.resume_preferences.projects.high_priority.copy(),
             'conditional': []
         }
-        
+
         # Check conditional inclusion rules
         for proj_id, rule in self.resume_preferences.projects.conditional_inclusion.items():
-            if any(keyword in jd_lower for keyword in rule.include_if_jd_contains):
+            if any(self._trigger_matches(kw, jd_normalized) for kw in rule.include_if_jd_contains):
                 result['conditional'].append(proj_id)
-        
+
         return result
 
     def should_exclude_job(self, job_title: str, job_description: str, job_location: str = "") -> tuple[bool, str]:

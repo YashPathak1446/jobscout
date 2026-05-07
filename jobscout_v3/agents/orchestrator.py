@@ -60,6 +60,7 @@ class JobScoutOrchestrator:
         mock_mode: bool = False,
         mock_generation: bool = False,
         mock_embeddings: bool = False,
+        input_file: Optional[str] = None,
     ):
         """
         Initialize orchestrator.
@@ -71,12 +72,16 @@ class JobScoutOrchestrator:
             mock_mode: If True, use mock data for entire pipeline
             mock_generation: If True, use mock for generation only
             mock_embeddings: If True, use mock embeddings for analysis
+            input_file: Path to enriched_jobs.json - skips Discovery + Enrichment,
+                runs Analysis + Generation directly on cached enriched data.
+                Useful for diagnosing scoring/selection without re-scraping.
         """
         self.profile_name = profile_name
         self.checkpoint = checkpoint
         self.mock_mode = mock_mode
         self.mock_generation = mock_generation
         self.mock_embeddings = mock_embeddings or mock_mode
+        self.input_file = input_file
         
         # Load profile
         logger.info(f"📋 Loading profile: {profile_name}")
@@ -129,15 +134,19 @@ class JobScoutOrchestrator:
         logger.info("")
         
         try:
-            # Stage 1: Discovery
-            self._run_discovery(max_jobs)
-            
-            # Stage 2: Enrichment
-            self._run_enrichment()
-            
+            if self.input_file:
+                # Replay mode — load enriched jobs from disk, skip Discovery + Enrichment
+                self._load_enriched_from_file()
+            else:
+                # Stage 1: Discovery
+                self._run_discovery(max_jobs)
+
+                # Stage 2: Enrichment
+                self._run_enrichment()
+
             # Stage 3: Analysis
             self._run_analysis()
-            
+
             # Stage 4: Generation
             self._run_generation()
             
@@ -211,7 +220,57 @@ class JobScoutOrchestrator:
             self._checkpoint_review_jobs(enriched, "enrichment")
         
         self._save_state()
-    
+
+    def _load_enriched_from_file(self):
+        """
+        Replay mode — load already-enriched jobs from a previous run.
+
+        Skips Discovery + Enrichment entirely. Useful for re-running
+        Analysis + Generation against the same JDs without re-scraping
+        (saves Gemini quota during diagnosis).
+        """
+        import json as _json
+
+        logger.info("=" * 80)
+        logger.info(f"📂 REPLAY MODE — loading enriched jobs from file")
+        logger.info("=" * 80)
+        logger.info(f"Input file: {self.input_file}")
+
+        path = Path(self.input_file)
+        if not path.exists():
+            raise FileNotFoundError(f"Input file not found: {self.input_file}")
+
+        with open(path, 'r', encoding='utf-8') as f:
+            data = _json.load(f)
+
+        # File can be either a list of enriched jobs or a dict with 'enriched_jobs' key
+        if isinstance(data, dict) and 'enriched_jobs' in data:
+            enriched = data['enriched_jobs']
+        elif isinstance(data, list):
+            enriched = data
+        else:
+            raise ValueError(
+                "Input file must be a list of enriched jobs or have an 'enriched_jobs' key"
+            )
+
+        self.state['enriched_jobs'] = enriched
+        # Also populate discovered_jobs for summary purposes
+        self.state['discovered_jobs'] = [
+            {
+                'title': j.get('title', ''),
+                'company': j.get('company', ''),
+                'apply_url': j.get('apply_url', ''),
+                'location': j.get('location', ''),
+                'source': j.get('source', 'replay'),
+            }
+            for j in enriched
+        ]
+
+        logger.info(f"✅ Loaded {len(enriched)} enriched jobs from {self.input_file}")
+        logger.info("⏩ Skipping Discovery + Enrichment stages")
+
+        self._save_state()
+
     def _run_analysis(self):
         """Stage 3: Analyze jobs and select components."""
         logger.info("\n" + "=" * 80)
@@ -568,6 +627,13 @@ Examples:
         action="store_true",
         help="Enable verbose logging"
     )
+    parser.add_argument(
+        "--input",
+        default=None,
+        help="Path to enriched_jobs.json from a previous run. Skips Discovery + "
+             "Enrichment and runs Analysis + Generation directly on the cached "
+             "JDs. Useful for diagnosing scoring without burning API quota."
+    )
     
     args = parser.parse_args()
     
@@ -586,6 +652,7 @@ Examples:
         mock_mode=args.mock,
         mock_generation=args.mock_generation,
         mock_embeddings=args.mock_embeddings,
+        input_file=args.input,
     )
     
     orchestrator.run(max_jobs=args.max_jobs)

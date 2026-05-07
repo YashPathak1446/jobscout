@@ -41,9 +41,17 @@ env/
 outputs/*/
 !outputs/.gitkeep
 
-# Data
-data/master_resumes/*
+# Master resumes - personal data (commit only .example.tex)
+data/master_resumes/*.tex
+!data/master_resumes/*.example.tex
 !data/master_resumes/.gitkeep
+
+# User profiles - personal data (commit only .example.json)
+user_profiles/*.json
+!user_profiles/*.example.json
+
+# Cache - personal/runtime data
+cache/*.json
 
 # Logs
 *.log

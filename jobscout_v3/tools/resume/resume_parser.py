@@ -333,20 +333,45 @@ class ResumeParser:
         selected_projects = _pick_top(proj_scores, max_proj)
 
         # Log score breakdown for selected components
-        logger.debug("   🎯 Component selection scores:")
-        for cid, score_detail in sorted(
-            {**exp_scores, **proj_scores}.items(),
+        # Build the breakdown structure for return + logging
+        score_breakdown = {}
+        for cid, sd in {**exp_scores, **proj_scores}.items():
+            score_breakdown[cid] = sd
+
+        # Log JD keywords extracted (helps spot scraper noise + missing terms)
+        if jd_keywords:
+            logger.info(f"   📋 JD keywords ({len(jd_keywords)}): {', '.join(sorted(jd_keywords))}")
+
+        # Log which conditional triggers fired
+        fired_exp = sorted(
+            self._resolve_exp_canonical(eid)
+            for eid in exp_rules['conditional']
+        )
+        fired_proj = sorted(
+            self._resolve_proj_canonical(pid)
+            for pid in proj_rules['conditional']
+        )
+        if fired_exp or fired_proj:
+            logger.info(f"   🔔 Conditional triggers fired:")
+            for cid in fired_exp:
+                logger.info(f"      exp  {cid}")
+            for cid in fired_proj:
+                logger.info(f"      proj {cid}")
+
+        # Log full score breakdown for selected + top-ranked components (INFO)
+        logger.info("   🎯 Component scores (top 10):")
+        for cid, sd in sorted(
+            score_breakdown.items(),
             key=lambda x: -x[1]['final']
-        )[:8]:
-            s = score_detail
+        )[:10]:
             selected = cid in selected_experiences or cid in selected_projects
             marker = "✅" if selected else "  "
-            short = cid[:30]
-            logger.debug(
-                f"   {marker} {short}: "
-                f"emb={s['embedding']:.2f} kw={s['keyword']:.2f} "
-                f"cond={s['conditional']:.2f} imp={s['importance']:.2f} "
-                f"→ {s['final']:.2f}"
+            short = cid.replace('proj_', '').replace('exp_', '')[:32]
+            logger.info(
+                f"   {marker} {short:32} "
+                f"emb={sd['embedding']:.2f} kw={sd['keyword']:.2f} "
+                f"cond={sd['conditional']:.2f} imp={sd['importance']:.2f} "
+                f"alw={sd['always']:.2f} → {sd['final']:.2f}"
             )
 
         # ── Skills ───────────────────────────────────────────────────────────
@@ -364,6 +389,12 @@ class ResumeParser:
             'experiences': selected_experiences,
             'projects': selected_projects,
             'skills': sorted(list(selected_skills)),
+            'score_breakdown': score_breakdown,
+            'jd_keywords': sorted(jd_keywords),
+            'conditional_fired': {
+                'experiences': fired_exp,
+                'projects': fired_proj,
+            },
         }
 
     def _resolve_exp_canonical(self, eid: str) -> str:
