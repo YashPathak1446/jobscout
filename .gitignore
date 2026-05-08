@@ -1,11 +1,77 @@
+# Python
 __pycache__/
-*.pyc
-.env
-.venv/
-venv/
-outputs/
-*.egg-info/
-dist/
+*.py[cod]
+*$py.class
+*.so
+.Python
 build/
-.pytest_cache/
-.ruff_cache/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Outputs (run-generated, not source)
+outputs/
+
+# Cache (run-generated, not source)
+cache/
+
+# Master resumes - personal data
+data/master_resumes/*.tex
+!data/master_resumes/*.example.tex
+!data/master_resumes/.gitkeep
+
+# User profiles - personal data
+user_profiles/*.json
+!user_profiles/*.example.json
+!user_profiles/template.json
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# JobScout-specific runtime artifacts
+.jobscout_seen.json
+applied_jobs.csv
+
+# Debug scripts and one-off run artifacts at repo root
+/debug_*.py
+/test_serper*.py
+/bench_*.py
+/analysis_results*.json
+/enriched_jobs.json
+/test_outputs/
+
+# ADK
+.adk/
