@@ -10,6 +10,7 @@ Location: jobscout_v3/agents/discovery_agent.py
 import os
 import sys
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -96,13 +97,19 @@ class DiscoveryAgent:
         # Get search sources from profile preferences
         sources = self.profile.agent_preferences.discovery_sources
         logger.info(f"📡 Search order: {' → '.join(sources)}")
-        
+
+        # Target a wide candidate pool. The output cap (max_jobs) is applied
+        # at the end, after profile filtering and ranking. We scrape widely
+        # so the funnel has good options to choose from — wrong-fit jobs
+        # are more likely to be outranked when the pool is large.
+        DISCOVERY_POOL_TARGET = 200
+
         # Search each source in priority order
         for source in sources:
-            if len(self.all_jobs) >= max_jobs:
-                logger.info(f"✅ Reached target of {max_jobs} jobs")
+            if len(self.all_jobs) >= DISCOVERY_POOL_TARGET:
+                logger.info(f"✅ Reached pool target of {DISCOVERY_POOL_TARGET} candidates")
                 break
-                
+
             if source == "github_newgrad":
                 self._search_github()
             elif source == "serper":
@@ -130,9 +137,11 @@ class DiscoveryAgent:
     def _search_github(self) -> None:
         """Search GitHub curated new grad lists."""
         logger.info("🐙 Searching GitHub new grad repos...")
-        
+
         try:
-            jobs = search_github_newgrad(max_results=50)
+            # Scrape widely (~200 candidates) — funnel filtering downstream
+            # selects the best ones. Wider pool gives better top-K choices.
+            jobs = search_github_newgrad(max_results=200)
             new_jobs = self._deduplicate_and_add(jobs)
             logger.info(f"   Added {new_jobs} new jobs from GitHub")
         except Exception as e:
@@ -160,7 +169,7 @@ class DiscoveryAgent:
             except Exception as e:
                 logger.error(f"   ❌ Serper failed for {role}: {e}")
             
-            if len(self.all_jobs) >= 50:
+            if len(self.all_jobs) >= 200:
                 break
     
     def _search_adzuna(self) -> None:
@@ -189,7 +198,7 @@ class DiscoveryAgent:
             except Exception as e:
                 logger.error(f"   ❌ Adzuna failed for {role}: {e}")
             
-            if len(self.all_jobs) >= 50:
+            if len(self.all_jobs) >= 200:
                 break
     
     def _search_mock(self, max_jobs: int) -> List[JobListing]:
@@ -276,13 +285,34 @@ class DiscoveryAgent:
             for reason, count in sorted(excluded_reasons.items(), key=lambda x: -x[1]):
                 logger.info(f"      - {reason}: {count} jobs")
 
-        # Rank by overall_score: priority states first
-        ranked = sorted(
-            kept,
-            key=lambda j: getattr(j, '_filter_decision', None) and
-                          j._filter_decision.overall_score or 0,
-            reverse=True,
-        )
+        # Rank by overall_score with a recency tiebreaker: jobs posted
+        # in the last few days should outrank slightly-older jobs of similar
+        # fit. Recency penalty: ~0.5 points per day of age, capped so a
+        # genuinely-better job from last week still beats a worse one from today.
+        now_utc = datetime.now(timezone.utc)
+
+        def _recency_adjusted_score(job: JobListing) -> float:
+            decision = getattr(job, '_filter_decision', None)
+            base_score = (decision.overall_score if decision else 0) or 0
+
+            # Parse the posted date if available
+            days_old = 0.0
+            if job.created:
+                try:
+                    posted = datetime.fromisoformat(job.created)
+                    # Ensure both have timezone info for clean subtraction
+                    if posted.tzinfo is None:
+                        posted = posted.replace(tzinfo=timezone.utc)
+                    days_old = max(0.0, (now_utc - posted).total_seconds() / 86400.0)
+                except (ValueError, TypeError):
+                    pass
+
+            # Cap recency penalty at 14 days (~7 points). Beyond that, all
+            # old jobs are equally old and we let the base score decide.
+            recency_penalty = min(days_old, 14.0) * 0.5
+            return base_score - recency_penalty
+
+        ranked = sorted(kept, key=_recency_adjusted_score, reverse=True)
 
         if ranked:
             priority = sum(
