@@ -35,6 +35,7 @@ from tools.cache.rate_limiter import retry_with_backoff, RateLimitError
 from tools.profile import load_profile, UserProfile
 from tools.resume import ResumeParser
 from tools.generation import build_generic_tailoring_prompt, build_validation_repair_prompt, validate_resume_output
+from tools.generation.bullet_fit import fit_bullet, FitResult
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -232,6 +233,65 @@ class GenerationAgent:
 
         return results
     
+    # =========================================================================
+    # BULLET LENGTH FITTING (deterministic post-LLM compression)
+    # =========================================================================
+
+    def _apply_bullet_fitting(self, tailored: Dict) -> Dict:
+        """
+        Run every bullet through the deterministic fit function.
+
+        The LLM produces content; this step handles length precision. Bullets
+        that overshoot a good zone get compressed deterministically. Provider-
+        agnostic — works the same regardless of which LLM produced the text.
+
+        Mutates `tailored` in place. Returns the same dict.
+        """
+        adjusted = 0
+        unchanged = 0
+        flagged = 0
+
+        for exp in tailored.get('experiences', []):
+            new_bullets = []
+            for b in exp.get('bullets', []):
+                if not isinstance(b, str):
+                    new_bullets.append(b)
+                    continue
+                result = fit_bullet(b, 'experience')
+                new_bullets.append(result.text)
+                if result.needs_review:
+                    flagged += 1
+                elif result.target_zone == 'unchanged':
+                    unchanged += 1
+                else:
+                    adjusted += 1
+            exp['bullets'] = new_bullets
+
+        for proj in tailored.get('projects', []):
+            new_bullets = []
+            for b in proj.get('bullets', []):
+                if not isinstance(b, str):
+                    new_bullets.append(b)
+                    continue
+                result = fit_bullet(b, 'project')
+                new_bullets.append(result.text)
+                if result.needs_review:
+                    flagged += 1
+                elif result.target_zone == 'unchanged':
+                    unchanged += 1
+                else:
+                    adjusted += 1
+            proj['bullets'] = new_bullets
+
+        total = adjusted + unchanged + flagged
+        if total > 0:
+            logger.info(
+                f"   📏 Bullet fit: {unchanged} unchanged, "
+                f"{adjusted} compressed, {flagged} couldn't fit cleanly"
+            )
+
+        return tailored
+
     # =========================================================================
     # BULLET BUDGET COMPUTATION
     # =========================================================================
@@ -864,6 +924,9 @@ Source bullets:
             tailored = self._call_gemini_json(prompt)
             self._log_tailored_counts(tailored, selected)
 
+            # Deterministic length fitting — LLM produces content, this handles precision.
+            tailored = self._apply_bullet_fitting(tailored)
+
             validation = validate_resume_output(tailored, bullet_budgets=bullet_budgets)
             self._validate_selected_ids(tailored, selected, validation)
 
@@ -887,6 +950,9 @@ Source bullets:
             logger.info("   🔧 Attempting Gemini validation repair")
             repaired = self._call_gemini_json(repair_prompt)
             self._log_tailored_counts(repaired, selected)
+
+            # Fit the repair output too
+            repaired = self._apply_bullet_fitting(repaired)
 
             repair_validation = validate_resume_output(repaired, bullet_budgets=bullet_budgets)
             self._validate_selected_ids(repaired, selected, repair_validation)

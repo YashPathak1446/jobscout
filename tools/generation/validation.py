@@ -11,13 +11,33 @@ import re
 from typing import Dict, List, Any
 
 
-# Hard layout limits used by the LaTeX resume renderer.
-EXPERIENCE_BULLET_MAX_CHARS = 280
-PROJECT_BULLET_MAX_CHARS = 140
+# ============================================================================
+# Bullet-length validation zones (calibrated to Jake's LaTeX template, 11pt)
+# ============================================================================
+# Bullets wrap to multiple lines when long. Orphan lines (wrapped lines that
+# are mostly empty) look unprofessional. We define explicit "good zones" and
+# "bad zones" per line-count target.
+#
+# Calibration anchors (empirical, from user's rendered PDF samples):
+#   LINE_1_END:  fills line 1                  →  110 chars
+#   LINE_2_END:  fills line 1 + line 2         →  213 chars
+#   LINE_3_END:  fills line 1 + 2 + 3          →  316 chars (estimated)
+#
+# A wrapped line must use at least ~67% of its budget to count as "well-filled."
+LINE_1_END = 110
+LINE_2_END = 213
+LINE_3_END = 316
+LINE_2_WELL_FILLED_START = 180  # 110 + ~67% of (213 - 110)
+LINE_3_WELL_FILLED_START = 283  # 213 + ~67% of (316 - 213)
 
-# Soft quality warnings only. Short bullets can still be strong, so these do not fail validation.
-EXPERIENCE_BULLET_SOFT_MIN_CHARS = 80
-PROJECT_BULLET_SOFT_MIN_CHARS = 70
+# Hard caps — beyond these, deterministic compression has failed and the
+# bullet is flagged for human review.
+EXPERIENCE_BULLET_MAX_CHARS = LINE_3_END   # 316 — experiences can use 3 lines
+PROJECT_BULLET_MAX_CHARS = LINE_2_END      # 213 — projects max 2 lines
+
+# Soft quality warnings only. Very short bullets can still be strong.
+EXPERIENCE_BULLET_SOFT_MIN_CHARS = 60
+PROJECT_BULLET_SOFT_MIN_CHARS = 60
 
 # Bullet-count contract expected from the generation prompt.
 EXPERIENCE_MIN_BULLETS = 2
@@ -408,7 +428,19 @@ def _validate_bullet_length(
     result: ValidationResult,
     component_type: str,
 ):
-    """Validate one bullet. Empty/non-string/too-long are errors; short is warning only."""
+    """
+    Validate one bullet against the zone model.
+
+    Project bullets allow 1 or 2 lines (≤110 or 180-213 chars).
+    Experience bullets allow 1, 2, or 3 lines (≤110, 180-213, or 283-316 chars).
+
+    Bullets in orphan zones (wrapped but line not well-filled) generate errors.
+    Bullets that overflow the max generate errors. Very short bullets are
+    warnings only.
+
+    The repair loop is the recovery path for bullets that miss the zone;
+    feedback names exact target ranges so the LLM can correct on retry.
+    """
     if not isinstance(bullet, str):
         result.add_error(f"{label}: Bullet must be a string")
         return
@@ -420,18 +452,47 @@ def _validate_bullet_length(
         result.add_error(f"{label}: Empty bullet")
         return
 
+    # Overflow — beyond the max line count for this component type
     if char_count > max_chars:
+        max_lines = 3 if component_type == "experience" else 2
         result.add_error(
-            f"{label}: {char_count} chars (max {max_chars} for {component_type}s)\n"
+            f"{label}: {char_count} chars exceeds {max_chars} max "
+            f"(would overflow {max_lines} lines).\n"
             f"    → {cleaned[:80]}..."
         )
         return
 
+    # Soft warning for very short bullets
     if char_count < soft_min_chars:
         result.add_warning(
             f"{label}: Only {char_count} chars (short but allowed if high-signal)\n"
             f"    → {cleaned[:80]}..."
         )
+
+    # Line-2 orphan zone (111 to 179 inclusive)
+    if LINE_1_END < char_count < LINE_2_WELL_FILLED_START:
+        line_2_chars = char_count - LINE_1_END
+        result.add_error(
+            f"{label}: {char_count} chars falls in the line-2 orphan zone "
+            f"(line 2 would have only ~{line_2_chars} chars).\n"
+            f"    → Either compress to ≤{LINE_1_END} chars (1 line) "
+            f"OR expand to {LINE_2_WELL_FILLED_START}-{LINE_2_END} chars (2 full lines).\n"
+            f"    → {cleaned[:80]}..."
+        )
+        return
+
+    # Line-3 orphan zone — only experiences have a line-3 zone
+    if component_type == "experience":
+        if LINE_2_END < char_count < LINE_3_WELL_FILLED_START:
+            line_3_chars = char_count - LINE_2_END
+            result.add_error(
+                f"{label}: {char_count} chars falls in the line-3 orphan zone "
+                f"(line 3 would have only ~{line_3_chars} chars).\n"
+                f"    → Either compress to {LINE_2_WELL_FILLED_START}-{LINE_2_END} chars (2 lines) "
+                f"OR expand to {LINE_3_WELL_FILLED_START}-{LINE_3_END} chars (3 full lines).\n"
+                f"    → {cleaned[:80]}..."
+            )
+            return
 
 
 def _validate_skills(skills: dict, result: ValidationResult):

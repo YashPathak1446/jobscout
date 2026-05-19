@@ -94,27 +94,42 @@ BULLET COUNT RULES
 {_build_bullet_budget_section(bullet_budgets, num_experiences, num_projects)}
 
 =============================================================
-CHARACTER LENGTH RULES
+BULLET LENGTH RULES — STRICT
 =============================================================
 
-These limits are for LaTeX resume rendering.
+EVERY bullet must land in one of two valid zones. Lengths between the
+zones produce orphan lines on the rendered page and are rejected.
 
-EXPERIENCE BULLETS:
-- Target: 150-240 characters
-- Maximum: 280 characters
-- Do not exceed 280 characters
-- Shorter is acceptable if the bullet is strong and specific
+VALID ZONE 1 — TWO FULL LINES (preferred — use this for most bullets):
+- 180 to 213 characters
+- A complete sentence with action + technical detail + outcome
+- Use the master content fully. Multiple clauses are good.
+- Example (198 chars):
+  "Architected serverless dual-Lambda fan-out cutting pipeline runtime
+  from 10 minutes to 30 seconds with Terraform-managed API Gateway and
+  CloudWatch alarms across mission-critical workflows."
 
-PROJECT BULLETS:
-- Target: 110-140 characters
-- Maximum: 140 characters
-- Do not exceed 140 characters
-- Project bullets must be concise enough to fit on one line when possible
+VALID ZONE 2 — ONE LINE (fallback — use only when content is genuinely sparse):
+- 60 to 110 characters
+- One tight, complete idea
+- Use only when the master bullet truly has nothing more to say
+- Example (52 chars): "Optimized read throughput 3x via MySQL replication."
+
+INVALID — NEVER PRODUCE:
+- 111 to 179 chars (wraps to 2 lines, line 2 almost empty — looks bad)
+- 214 to 282 chars (wraps to 3 lines, line 3 almost empty — looks bad)
+- Over 316 chars (overflow)
+
+DEFAULT TO TWO FULL LINES. If the master content has multiple ideas,
+metrics, or technical details, you should be writing 180-213 char bullets.
+Only fall back to 1-line bullets when the master content is a single
+tight idea that would be padded by stretching it longer.
 
 Important:
-- Maximum limits are hard limits.
-- Do not add filler just to reach a minimum.
-- A concise, high-signal bullet is better than a long padded bullet.
+- Strong specific facts > padded prose
+- Do not invent metrics, tools, or claims to fill space
+- Preserve all metrics from the master text exactly
+- Mirror the JD's terminology where the master content allows
 
 =============================================================
 METRIC AND FACT PRESERVATION
@@ -254,9 +269,10 @@ Before returning JSON, verify silently:
 3. Did each component get exactly the requested number of bullets?
 4. Did you preserve all component metadata?
 5. Did you avoid inventing metrics, tools, or claims?
-6. Are all experience bullets <= 280 characters?
-7. Are all project bullets <= 140 characters?
-8. Is the response valid JSON only?
+6. Is every bullet either 60-110 chars (1 line) OR 180-213 chars (2 full lines)?
+7. Did you DEFAULT to 2-line bullets where the master content supported it?
+8. Did you ZERO bullets land in the orphan zones (111-179 or 214-282)?
+9. Is the response valid JSON only?
 
 Return the JSON now.
 """
@@ -382,21 +398,28 @@ If a component has too few bullets, split or rewrite from source facts without i
 Preserve all components. Shrink bullet counts within components, never remove components.
 
 =============================================================
-CHARACTER LIMITS
+BULLET LENGTH RULES — STRICT
 =============================================================
 
-Experience bullets:
-- Maximum 280 characters
+Every bullet must land in one of two valid zones:
 
-Project bullets:
-- Maximum 140 characters
+VALID — TWO FULL LINES (preferred):  180 to 213 characters
+VALID — ONE LINE (fallback):          60 to 110 characters
 
-If a bullet is too long:
+INVALID — produces an orphan line:
+- 111 to 179 chars  (line 2 mostly empty)
+- 214 to 282 chars  (line 3 mostly empty)
+- Over 316 chars    (overflow)
+
+If a bullet in your previous response landed in an orphan zone, you must
+fix it by EXPANDING to the 180-213 range (preferred) OR compressing to
+≤110 chars. Use the master content fully to support 2-line bullets.
+
+If a bullet was over 213 chars (or over 316 for experiences):
+- Drop the weakest clause
 - Remove filler words
-- Compress phrases
-- Keep the strongest technical signal
-- Preserve exact metrics whenever possible
-- End cleanly on the strongest outcome
+- Preserve all metrics exactly
+- Keep the strongest action + outcome
 
 =============================================================
 PREVIOUS JSON TO REPAIR
