@@ -61,10 +61,11 @@ class JobScoutOrchestrator:
         mock_generation: bool = False,
         mock_embeddings: bool = False,
         input_file: Optional[str] = None,
+        max_resumes: Optional[int] = None,
     ):
         """
         Initialize orchestrator.
-        
+
         Args:
             profile_name: Name of profile to load
             output_dir: Base output directory
@@ -75,6 +76,9 @@ class JobScoutOrchestrator:
             input_file: Path to enriched_jobs.json - skips Discovery + Enrichment,
                 runs Analysis + Generation directly on cached enriched data.
                 Useful for diagnosing scoring/selection without re-scraping.
+            max_resumes: Cap on resumes generated per run (the funnel cut). When
+                set, only the top-K jobs by analysis score get resumes. Defaults
+                to profile.agent_preferences.max_jobs_to_generate.
         """
         self.profile_name = profile_name
         self.checkpoint = checkpoint
@@ -82,6 +86,7 @@ class JobScoutOrchestrator:
         self.mock_generation = mock_generation
         self.mock_embeddings = mock_embeddings or mock_mode
         self.input_file = input_file
+        self.max_resumes = max_resumes
         
         # Load profile
         logger.info(f"📋 Loading profile: {profile_name}")
@@ -304,16 +309,54 @@ class JobScoutOrchestrator:
         self._save_state()
     
     def _run_generation(self):
-        """Stage 4: Generate tailored resumes."""
+        """Stage 4: Generate tailored resumes for the top-K best-fit jobs."""
         logger.info("\n" + "=" * 80)
         logger.info("📝 STAGE 4: GENERATION")
         logger.info("=" * 80)
-        
+
         analysis_results = self.state['analysis_results']
         if not analysis_results:
             logger.warning("⚠️  No jobs to generate resumes for")
             return
-        
+
+        # FUNNEL: rank by overall fit score (descending) and slice to top-K.
+        # Generation is the expensive stage (1-2 Gemini calls per resume), so
+        # we pay for it only on the highest-scoring jobs. K is set per-run via
+        # --max-resumes, falling back to profile.agent_preferences.max_jobs_to_generate.
+        max_resumes = self.max_resumes or self.profile.agent_preferences.max_jobs_to_generate
+        ranked = sorted(
+            analysis_results,
+            key=lambda r: r.get('score', {}).get('overall', 0),
+            reverse=True,
+        )
+
+        if len(ranked) > max_resumes:
+            kept = ranked[:max_resumes]
+            dropped = ranked[max_resumes:]
+            logger.info(
+                f"🔻 Funnel: {len(ranked)} jobs passed analysis → "
+                f"generating top {max_resumes} by score"
+            )
+            logger.info(f"   Kept (top {max_resumes}):")
+            for r in kept:
+                score = r.get('score', {}).get('overall', 0)
+                title = r.get('job', {}).get('title', '?')
+                company = r.get('job', {}).get('company', '?')
+                logger.info(f"      {score:5.1f}%  {title} @ {company}")
+            logger.info(f"   Dropped (below funnel cut):")
+            for r in dropped:
+                score = r.get('score', {}).get('overall', 0)
+                title = r.get('job', {}).get('title', '?')
+                company = r.get('job', {}).get('company', '?')
+                logger.info(f"      {score:5.1f}%  {title} @ {company}")
+            generation_input = kept
+        else:
+            logger.info(
+                f"📋 All {len(ranked)} analyzed jobs proceed to generation "
+                f"(under cap of {max_resumes})"
+            )
+            generation_input = ranked
+
         mock_gen = self.mock_mode or self.mock_generation
 
         # Generation Agent gets its own ResumeParser with skip_embeddings
@@ -329,17 +372,17 @@ class JobScoutOrchestrator:
         # Pass output_dir (not output_path) — generation agent adds
         # its own date subdirectory via generate_resumes().
         results = agent.generate_resumes(
-            analysis_results,
+            generation_input,
             output_dir=str(self.output_path.parent),
         )
-        
+
         self.state['generation_results'] = results
-        
+
         valid = sum(1 for r in results if r.get('status') == 'valid')
         review = sum(1 for r in results if r.get('status') == 'needs_review')
         failed = sum(1 for r in results if r.get('status') == 'failed')
         logger.info(f"✅ Generation: {valid} valid, {review} needs review, {failed} failed")
-        
+
         self._save_state()
     
     # =====================================================================
@@ -605,8 +648,18 @@ Examples:
         "--max-jobs",
         type=int,
         default=10,
-        help="Maximum jobs to process (default: 10)"
+        help="Maximum jobs to discover and analyze (default: 10). The full "
+             "pipeline runs Discovery → Enrichment → Analysis on this many jobs."
     )
+    parser.add_argument(
+        "--max-resumes",
+        type=int,
+        default=None,
+        help="Maximum resumes to generate (the funnel cut). After analysis, "
+             "only the top-K jobs by score get resumes. Defaults to profile's "
+             "agent_preferences.max_jobs_to_generate."
+    )
+
     parser.add_argument(
         "--output",
         default="outputs",
@@ -663,6 +716,7 @@ Examples:
         mock_generation=args.mock_generation,
         mock_embeddings=args.mock_embeddings,
         input_file=args.input,
+        max_resumes=args.max_resumes,
     )
     
     orchestrator.run(max_jobs=args.max_jobs)
