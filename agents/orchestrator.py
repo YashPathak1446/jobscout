@@ -566,6 +566,16 @@ class JobScoutOrchestrator:
 def main():
     """CLI entry point."""
     import argparse
+
+    # On Windows, the default console encoding (cp1252) can't render emojis
+    # used in the orchestrator's progress output. Force UTF-8 with 'replace'
+    # so unencodable characters become '?' rather than crashing the pipeline.
+    # No-op on platforms where stdout is already UTF-8 or non-reconfigurable.
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass
     
     parser = argparse.ArgumentParser(
         description="JobScout V3 - Multi-agent job application pipeline",
