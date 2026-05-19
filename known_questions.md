@@ -91,51 +91,49 @@ also carry richer signal than headers.
 
 ## Q3. How do bullet character limits actually work given the "fill the line" rule?
 
-**Status:** Approximation in place (280/140 hard cap), proper solution
-deferred to Step 14 (page-aware bullet allocation).
+**Status:** Largely answered (see R6). Page-aware allocation still deferred.
 
-The Medium article's "Fill Bullet Lines All The Way" rule is fundamentally
-a packing problem — bullets shouldn't have 2-3 words orphaned on line 2,
-and the page should be filled efficiently. A character cap is a bad proxy
-because different bullets render to different line counts depending on
-word width, font metrics, and template.
+The original question — "how do we enforce orphan-line avoidance without
+forcing the LLM to be a calculator" — has been answered architecturally
+by R6 (deterministic post-LLM compression). The validator now uses zones
+(line-1, line-2, line-3) instead of single hard caps, and the bullet-fit
+pipeline compresses overshoots into the nearest good zone.
 
-**Current approach:** Hard cap at 280 chars (experiences) and 140 chars
-(projects). This is an approximation that will produce orphan-line bullets
-sometimes.
+What remains open is **page-aware allocation** — given a known set of
+bullets and their rendered line counts, how does the system decide how
+many bullets per component to fit on a 1-page resume? Currently the
+budget allocator is count-based (e.g. "this experience gets 3 bullets")
+without knowing how many lines those bullets will occupy.
 
-**Better approach (Step 12):** Replace hard cap with target zones:
-- Single-line zone (≤ ~140 chars for experiences, ≤ ~100 for projects)
-- Orphan-risk zone (~141-199 chars) — AVOID
-- Two-lines-well-filled zone (~200-280 chars)
-- Overflow zone (> 280 chars) — AVOID
-
-**Best approach (Step 14):** Use real PDF rendering (pdflatex) to measure
-actual line counts and line-2 word counts. Validator becomes mechanical
-once Step 8 (PDF generation) is in place.
+This becomes solvable once PDF generation is in place (Step 8). With
+pdflatex available, we can measure actual rendered line counts and adjust
+budgets to fit the page.
 
 **Open sub-questions:**
-- How do zone thresholds calibrate to your specific resume template? Need
-  to render real bullets and measure.
-- When the page is over-full, how does the system decide what to drop?
-  (Currently bullet-budget allocator is count-based, not length-based.)
+- Should `SUBSTANTIVE_MIN = 60` be raised for experiences? Some compressed
+  experience bullets at exactly 60 chars feel skeletal.
+- When compression can't reach a good zone (rare — see R6 caveats), should
+  we add an "expand from master content" step, or accept needs_review?
+  Decided: accept needs_review for now. Expansion risks invention.
 
 ---
 
 ## Q4. Should we integrate Claude API for generation alongside Gemini?
 
-**Status:** Investigation pending. Not on the critical path.
+**Status:** More urgent than before. Q5's quota issue makes Claude
+fallback meaningfully valuable, not just nice-to-have.
 
 Claude Max gives chat access but not API credits — API is billed
-separately at console.anthropic.com. Adding Claude to the pipeline would
-be a pure quality/reliability play.
+separately at console.anthropic.com.
 
 **Where Claude could plug in:**
 - Embedding (Analysis): no — Claude has no public embedding API. Keep Gemini.
 - Bullet tailoring (Generation): plausible — Claude Sonnet handles strict
-  multi-rule prompts better than Gemini Flash, especially for the
-  Golden Rules enforcement work in Step 11.
-- Future: JD requirement extraction, cover letters, bullet quality grading.
+  multi-rule prompts well. Less critical now that R6 removed strict-numerical
+  constraints from the LLM's job, but still useful for quality.
+- **Fallback for quota exhaustion:** when Gemini 2.5 and 2.0 are both
+  rate-limited, current behavior is "fall back to mock and fail." Adding
+  Claude as a third fallback would mean the resume gets generated anyway.
 
 **Cost math at current volumes:** Sonnet 4.6 = ~$0.024 per resume. At 10
 resumes/day = ~$7/month. Cheap enough that cost isn't the deciding factor.
@@ -143,9 +141,7 @@ resumes/day = ~$7/month. Cheap enough that cost isn't the deciding factor.
 **Tentative direction:** Defer to Step 8.5 (multi-provider LLM
 abstraction). Refactor generation calls behind a provider-agnostic
 `tailor_with_llm()` interface. Add Claude as a third fallback after Gemini
-2.5 → 2.0. When Step 11 (Golden Rules) lands, configure the main tailor
-call to use Claude Sonnet (better instruction-following) and the cheaper
-repair call to use Gemini Flash.
+2.5 → 2.0. Quality-vs-cost ordering decided per-call.
 
 **Open sub-questions:**
 - Is Claude's output meaningfully better on a few representative examples?
@@ -153,26 +149,44 @@ repair call to use Gemini Flash.
   to integration work.
 - Multi-provider fallback chain order: prefer cost (Gemini → Claude) or
   prefer quality (Claude → Gemini)?
+- Should the fallback be silent (just use Claude when Gemini 429s) or
+  surface to the user ("Gemini quota out, used Claude for this resume")?
 
 ---
 
-## Q5. How do we keep Gemini reliable when it 503s mid-run?
+## Q5. How do we keep Gemini reliable when it 503s or runs out of quota?
 
-**Status:** Mostly handled, edge cases remain.
+**Status:** Mostly handled at the failure-mode level, but quota
+exhaustion is a real production issue we've now hit.
 
 The current fallback chain is `gemini-2.5-flash → gemini-2.0-flash → mock`.
 Mock fallback produces invalid output that fails validation, so the resume
 ends up in `needs_review/` rather than the final outputs directory.
 
-**Current behavior:** Pipeline doesn't crash on Gemini 503, but the
-affected resume is unusable until you re-run.
+**What we've observed:**
+- **503 errors** (May 2026): Gemini service hiccups happen mid-pipeline.
+  Pipeline doesn't crash — it falls through to the next model, then mock.
+  Resume goes to needs_review.
+- **429 errors / quota exhaustion** (May 2026): Free-tier Gemini has daily
+  caps. During heavy development sessions, we exhaust the cap mid-run.
+  Both 2.5 and 2.0 share quota, so both fall through to mock together.
+
+**Current behavior:** Pipeline doesn't crash on either failure mode,
+but the affected resumes are unusable until quota resets or service
+recovers. With the `--input` replay flag, you can rerun Generation later
+without paying for Discovery/Enrichment/Analysis again.
 
 **Open sub-questions:**
 - Should the fallback include another real LLM (Claude) so we don't lose
-  output to transient Gemini issues? See Q4.
-- Should we add automatic retry with exponential backoff before falling
-  back to a different provider?
+  output to transient or quota issues? See Q4.
+- Should we add automatic retry with longer exponential backoff before
+  falling back to a different provider? Current retry waits ~30-60s
+  which isn't enough for quota recovery (resets daily).
 - Should `needs_review/` resumes be auto-retried on the next pipeline run?
+  Could be a `--retry-needs-review` flag.
+- Should we surface a "quota nearly exhausted" warning before starting
+  Generation, so the user can choose to defer? Hard to predict cleanly
+  without an explicit quota-check API call.
 
 ---
 
@@ -180,10 +194,11 @@ affected resume is unusable until you re-run.
 
 **Status:** Working but fragile.
 
-Your new master resume has bullets up to ~500 chars. Gemini compresses
+The new master resume has bullets up to ~500 chars. Gemini compresses
 these well (compression is easier than expansion), but occasionally drops
 metrics during compression. The repair loop catches some of this but not
-all.
+all. The R6 bullet-fit pipeline runs after the LLM and can compress
+further deterministically if needed.
 
 **Open sub-questions:**
 - Should the prompt explicitly list "preserve these metrics: [...]" with
@@ -191,6 +206,7 @@ all.
   more reliable.
 - When the master bullet exceeds the validation cap, who's responsible
   for compression — the LLM (current) or a deterministic preprocessor?
+  Currently both run; LLM goes first, fitter cleans up. Mostly works.
 - Does Step 11 (Golden Rules enforcement) need a "preserve quantitative
   data" rule on top of the article's nine rules?
 
@@ -289,22 +305,154 @@ The `exclude_keywords` list will be a UI checkbox group eventually, with
 sensible defaults (`"senior"`, `"5+ years"`, `"PhD required"`,
 `"security clearance"`) and user override.
 
+**Validated by R7 (May 2026):** with a wider discovery pool, DICK'S
+"SE II" — the case that motivated this discussion — naturally fell to #6
+in the funnel instead of winning a top-3 slot. The mechanism works.
+
 ---
 
 ## R3. Do we need Claude API integration in the current pipeline?
 
-**Decision:** No, defer to Step 8.5 (May 2026).
+**Decision:** No immediate need, but raised priority after Q5 quota issues
+(May 2026). Defer to Step 8.5.
 
-Current Gemini setup is working. The repair loop handles validation
-failures. The bottleneck is Discovery (wrong jobs) and output format
-(no PDF), not generation quality.
+Current Gemini setup is working when quota is available. The repair loop
+handles validation failures. The architectural bottleneck is reliability
+(Q5), which Claude as a third fallback would meaningfully improve.
 
-Adding Claude would be valuable later for:
-- Step 8.5: multi-provider fallback (reliability)
+Adding Claude would be valuable for:
+- Step 8.5: multi-provider fallback (reliability when Gemini 429s — now
+  a real-world issue, not just hypothetical)
 - Step 11: Golden Rules enforcement (quality on strict multi-rule prompts)
 
 Worth a 30-min investigation with $5 free API credits before committing
 to integration work.
+
+---
+
+## R4. Sync profile component IDs to new master resume
+
+**Decision:** Done (May 2026).
+
+After resume rewrite produced new project IDs, profile referenced 6
+ghost IDs and was missing 4 new ones. Hand-fixed:
+- Renamed jobscout, image_to_3d, sleeptracker_mobile to match parser output
+- Removed deleted projects (breast_cancer, checkers, classification_diabetes)
+- Added jobscout_multi_agent_resume_tailoring (high),
+  ml_based_antibiotic_resistance_predictio (medium with bio/ML triggers)
+- Fixed always_include aliases (exp_sorenson → exp_sorenson_communications)
+
+Verified with mock pipeline: zero "Could not resolve" warnings,
+JobScout now scores with imp=0.15 instead of 0.05.
+
+Note: this hand-edit is exactly what auto-derivation (Phase 1, Step 7
+in master plan) is meant to eliminate. When Phase 1 lands, this kind
+of manual sync goes away.
+
+---
+
+## R5. Should we add `--max-resumes` to control which jobs get resumes?
+
+**Decision:** Done (May 2026).
+
+Added `--max-resumes N` CLI flag. After Analysis, jobs are sorted by
+overall score and only the top-K reach Generation. K defaults to
+`profile.agent_preferences.max_jobs_to_generate` (10).
+
+Rationale: Generation is the expensive stage (1-2 Gemini calls per
+resume). Wrong-fit jobs that sneak past Discovery filtering used to
+still get resumes; now they don't unless they score in the top-K.
+
+Caveat: Score-based funnel ranks by JD-resume fit, not applicability.
+A wrong-fit job (e.g., "SE II" requiring 1+ years) can still score
+high if its tech stack matches your resume. Real fix is larger
+discovery pool (R7) so good-fit jobs outrank these, plus eventual
+UI-driven exclude_keywords (deferred per R2).
+
+---
+
+## R6. How should bullet length compliance work?
+
+**Decision:** Done (May 2026). Deterministic post-LLM compression, not
+strict LLM prompting.
+
+We went through multiple approaches in one session:
+1. **Original:** Single hard cap (280 chars experiences, 140 chars projects).
+   Allowed orphan-line bullets where line 2 had ~6 chars used. Looked bad.
+2. **Detour 1 — zone validator only:** Added orphan-zone detection. LLM
+   was asked to "compress to ≤110 OR expand to 180-213." Gemini Flash
+   couldn't comply precisely (missed by 7-13 chars consistently).
+3. **Detour 2 — prompt-only fix:** Rip out the fitter and just ask
+   harder. Resulted in 0/3 valid (Gemini overshot to 228-270 chars,
+   the model is bad at numerical ranges regardless of prompt clarity).
+4. **Final design:** Separate content generation (LLM) from length
+   compliance (deterministic Python). LLM writes good bullets; a
+   compression library (`bullet_compress.py`) applies safe transformations
+   in priority order until the bullet lands in a valid zone.
+
+**Implementation:**
+- `tools/generation/bullet_compress.py` — 4-tier library: whitespace
+  cleanup, verbose-phrase substitutions, conservative article drops,
+  trailing-clause drop. All pure functions.
+- `tools/generation/bullet_fit.py` — picks target zone based on current
+  zone, calls compress with that target.
+- `validation.py` — zone-based validation with surgical error messages
+  for any bullet that still misses after fitting.
+- `prompt_builder.py` — prompt asks for 2-line bullets by default,
+  1-line fallback for sparse content. Doesn't demand precise char counts.
+- `generation_agent.py` — runs `_apply_bullet_fitting` after each LLM
+  call (main + repair).
+
+**Verified:** When Gemini responds (i.e., not 429'd), the system produces
+valid resumes. Fitter catches LLM overshoots (228→206 chars) and
+undershoots (compress 145→82 to line-1). Provider-agnostic — works
+regardless of which LLM produced the text.
+
+**Caveats:**
+- Very short master content (e.g. tutor.com bullets at ~80 chars) can't
+  expand to 2 lines without inventing. Those flow to needs_review.
+- Compression dictionary is hand-curated; covers common patterns but
+  not all. Expandable when needed.
+
+---
+
+## R7. Should Discovery scrape a wider candidate pool?
+
+**Decision:** Done (May 2026).
+
+Old behavior: Discovery short-circuited as soon as `len(self.all_jobs) >=
+max_jobs` (the CLI flag, usually 10-20). This meant Discovery and
+Generation were bottlenecked by the same constraint, and the funnel
+(R5) had almost nothing to work with.
+
+New behavior: Discovery scrapes up to **200 candidates** (hardcoded
+`DISCOVERY_POOL_TARGET`), filters by profile criteria, ranks the pool,
+then slices to `max_jobs` at the very end.
+
+**Changes:**
+- `search_github_newgrad`: `max_results` bumped from 50 to 200
+- `discovery_agent`: pool target replaces the old max_jobs gate
+- Adzuna/Serper internal gates bumped 50 → 200
+- `search_github_newgrad`: parses "posted X days ago" from markdown
+  (`0d`, `5d`, `2 days ago`, `1 month ago`) into a real timestamp
+- `discovery_agent` ranking: recency-adjusted score =
+  `base_score - min(days_old, 14) * 0.5`. Recent jobs win ties; older
+  jobs get a small penalty (capped so a great old job still beats a
+  mediocre new one).
+
+**Verified end-to-end (May 2026):**
+- GitHub returned 724 candidates (was 452 — even the underlying source
+  has more we weren't reading)
+- 192 passed filtering
+- Top-3 funnel picks were all genuinely good fits (Neuberger, CVector,
+  Etched — full-stack Python new-grad roles)
+- DICK'S "SE II" — the wrong-fit job that previously won a top-3 slot —
+  fell to #6, validating R2's bet that funnel + bigger pool removes the
+  need for hand-tuned exclude_keywords
+
+Generation didn't complete during the test run due to Gemini quota
+exhaustion (Q5), but the one Gemini call that succeeded (Neuberger)
+behaved as expected with the fitter from R6.
 
 ---
 
