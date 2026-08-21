@@ -22,6 +22,26 @@ from .job_listing import JobListing
 logger = logging.getLogger(__name__)
 
 
+# When one employer posts several roles, these tables put the name in the
+# first row and a continuation glyph in the rows beneath it. Read literally,
+# the glyph becomes the company: it reaches the summary as "**↳** - Software
+# Engineer" and the output filename as an empty slot
+# ("Yash_Pathak__Software_Engineer_New.tex").
+_CONTINUATION_MARKERS = {
+    "↳",      # U+21B3, used by jobright-ai and speedyapply
+    "⤷",      # U+2937, seen in forks of the same tables
+    "\"",     # ditto mark
+    "''",
+    "same",
+    "same as above",
+}
+
+
+def _is_continuation(cell: str) -> bool:
+    """True when a company cell means "same employer as the row above"."""
+    return cell.strip().strip('*').strip().lower() in _CONTINUATION_MARKERS
+
+
 def search_github_newgrad(max_results: int = 50) -> list[JobListing]:
     """
     Scrape curated new grad job lists from GitHub repos.
@@ -77,12 +97,30 @@ def search_github_newgrad(max_results: int = 50) -> list[JobListing]:
                 re.MULTILINE
             )
 
+            # Continuation glyphs refer to the row above *in this table*, so
+            # this resets per source and is updated before any skip below —
+            # a row we filter out (wrong country, say) still establishes the
+            # employer for the rows that follow it.
+            last_company = None
+
             for match in table_row.finditer(content):
                 company = match.group(1).strip().strip('*').strip()
                 title = match.group(3).strip().strip('*').strip()
                 apply_url = match.group(4).strip()
                 location = match.group(5).strip()
                 rest_of_row = match.group(6) or ""
+
+                # Resolve "same as the row above" before anything else reads
+                # the company — dedup, filtering and the JobListing all use it.
+                if _is_continuation(company):
+                    if not last_company:
+                        # A continuation with nothing above it to inherit from.
+                        # Better to drop the row than emit a glyph as an employer.
+                        logger.debug(f"Continuation row with no preceding company: {title}")
+                        continue
+                    company = last_company
+                elif company and company.lower() not in ("company", "employer"):
+                    last_company = company
 
                 # Skip header rows and non-job rows
                 if not title or not apply_url or title.lower() in ("job title", "title", "position"):
@@ -97,8 +135,13 @@ def search_github_newgrad(max_results: int = 50) -> list[JobListing]:
                 if any(loc in location.lower() for loc in skip_locs):
                     continue
 
-                # Deduplicate
-                key = f"{company}::{title}".lower()
+                # Deduplicate. Location is part of the key because resolving
+                # continuation glyphs made company::title collide for real,
+                # distinct postings — one employer listing the same role in
+                # two cities used to differ only by the unresolved glyph.
+                # Location still dedups the same posting across both source
+                # repos, which is what this set is for.
+                key = f"{company}::{title}::{location}".lower()
                 if key in seen:
                     continue
                 seen.add(key)

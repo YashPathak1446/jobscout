@@ -310,32 +310,6 @@ filtering solves it. It needs employer-level knowledge, not JD-level.
 
 ---
 
-## Q11. Discovery parses the "↳" continuation glyph as a company name
-
-**Status:** Open. Surfaced 2026-08-21 in a live run.
-
-The GitHub new-grad repos use "↳" in their markdown tables to mean "same
-employer as the row above". `search_github_newgrad` takes the cell
-literally, so the glyph propagates as the company all the way to output.
-The Aug 21 run produced `Yash_Pathak__Software_Engineer_New.tex` — note the
-empty company slot in the filename — and a summary line reading
-`**↳** - Software Engineer, New Grad`. Two of twenty discovered jobs hit it.
-
-The resume content itself is unaffected (company name isn't used in the
-document body), so this is a labelling and file-naming defect rather than a
-quality one. It still means you can't tell who you'd be applying to.
-
-Fix is a parser change: carry the previous row's company forward when the
-cell is a continuation marker.
-
-**Open sub-questions:**
-- Does the same substitution appear in the location column?
-- Are there other continuation markers in those tables besides "↳"?
-- Should a job whose company can't be resolved be dropped at Discovery
-  rather than flowing through with a placeholder?
-
----
-
 ## Q12. Where do tests live?
 
 **Status:** Open. No test suite exists.
@@ -779,6 +753,50 @@ Anything that changes what is or isn't tracked — a new ignore rule, a
 restructure, a history rewrite — deserves a throwaway clone and an import
 check. This one cost nothing to find once looked for, and was invisible from
 inside the working copy.
+
+---
+
+## R13. Discovery parsed the "↳" continuation glyph as a company name
+
+**Decision:** Fixed (August 2026).
+
+The jobright-ai and speedyapply tables name the employer in the first row and
+put a "↳" in the rows beneath it when one company posts several roles.
+`search_github_newgrad` read the cell literally, so the glyph became the
+company and flowed all the way to output — `**↳** - Software Engineer, New
+Grad` in the summary, and `Yash_Pathak__Software_Engineer_New.tex` (note the
+empty company slot) as the filename. Two of twenty jobs in the Aug 21 run.
+
+**Fix:** track the last real employer per source table and substitute it when
+a cell is a continuation marker. `last_company` is updated *before* the
+filters run, so a row dropped for being non-US still establishes the employer
+for the rows beneath it. A continuation with nothing above it is dropped
+rather than emitted with a glyph.
+
+**The part that nearly broke something else.** The dedup key was
+`company::title`. Resolving the glyph made that key collide for genuinely
+distinct postings — one employer listing the same role in two cities
+previously differed *only* by the unresolved glyph. Measured against a live
+400-listing scrape: **75 postings, 19% of the pool, would have been silently
+dropped** by the fix on its own. Location is now part of the key, which still
+dedups the same posting across both source repos.
+
+Worth generalising: a fix that makes two fields more correct can make a key
+built from those fields less unique. Anywhere a derived identity is
+assembled from parsed values, correcting the parse is a change to the key.
+
+**Verified against live data:** 400 listings, zero with a glyph or empty
+company. Continuations resolve into real employers — Albertsons 17, Amazon
+16, AWS 13, SpaceX 11, Palantir 11. Marker detection passes 10/10, including
+a false-positive guard ("Arrow Electronics" must not match).
+
+**Sub-questions from Q11, answered:**
+- The location column does *not* use continuation glyphs — 0 of 400 listings
+  had a glyph or an empty location.
+- Markers handled: "↳" (U+21B3), "⤷" (U+2937), ditto marks, "same", "same as
+  above".
+- A continuation row that can't resolve an employer is dropped at Discovery,
+  rather than flowing through with a placeholder.
 
 ---
 
