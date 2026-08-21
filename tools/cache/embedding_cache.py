@@ -20,12 +20,21 @@ logger = logging.getLogger(__name__)
 
 class EmbeddingCache:
     """Cache for resume embeddings."""
-    
-    def __init__(self, cache_dir: str = "cache"):
+
+    def __init__(self, cache_dir: str = "cache", model: Optional[str] = None):
+        """
+        Args:
+            cache_dir: Where resume_embeddings.json lives
+            model: Embedding model the cached vectors were produced by.
+                   Entries produced by any other model are treated as a miss.
+                   Passed in rather than read from config so this module
+                   stays config-free, matching llm_cache.py.
+        """
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.cache_file = self.cache_dir / "resume_embeddings.json"
-    
+        self.model = model
+
     def _compute_file_hash(self, file_path: Path) -> str:
         """Compute SHA256 hash of file content."""
         with open(file_path, 'rb') as f:
@@ -53,7 +62,23 @@ class EmbeddingCache:
             if current_hash != cached_hash:
                 logger.debug("📦 Resume file changed, cache invalid")
                 return None
-            
+
+            # Vectors from different embedding models are not comparable, even
+            # at the same dimensionality. Serving them together produces a
+            # plausible-looking ranking that is quietly wrong — no error, no
+            # warning. Treat a model change (or a pre-R11 entry with no model
+            # recorded) as a miss and re-embed. See R11 in known_questions.md.
+            if self.model is not None:
+                cached_model = cache_data.get('embedding_model')
+
+                if cached_model != self.model:
+                    logger.info(
+                        f"📦 Embedding model changed "
+                        f"({cached_model or 'unrecorded'} → {self.model}), "
+                        f"cache invalid — re-embedding"
+                    )
+                    return None
+
             # Check cache age (optional: expire after 7 days)
             cached_date = cache_data.get('cached_at')
             logger.info(f"✅ Using cached embeddings from {cached_date}")
@@ -76,6 +101,7 @@ class EmbeddingCache:
         try:
             cache_data = {
                 'resume_hash': self._compute_file_hash(resume_path),
+                'embedding_model': self.model,
                 'cached_at': datetime.now().isoformat(),
                 'resume_path': str(resume_path),
                 'parsed_data': parsed_data,

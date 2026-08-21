@@ -88,8 +88,11 @@ class ResumeParser:
         # Check cache first — if the master resume hasn't changed,
         # reuse the cached embeddings instead of making 25 API calls.
         from ..cache.embedding_cache import EmbeddingCache
+        from config import EMBEDDING_MODEL
 
-        cache = EmbeddingCache()
+        # Model is passed in so a switch invalidates the cache instead of
+        # silently mixing two vector spaces (R11).
+        cache = EmbeddingCache(model=EMBEDDING_MODEL)
         cached = cache.get(self.resume_path)
 
         if cached and cached.get('embeddings'):

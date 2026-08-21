@@ -1,8 +1,9 @@
 """
 Embedding Scorer — Semantic similarity scoring using Gemini embeddings.
 
-Uses gemini-embedding-001 (free tier) to convert resume components and
-JD text into vectors, then computes cosine similarity for ranking.
+Converts resume components and JD text into vectors, then computes cosine
+similarity for ranking. The model comes from config.EMBEDDING_MODEL — it
+used to be hardcoded here, which quietly made the config constant a lie.
 
 Falls back to simple keyword overlap when --mock-embeddings is used.
 """
@@ -12,7 +13,14 @@ import logging
 import math
 from dataclasses import dataclass
 
+from config import EMBEDDING_MODEL
+
 logger = logging.getLogger(__name__)
+
+# Vectors are requested at a fixed width so cosine similarity is defined
+# across everything in one cache. This does NOT make vectors from different
+# models comparable — same width, different space. See R11.
+EMBEDDING_DIMENSIONS = 768
 
 
 @dataclass
@@ -44,8 +52,7 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
 
 def _get_embedding(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[float]:
     """
-    Get embedding vector from Gemini API.
-    Uses gemini-embedding-001 (free tier, text-only).
+    Get embedding vector from Gemini API, using config.EMBEDDING_MODEL.
 
     Args:
         text: Text to embed (max 2048 tokens).
@@ -58,11 +65,11 @@ def _get_embedding(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[flo
         client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
         result = client.models.embed_content(
-            model="gemini-embedding-001",
+            model=EMBEDDING_MODEL,
             contents=text[:8000],  # Safety truncation
             config={
                 "task_type": task_type,
-                "output_dimensionality": 768,  # Smaller = faster, still high quality
+                "output_dimensionality": EMBEDDING_DIMENSIONS,
             },
         )
 

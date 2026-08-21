@@ -159,78 +159,6 @@ actually appears.
 
 ---
 
-## Q4. Should we integrate Claude API for generation alongside Gemini?
-
-**Status:** More urgent than before. Q5's quota issue makes Claude
-fallback meaningfully valuable, not just nice-to-have.
-
-Claude Max gives chat access but not API credits — API is billed
-separately at console.anthropic.com.
-
-**Where Claude could plug in:**
-- Embedding (Analysis): no — Claude has no public embedding API. Keep Gemini.
-- Bullet tailoring (Generation): plausible — Claude Sonnet handles strict
-  multi-rule prompts well. Less critical now that R6 removed strict-numerical
-  constraints from the LLM's job, but still useful for quality.
-- **Fallback for quota exhaustion:** when Gemini 2.5 and 2.0 are both
-  rate-limited, current behavior is "fall back to mock and fail." Adding
-  Claude as a third fallback would mean the resume gets generated anyway.
-
-**Cost math at current volumes:** Sonnet 4.6 = ~$0.024 per resume. At 10
-resumes/day = ~$7/month. Cheap enough that cost isn't the deciding factor.
-
-**Tentative direction:** Defer to Step 8.5 (multi-provider LLM
-abstraction). Refactor generation calls behind a provider-agnostic
-`tailor_with_llm()` interface. Add Claude as a third fallback after Gemini
-2.5 → 2.0. Quality-vs-cost ordering decided per-call.
-
-**Open sub-questions:**
-- Is Claude's output meaningfully better on a few representative examples?
-  Worth a 30-min investigation with the $5 free credits before committing
-  to integration work.
-- Multi-provider fallback chain order: prefer cost (Gemini → Claude) or
-  prefer quality (Claude → Gemini)?
-- Should the fallback be silent (just use Claude when Gemini 429s) or
-  surface to the user ("Gemini quota out, used Claude for this resume")?
-
----
-
-## Q5. How do we keep Gemini reliable when it 503s or runs out of quota?
-
-**Status:** Mostly handled at the failure-mode level, but quota
-exhaustion is a real production issue we've now hit.
-
-The current fallback chain is `gemini-2.5-flash → gemini-2.0-flash → mock`.
-Mock fallback produces invalid output that fails validation, so the resume
-ends up in `needs_review/` rather than the final outputs directory.
-
-**What we've observed:**
-- **503 errors** (May 2026): Gemini service hiccups happen mid-pipeline.
-  Pipeline doesn't crash — it falls through to the next model, then mock.
-  Resume goes to needs_review.
-- **429 errors / quota exhaustion** (May 2026): Free-tier Gemini has daily
-  caps. During heavy development sessions, we exhaust the cap mid-run.
-  Both 2.5 and 2.0 share quota, so both fall through to mock together.
-
-**Current behavior:** Pipeline doesn't crash on either failure mode,
-but the affected resumes are unusable until quota resets or service
-recovers. With the `--input` replay flag, you can rerun Generation later
-without paying for Discovery/Enrichment/Analysis again.
-
-**Open sub-questions:**
-- Should the fallback include another real LLM (Claude) so we don't lose
-  output to transient or quota issues? See Q4.
-- Should we add automatic retry with longer exponential backoff before
-  falling back to a different provider? Current retry waits ~30-60s
-  which isn't enough for quota recovery (resets daily).
-- Should `needs_review/` resumes be auto-retried on the next pipeline run?
-  Could be a `--retry-needs-review` flag.
-- Should we surface a "quota nearly exhausted" warning before starting
-  Generation, so the user can choose to defer? Hard to predict cleanly
-  without an explicit quota-check API call.
-
----
-
 ## Q6. How does the system handle very long master bullets?
 
 **Status:** Working but fragile.
@@ -306,6 +234,133 @@ there's an actual deployment target.
 
 ---
 
+## Q9. When do we migrate off gemini-embedding-001?
+
+**Status:** Open. Not urgent, but on borrowed time.
+
+`gemini-embedding-001` passed its listed shutdown date of 2026-07-14 and is
+**still serving** — confirmed by live probe on 2026-08-20. Google's
+deprecation page states listed dates are the *earliest possible* retirement
+dates and that they notify before pulling an endpoint. So there's no
+emergency, but there's no guarantee either, and R10's lesson applies in
+reverse: the listing said one thing and reality said another.
+
+`gemini-embedding-2` is GA and visible under the current key.
+`tools/resume/embedding_scorer.py` is the only call site.
+
+*Correction (August 2026):* this entry originally said `EMBEDDING_MODEL` in
+`config.py` was "already the single point of change". It wasn't — the call
+site hardcoded `"gemini-embedding-001"` and never read the constant, so
+editing `config.py` would have changed nothing while looking like it had.
+Fixed alongside R11; the constant is now actually wired through.
+
+**Why this isn't a one-line swap:**
+- A different embedding model almost certainly means different vector
+  dimensions, invalidating every cached embedding.
+- Full cache rebuild is 18+ resume components plus every JD — a real quota
+  hit in one session.
+- Similarity scores shift, so the tuned `scoring_threshold` and the
+  component-selection behaviour both need re-validation. Analysis output
+  could change meaningfully, and that propagates into which jobs get resumes.
+
+**Open sub-questions:**
+- ~~Should the embedding cache key include the model name?~~ **Done
+  (August 2026)** — see R11. Added ahead of the migration rather than during
+  it, since a cross-model cache hit is a silent correctness bug, not an
+  error.
+- Migrate proactively, or wait until 001 actually 404s? Waiting means the
+  pipeline breaks mid-run at an unpredictable time. Proactive means spending
+  quota and re-validating scoring on our own schedule.
+- Can we compare 001 vs 2 rankings on the same JD set before committing?
+  Needs both embedded, which doubles the cost of the test.
+
+---
+
+## Q10. Should Discovery filter out clearance-gated employers?
+
+**Status:** Open. Surfaced 2026-08-20.
+
+A generation run replaying May analysis put "Associate Software Engineer" at
+Innovative Defense Technologies (IDT) in the top 2. IDT is a defense
+contractor; roles there are near-universally gated on US citizenship and
+often an active security clearance.
+
+`job_preferences.citizenship_restrictions` exists for exactly this and did
+not catch it. Unknown which is true:
+- The JD stated the restriction and the filter didn't match the phrasing
+- The restriction was buried somewhere Enrichment didn't scrape
+- The JD genuinely doesn't state it — common, since it's implied by the
+  employer
+
+The third case is the interesting one, because no amount of JD keyword
+filtering solves it. It needs employer-level knowledge, not JD-level.
+
+**Open sub-questions:**
+- Is an employer denylist (defense primes, cleared-work contractors) the
+  right mechanism, or does that overfit to one user's visa status?
+- This is profile-derived in the Q1/Step 7 sense — a user's visa status
+  should drive it automatically rather than being hand-listed per user.
+- **Related, and worth not losing:** R2 bet that a wider pool plus funnel
+  filtering removes the need for hand-tuned `exclude_keywords`. That bet held
+  for wrong-*level* jobs — a senior role scores low against a new-grad
+  profile, which is why DICK'S SE II fell out on its own. It does **not**
+  hold for wrong-*eligibility* jobs, because a clearance-gated role can be a
+  genuinely excellent semantic match and score high on merit. Different
+  failure class, needs a different mechanism.
+
+---
+
+## Q11. Discovery parses the "↳" continuation glyph as a company name
+
+**Status:** Open. Surfaced 2026-08-21 in a live run.
+
+The GitHub new-grad repos use "↳" in their markdown tables to mean "same
+employer as the row above". `search_github_newgrad` takes the cell
+literally, so the glyph propagates as the company all the way to output.
+The Aug 21 run produced `Yash_Pathak__Software_Engineer_New.tex` — note the
+empty company slot in the filename — and a summary line reading
+`**↳** - Software Engineer, New Grad`. Two of twenty discovered jobs hit it.
+
+The resume content itself is unaffected (company name isn't used in the
+document body), so this is a labelling and file-naming defect rather than a
+quality one. It still means you can't tell who you'd be applying to.
+
+Fix is a parser change: carry the previous row's company forward when the
+cell is a continuation marker.
+
+**Open sub-questions:**
+- Does the same substitution appear in the location column?
+- Are there other continuation markers in those tables besides "↳"?
+- Should a job whose company can't be resolved be dropped at Discovery
+  rather than flowing through with a placeholder?
+
+---
+
+## Q12. Where do tests live?
+
+**Status:** Open. No test suite exists.
+
+The repo has no `tests/` directory and no test dependency in
+`requirements.txt`. The PDF work (R8, R9) produced an 11-assertion
+self-check for `pdf_builder` that runs with or without a LaTeX install by
+standing in a stub pdflatex — but it lives outside the repo, because there
+was no convention to put it in.
+
+That check earned its keep: it caught the wrapped-log page-count bug
+described in R9's follow-up, which had silently disabled the one-page gate
+for most resumes. Worth establishing the convention.
+
+**Open sub-questions:**
+- Plain `unittest` (stdlib, no new dependency) or `pytest` (nicer, one more
+  line in requirements)?
+- What gets covered first? `bullet_compress.py` and `bullet_fit.py` are the
+  obvious candidates — pure, deterministic, and directly responsible for
+  output quality. `job_filter` and `location_matcher` are close behind.
+- Does a test suite that needs pdflatex belong in CI, or should the LaTeX
+  ones stay opt-in?
+
+---
+
 # Resolved questions
 
 ## R1. Should we use a synthetic john_doe profile for the public repo?
@@ -353,8 +408,15 @@ in the funnel instead of winning a top-3 slot. The mechanism works.
 
 ## R3. Do we need Claude API integration in the current pipeline?
 
-**Decision:** No immediate need, but raised priority after Q5 quota issues
-(May 2026). Defer to Step 8.5.
+**Decision:** No (May 2026). Superseded by OOS5 (August 2026) — Claude
+integration is out of scope entirely on the no-spend constraint.
+
+Step 8.5 shipped without it. The reliability problem this entry expected
+Claude to solve was addressed by the model chain repoint and the prompt-hash
+response cache instead — see R10. The "$5 free credits" investigation below
+was never run and is now moot.
+
+The rest of this entry is kept as written, for the record.
 
 Current Gemini setup is working when quota is available. The repair loop
 handles validation failures. The architectural bottleneck is reliability
@@ -364,6 +426,7 @@ Adding Claude would be valuable for:
 - Step 8.5: multi-provider fallback (reliability when Gemini 429s — now
   a real-world issue, not just hypothetical)
 - Step 11: Golden Rules enforcement (quality on strict multi-rule prompts)
+  (Also blocked by the no-spend constraint — see OOS5.)
 
 Worth a 30-min investigation with $5 free API credits before committing
 to integration work.
@@ -565,6 +628,128 @@ regression — they already fail content validation for other reasons.
 
 ---
 
+## R10. How do we keep Gemini reliable when it 503s or runs out of quota?
+
+**Decision:** Done (August 2026). Step 8.5, zero-cost version — no second
+provider.
+
+Three months elapsed between the May 21 commit and this work. In that window
+Google retired two of the models the pipeline depended on, and Q5's
+documented failure mode silently changed shape into something worse.
+
+**What was actually broken:**
+- `gemini-2.0-flash` shut down June 1 2026. It was the second link in the
+  fallback chain, so the chain had effectively been a chain of one since June.
+- Worse than a dead link: `_call_gemini_json` only continued on quota errors
+  and re-raised everything else. A 404 from the retired model turned "2.5
+  hit quota" from a soft fall-through-to-mock into a **hard raise**. Q5's
+  claim that "the pipeline doesn't crash on either failure mode" had stopped
+  being true.
+- `retry_with_backoff` re-raises anything that isn't a rate-limit error, so
+  503s propagated instantly with no retry — despite Q5 recording 503 handling
+  as working.
+- Q5's claim that 2.5 and 2.0 "share quota" was also wrong. Free-tier quota
+  is per-model, which is what makes a fallback chain worth having at all.
+
+**What changed:**
+- Chain repointed to `gemini-3.5-flash → gemini-3.1-flash-lite →
+  gemini-flash-lite-latest`. The floating `-latest` alias is deliberately
+  last: it silently re-points to new models, so output can shift between runs
+  for reasons invisible in a diff. Acceptable as a safety net, not as a primary.
+- Model list moved into `config.py`. Google retired a model out from under
+  this project twice in one year; the list belongs in exactly one place.
+- `classify_api_error()` buckets four ways instead of two — quota / retired /
+  transient / fatal. Retired and transient fall through to the next model;
+  fatal still raises immediately so a bad key or malformed request isn't
+  masked behind a misleading quota message.
+- Retired models name themselves in the final exception, so the next
+  retirement costs a log line instead of a debugging session.
+- `scripts/check_models.py` probes live endpoints under the current API key.
+
+**Prompt-hash response cache (`tools/cache/llm_cache.py`):**
+The real fix for quota exhaustion as actually experienced. The quota was
+never dying from 10 resumes at 2–4 requests each — it was dying from
+re-running the same jobs all session during development. Keyed on prompt text
+only, not prompt+model, so a chain fall-through still hits cache; the
+producing model is recorded in the payload. `--no-cache` bypasses it, which
+matters when iterating on `prompt_builder.py`, where a stale hit would mask
+the change you just made.
+
+**Verified end-to-end (2026-08-20), 2 jobs from replayed May analysis:**
+- Both valid, 0 needs_review, `gemini-3.5-flash` on both, no fall-through
+- Re-run: 2 cache hits, **zero** `generateContent` requests
+- `--no-cache`: cache disabled, 2 fresh API calls, output regenerated
+- Bullet quality on 3.5-flash beat 2.5-flash in May — 12 unchanged /
+  0 compressed on job 1, i.e. the model hit the length zones unaided
+
+**Lesson worth keeping: `models.list()` is not authoritative.**
+`gemini-2.5-flash-lite` appeared in the listing with full `generateContent`
+support and 404s on a real call. It was in the first proposed chain and would
+have shipped as a dead second link, rediscovered at the next quota
+exhaustion. Google's own deprecation page also still listed it as alive until
+October 16. Only a live probe tells the truth — re-run
+`scripts/check_models.py` before any chain change.
+
+**Also still true from Q5, carried forward:**
+- `--retry-needs-review` is not built. It's worth more now than when Q5
+  raised it, because R9 sends resumes to needs_review for a mechanical,
+  fixable reason (page overflow) rather than a content failure.
+- A "quota nearly exhausted" pre-flight warning is still unbuilt and still
+  hard to do cleanly without an explicit quota-check API call. Lower value
+  now that the cache removes most dev-time burn.
+
+**Note:** `gemini-2.5-flash` has an announced shutdown of 2026-10-16 and is
+no longer in the chain. `gemini-3.6-flash`, `gemini-3.7-flash`, and
+`gemini-3-flash-preview` all probed alive but are unproven on this workload —
+promoting one over 3.5-flash needs evidence, not novelty.
+
+---
+
+## R11. Should the embedding cache key include the model name?
+
+**Decision:** Yes. Done (August 2026), ahead of the Q9 migration rather than
+during it.
+
+The cache keyed entries on text alone. Switching `EMBEDDING_MODEL` would
+therefore have served vectors produced by the *old* model for text that was
+already cached, silently mixing two vector spaces in one similarity
+computation. That is not an error — it is a plausible-looking ranking that
+is quietly wrong, and it would have surfaced as "scoring got weird after the
+migration" with no obvious cause.
+
+Cheap to add now, expensive to debug later. Entries written by the previous
+scheme are ignored rather than deleted, so the change is reversible.
+
+**Found while implementing:** the call site hardcoded
+`model="gemini-embedding-001"` and never read `config.EMBEDDING_MODEL`. The
+constant existed but was decorative — a migration would have edited it,
+observed no change, and gone looking in the wrong place. Now wired through,
+which is what makes the cache guard meaningful in the first place.
+
+`EMBEDDING_DIMENSIONS = 768` is pinned at the call site, so vectors stay the
+same width across models. Worth being explicit that this does *not* make
+them comparable: same width, different space. Width was never the reason the
+guard is needed.
+
+**Implementation:** `EmbeddingCache(model=...)` takes the model as a
+constructor argument rather than importing config, matching `llm_cache.py`.
+The stored payload gains `embedding_model`; `get()` returns None when it
+differs from the current model, or when it's absent (a pre-R11 entry).
+Passing `model=None` keeps the old behaviour, so the guard is opt-in.
+
+The existing on-disk cache was backfilled with `gemini-embedding-001` — the
+value the call site hardcoded, so it is known with certainty — which avoids
+re-embedding 19 components for no reason on the next run.
+
+**Contrast with the LLM cache, which deliberately omits the model from its
+key (see R10).** The reasoning is opposite, not inconsistent: for generation,
+a fall-through to the next model in the chain *should* hit the cache, because
+any model in the chain is an acceptable producer of that bullet. For
+embeddings, a cross-model hit is a correctness bug, because vectors from
+different models are not comparable.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format
@@ -593,6 +778,28 @@ Generating a resume is the deliverable. The system does not submit
 applications, log into job portals, or fill out application forms.
 Those involve credentialing, captchas, ToS issues, and per-employer
 custom flows that are outside this project's scope.
+
+---
+
+## OOS5. Claude API integration
+
+**Decision:** No (August 2026). Hard constraint: no money spent on this
+project.
+
+Claude Max gives chat access, not API credits — API usage is billed
+separately at console.anthropic.com. Any integration costs real money, even
+at Sonnet's ~$0.024/resume. That settles it regardless of output quality, so
+the "is Claude meaningfully better on a few examples?" investigation Q4
+proposed is moot and was never run.
+
+This also kills the multi-provider abstraction Q4 proposed for Step 8.5. A
+provider-agnostic `call_llm_json()` with exactly one provider behind it is
+speculative generality. If a genuinely free second provider ever becomes
+worth adding, build the abstraction then — at the point where there's a
+second thing to put behind it.
+
+The reliability problem Q4 existed to solve was solved without a second
+provider. See R10.
 
 ---
 
