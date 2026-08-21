@@ -42,7 +42,8 @@ outputs/
 
 # Cache (run-generated, not source)
 cache/
-.cache/          # LLM prompt-hash response cache
+# LLM prompt-hash response cache
+.cache/
 
 # Master resumes - personal data
 data/master_resumes/*.tex
