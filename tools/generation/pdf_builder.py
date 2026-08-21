@@ -259,9 +259,15 @@ def _read_page_count(log_path: Path) -> int:
     """
     Page count of the produced PDF, from the log's "Output written" line.
 
-    Returns 0 when it can't be determined. Whitespace is flattened before
-    matching because pdflatex hard-wraps the log at ~79 columns, which
-    routinely splits "(1 page, 112672 bytes)" across two lines.
+    Returns 0 when it can't be determined.
+
+    Whitespace is flattened before matching because pdflatex hard-wraps the
+    log at ~79 columns, which routinely splits "(1 page, 112672 bytes)" in
+    half. Where the break lands depends on the filename length, so the
+    pattern has to tolerate whitespace *inside* the parenthetical too — a
+    long name pushes the wrap to just after the "(", flattening to "( 1 page".
+    Getting this wrong is quiet: pages reads 0 and the one-page gate in
+    generation_agent stops firing for exactly the longest-named resumes.
     """
     if not log_path.exists():
         return 0
@@ -272,7 +278,7 @@ def _read_page_count(log_path: Path) -> int:
         return 0
 
     flat = re.sub(r'\s+', ' ', text)
-    match = re.search(r'Output written.*?\((\d+) page', flat)
+    match = re.search(r'Output written.*?\(\s*(\d+)\s+page', flat)
 
     return int(match.group(1)) if match else 0
 
