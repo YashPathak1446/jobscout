@@ -31,6 +31,13 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.cache.rate_limiter import retry_with_backoff, RateLimitError
+from tools.cache.llm_cache import LLMCache
+from config import (
+    GENERATION_MODELS,
+    LLM_CACHE_DIR,
+    LLM_CACHE_ENABLED,
+    classify_api_error,
+)
 
 from tools.profile import load_profile, UserProfile
 from tools.resume import ResumeParser
@@ -53,27 +60,44 @@ class GenerationAgent:
     5. Saves to outputs directory
     """
     
-    def __init__(self, profile: UserProfile, resume_parser: ResumeParser, mock_mode: bool = False):
+    # Drop-in replacement for GenerationAgent.__init__ in agents/generation_agent.py
+# Replace from "def __init__" down to (but not including) "def _escape_latex".
+
+    def __init__(self, profile: UserProfile, resume_parser: ResumeParser,
+                 mock_mode: bool = False, use_cache: bool = True):
         """
         Initialize Generation Agent.
-        
+
         Args:
             profile: User profile with formatting preferences
             resume_parser: ResumeParser with master resume
             mock_mode: If True, use mock tailoring (no Gemini API calls)
+            use_cache: If False, bypass the LLM response cache and force
+                       fresh API calls (wired to the --no-cache CLI flag)
         """
         self.profile = profile
         self.resume_parser = resume_parser
         self.mock_mode = mock_mode
-        
+
+        self.llm_cache = LLMCache(
+            cache_dir=LLM_CACHE_DIR,
+            enabled=LLM_CACHE_ENABLED and use_cache,
+        )
+        self.last_model_used = None
+
         logger.info("📝 Initializing Generation Agent...")
         logger.info(f"Profile: {profile.personal_info.name}")
         logger.info(f"Mock mode: {mock_mode}")
-        
+        logger.info(f"Cache: {'enabled' if self.llm_cache.enabled else 'disabled'}")
+
+        # Catch a missing key up front. Without this, a keyless run goes down
+        # the real path, _call_gemini_json raises, and _gemini_tailor's bare
+        # except silently degrades to mock — producing needs_review files with
+        # no visible cause.
         if not mock_mode and not os.getenv("GOOGLE_API_KEY"):
             logger.warning("⚠️  GOOGLE_API_KEY not set, will use mock mode")
             self.mock_mode = True
-        
+
         logger.info("✅ Ready to generate resumes")
     
     
@@ -295,103 +319,6 @@ class GenerationAgent:
     # =========================================================================
     # BULLET BUDGET COMPUTATION
     # =========================================================================
-
-    def _compute_bullet_budgets(self, analysis: Dict) -> Dict:
-        """
-        Compute per-component bullet budgets from analysis scores.
-
-        Uses rank-based allocation:
-        1. Every selected component starts with 1 bullet.
-        2. Remaining bullets go to the highest-scoring components first.
-        3. Per-component and global caps are enforced.
-
-        The algorithm is fully dynamic — it uses only component count and
-        relevance scores, never component names or user-specific rules.
-
-        Args:
-            analysis: Full analysis dict containing 'selected_components'
-                      and 'score' with per-component scores.
-
-        Returns:
-            Dict with structure:
-                {
-                    "experiences": {"exp_id": bullet_count, ...},
-                    "projects":    {"proj_id": bullet_count, ...},
-                    "totals":      {"experiences": N, "projects": M, "overall": N+M}
-                }
-        """
-        selected = analysis.get("selected_components", {})
-        score_data = analysis.get("score", {})
-
-        exp_scores = score_data.get("experience_scores", {})
-        proj_scores = score_data.get("project_scores", {})
-
-        # Resolve selected IDs to canonical parser IDs
-        selected_exp_ids = [
-            self._resolve_to_canonical_exp(eid)
-            for eid in selected.get("experiences", [])
-        ]
-        selected_proj_ids = [
-            self._resolve_to_canonical_proj(pid)
-            for pid in selected.get("projects", [])
-        ]
-
-        num_exp = len(selected_exp_ids)
-        num_proj = len(selected_proj_ids)
-
-        # --- Compute global budgets from component counts ---
-        # These are layout constraints, not user-specific rules.
-        exp_budget_table = {1: 3, 2: 5, 3: 6, 4: 7}
-        proj_budget_table = {1: 3, 2: 5, 3: 6, 4: 7}
-
-        total_exp_budget = exp_budget_table.get(num_exp, num_exp * 2)
-        total_proj_budget = proj_budget_table.get(num_proj, num_proj * 2)
-
-        # Per-component caps
-        exp_max_per = 3
-        proj_max_per = 2 if num_proj >= 4 else 3
-
-        # --- Allocate experience bullets ---
-        exp_budgets = self._allocate_bullets(
-            component_ids=selected_exp_ids,
-            scores=exp_scores,
-            total_budget=total_exp_budget,
-            max_per_component=exp_max_per,
-        )
-
-        # --- Allocate project bullets ---
-        proj_budgets = self._allocate_bullets(
-            component_ids=selected_proj_ids,
-            scores=proj_scores,
-            total_budget=total_proj_budget,
-            max_per_component=proj_max_per,
-        )
-
-        actual_exp_total = sum(exp_budgets.values())
-        actual_proj_total = sum(proj_budgets.values())
-
-        budgets = {
-            "experiences": exp_budgets,
-            "projects": proj_budgets,
-            "totals": {
-                "experiences": actual_exp_total,
-                "projects": actual_proj_total,
-                "overall": actual_exp_total + actual_proj_total,
-            },
-        }
-
-        logger.info(
-            f"   📊 Bullet budget: {actual_exp_total} exp + "
-            f"{actual_proj_total} proj = {actual_exp_total + actual_proj_total} total"
-        )
-        for cid, count in exp_budgets.items():
-            short_id = cid.replace("exp_", "")[:25]
-            logger.info(f"      exp  {short_id}: {count} bullets")
-        for cid, count in proj_budgets.items():
-            short_id = cid.replace("proj_", "")[:25]
-            logger.info(f"      proj {short_id}: {count} bullets")
-
-        return budgets
 
     def _compute_bullet_budgets(self, analysis: Dict) -> Dict:
         """
@@ -761,42 +688,39 @@ Source bullets:
 
         return text
 
+
     def _call_gemini_json(self, prompt: str) -> Dict:
         """
         Call Gemini with model fallback chain and parse the response as JSON.
 
-        Tries models in priority order. Each model has its own daily quota
-        on the free tier, so falling back across models gives ~3x capacity.
-        Non-rate-limit errors are raised immediately.
+        Checks the prompt-hash cache first. On a miss, tries models from
+        config.GENERATION_MODELS in order — free-tier quota is per-model, so
+        each fallback adds real capacity.
+
+        Error handling distinguishes four cases (see config.classify_api_error):
+        quota and retired models fall through to the next entry, transient
+        failures retry before falling through, and anything else raises.
         """
         from google import genai
 
+        cached = self.llm_cache.get(prompt)
+        if cached is not None:
+            self.last_model_used = "cache"
+            return cached
+
         client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-        # Models in priority order: best quality first, highest-quota last.
-        # Free tier daily limits (as of May 2026):
-        #   gemini-2.5-flash:     250 RPD  (best quality, "thinking" mode)
-        #   gemini-2.0-flash:   1,500 RPD  (high volume fallback)
-        # Dropped: gemini-1.5-flash (legacy/discontinued),
-        #          gemini-3-flash-preview (only 100 RPD)
-        models = [
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
-        ]
-
         last_error = None
+        retired_models = []
 
-        for model in models:
+        for model in GENERATION_MODELS:
             def make_api_call(m=model):
-                return client.models.generate_content(
-                    model=m,
-                    contents=prompt,
-                )
+                return client.models.generate_content(model=m, contents=prompt)
 
             try:
                 response = retry_with_backoff(
                     make_api_call,
-                    max_retries=1,  # 1 retry per model, then fall back
+                    max_retries=1,   # 1 retry per model, then fall back
                     base_delay=2.0,
                 )
 
@@ -805,28 +729,57 @@ Source bullets:
                 logger.debug(f"   📝 Raw response length: {len(response_text)} chars")
 
                 cleaned_text = self._strip_json_markdown(response_text)
-                return json.loads(cleaned_text)
+                parsed = json.loads(cleaned_text)
+
+                # Only cache after a successful parse — caching an unparseable
+                # response would pin the failure across every future run.
+                self.llm_cache.set(prompt, parsed, model)
+                self.last_model_used = model
+
+                return parsed
+
+            except json.JSONDecodeError as e:
+                # The model answered, it just didn't answer in JSON. Retrying a
+                # different model is reasonable; caching is not.
+                logger.warning(f"   ⚠️  {model} returned unparseable JSON: {e}")
+                last_error = e
+                continue
 
             except Exception as e:
-                error_msg = str(e)
-                is_quota = (
-                    '429' in error_msg
-                    or 'RESOURCE_EXHAUSTED' in error_msg
-                    or 'quota' in error_msg.lower()
-                    or 'rate limit exceeded' in error_msg.lower()  # from our RateLimitError
-                    or isinstance(e, RateLimitError)
-                )
+                kind = classify_api_error(e)
 
-                if is_quota:
+                if kind == 'retired':
+                    logger.error(
+                        f"   ☠️  {model} is retired (404). Update GENERATION_MODELS "
+                        f"in config.py — run scripts/check_models.py to see what's live."
+                    )
+                    retired_models.append(model)
+                    last_error = e
+                    continue
+
+                if kind == 'quota':
                     logger.warning(f"   ⚠️  {model} quota exhausted, trying next model...")
                     last_error = e
                     continue
 
-                # Non-rate-limit error — fail immediately
+                if kind == 'transient':
+                    logger.warning(f"   ⚠️  {model} unavailable (503/500), trying next model...")
+                    last_error = e
+                    continue
+
+                # 'fatal' — bad key, malformed request, a real bug. Falling
+                # through would mask it behind a misleading quota message.
                 raise
 
+        if retired_models:
+            raise RateLimitError(
+                f"All models exhausted. RETIRED MODELS IN CONFIG: "
+                f"{', '.join(retired_models)} — run scripts/check_models.py and update "
+                f"GENERATION_MODELS in config.py. Last error: {last_error}"
+            )
+
         raise RateLimitError(
-            f"All models exhausted ({', '.join(models)}). "
+            f"All models exhausted ({', '.join(GENERATION_MODELS)}). "
             f"Wait for quota reset or upgrade to paid tier. "
             f"Last error: {last_error}"
         )
@@ -1535,6 +1488,11 @@ def main():
         action="store_true",
         help="Use mock for generation only (keep real discovery/analysis)"
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass the LLM response cache (forces fresh API calls)"
+    )
     
     args = parser.parse_args()
     
@@ -1601,7 +1559,8 @@ def main():
     # Generate resumes
     print("📝 Running Generation Agent...")
     mock_gen = args.mock or args.mock_generation
-    generator = GenerationAgent(profile, resume_parser, mock_mode=mock_gen)
+    generator = GenerationAgent(profile, resume_parser,
+                            mock_mode=mock_gen, use_cache=not args.no_cache)
     results = generator.generate_resumes(
         analysis_results[:args.max_jobs],
         output_dir=args.output
