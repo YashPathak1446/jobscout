@@ -41,9 +41,12 @@ env/
 outputs/
 
 # Cache (run-generated, not source)
-cache/
+# Leading slash matters: a bare "cache/" matches at ANY depth, which silently
+# swallowed tools/cache/ — llm_cache.py never got committed and every fresh
+# clone failed to import the generation agent. Anchor these to the repo root.
+/cache/
 # LLM prompt-hash response cache
-.cache/
+/.cache/
 
 # Master resumes - personal data
 data/master_resumes/*.tex

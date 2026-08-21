@@ -750,6 +750,38 @@ different models are not comparable.
 
 ---
 
+## R12. Why was `tools/cache/llm_cache.py` missing from the repo?
+
+**Decision:** Fixed (August 2026). `.gitignore` patterns for generated
+directories must be anchored with a leading slash.
+
+`.gitignore` contained a bare `cache/`, intended for the run-generated
+`cache/` directory at the repo root. A pattern without a leading slash
+matches at *any* depth, so it also matched `tools/cache/` — a source
+directory.
+
+The four modules already tracked there kept working, because gitignore does
+not affect files git is already tracking. But `llm_cache.py`, added in the
+Aug 20 commit, was silently never staged. `git status` never showed it.
+`generation_agent.py` imports it at line 34.
+
+**Consequence:** every fresh clone of the public repo raised
+`ModuleNotFoundError: No module named 'tools.cache.llm_cache'` on any run.
+The project was broken for everyone except the author, who had the file on
+disk, for as long as the commit was public. Confirmed by cloning the repo
+into a temp directory and importing the module.
+
+**Fix:** `/cache/` and `/.cache/`, anchored to the repo root, plus committing
+the missing file.
+
+**Lesson worth keeping:** a working tree is not evidence that a repo works.
+Anything that changes what is or isn't tracked — a new ignore rule, a
+restructure, a history rewrite — deserves a throwaway clone and an import
+check. This one cost nothing to find once looked for, and was invisible from
+inside the working copy.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format
