@@ -109,6 +109,17 @@ This becomes solvable once PDF generation is in place (Step 8). With
 pdflatex available, we can measure actual rendered line counts and adjust
 budgets to fit the page.
 
+**Unblocked by R8 (August 2026).** PDF generation now runs in-pipeline, so
+rendered output is measurable for the first time. First observation from the
+Julius AI resume: the page bottoms out around 85% full — three experiences,
+four projects, and a skills block leave roughly an inch of dead space at the
+bottom. The count-based allocator is under-filling. Two components (AI
+Ensured, Search Engine) got one bullet each where the page had room for two.
+
+Next concrete step: measure fill from a trial compile (the .log reports the
+final page's content height) and feed it back into
+`_allocate_with_importance()`.
+
 **Open sub-questions:**
 - Should `SUBSTANTIVE_MIN = 60` be raised for experiences? Some compressed
   experience bullets at exactly 60 chars feel skeletal.
@@ -239,30 +250,29 @@ looks for in JDs.
 - Should we use embedding similarity for "near-miss" matches (e.g., JD
   says "K8s", resume says "Kubernetes")? Adds complexity but catches more.
 
----
+## Q8b. Where does pdflatex run once this is a web app?
 
-## Q8. How do output formats work (PDF, DOCX) once we add them?
+**Status:** Open, but not urgent — local compilation works (R8).
 
-**Status:** Phase 3 work. Architecturally clear.
+R8 solved PDF generation for the local CLI by shelling out to a locally
+installed pdflatex. That doesn't survive the move to a hosted app: you can't
+ask a web user to install MiKTeX.
 
-PDF generation via `pdflatex` subprocess is well-understood. After each
-`.tex` is written by Generation, run `pdflatex` and produce a `.pdf`
-alongside. Requires LaTeX installed locally (MiKTeX on Windows, TeX Live
-elsewhere) or a Docker container for the eventual web app.
+**Options:**
+- **Containerized server-side.** Ship a Dockerfile with TeX Live installed,
+  compile in the container. Obvious answer, but a full TeX Live image is
+  ~4GB (`texlive-latex-extra` trims it to roughly 1GB).
+- **A LaTeX-as-a-service API.** Removes the ops burden, adds a dependency
+  and a per-compile cost.
+- **Client-side WASM** (e.g. SwiftLaTeX). No server cost, but a large
+  initial download and a narrower package set.
 
-DOCX output is much harder — needs a separate template system built with
-`python-docx`, and a different prompt structure since LaTeX commands
-(`\textbf{}`, `\emph{}`) don't translate. Probably not worth the effort
-for v1.
-
-**Tentative direction:** PDF in Step 8. DOCX deferred indefinitely until
-a real user asks for it.
+**Tentative direction:** containerized, with a trimmed TeX Live. Defer until
+there's an actual deployment target.
 
 **Open sub-questions:**
-- Where does pdflatex run for the eventual web app? Containerized
-  server-side seems like the obvious answer.
-- Should we ship a Dockerfile with the repo so users don't need to install
-  LaTeX locally?
+- Should we ship a Dockerfile now so contributors don't need local LaTeX,
+  even before there's a web app?
 
 ---
 
@@ -453,6 +463,45 @@ then slices to `max_jobs` at the very end.
 Generation didn't complete during the test run due to Gemini quota
 exhaustion (Q5), but the one Gemini call that succeeded (Neuberger)
 behaved as expected with the fitter from R6.
+
+---
+
+## R8. Should Generation compile PDFs, and how?
+
+**Decision:** Done (August 2026). In-pipeline `pdflatex` subprocess, with a
+graceful skip when no LaTeX toolchain exists.
+
+Answers the PDF half of the old Q8. DOCX stays out of scope (OOS1).
+
+**Implementation:**
+- `tools/generation/pdf_builder.py` — standalone compile layer. Returns a
+  `PdfResult` with status `ok` / `skipped` / `failed` / `timeout`, and never
+  raises, so one bad resume can't kill a batch.
+- `find_pdflatex()` checks PATH, then the default install dirs. This turned
+  out to matter: MiKTeX's per-user install puts the binary in
+  `%LOCALAPPDATA%\Programs\MiKTeX\miktex\bin\x64` and leaves it off PATH.
+- MiKTeX gets `--enable-installer`, because a Basic install lacks `titlesec`
+  and `marvosym` and would otherwise open a GUI prompt and hang the
+  subprocess until the timeout.
+- Reruns only when the log asks (`Rerun to get...`), latexmk-style. hyperref
+  writes its `.out` bookmark file during pass one, so pass one emits a PDF
+  with no outline. Capped at 2 passes.
+- Aux files (`.aux`, `.log`, `.out`, ...) are cleaned up after each compile.
+- `--no-pdf` on both the orchestrator and generation-agent CLIs.
+- needs_review files get compiled too — a rendered PDF is usually the
+  fastest way to see what's wrong with one.
+
+**Verified (August 2026), MiKTeX 25.12:**
+- Both real Aug-20 resumes compile clean: 1 page, `%PDF-1.5`, ~110KB, 1.2s
+  for two passes. Visual check of the Julius AI resume confirms the template
+  renders correctly — header links live, all sections intact.
+- Mock pipeline: 3/3 compiled, no aux litter.
+- Pre-install, the same code path logged a warning and wrote `.tex` only —
+  the degradation path works, which is what makes this safe to leave on by
+  default.
+
+**Still open (moved to Q8b):** where pdflatex runs for the eventual web app,
+and whether to ship a Dockerfile.
 
 ---
 

@@ -62,6 +62,7 @@ class JobScoutOrchestrator:
         mock_embeddings: bool = False,
         input_file: Optional[str] = None,
         max_resumes: Optional[int] = None,
+        generate_pdf: bool = True,
     ):
         """
         Initialize orchestrator.
@@ -79,6 +80,8 @@ class JobScoutOrchestrator:
             max_resumes: Cap on resumes generated per run (the funnel cut). When
                 set, only the top-K jobs by analysis score get resumes. Defaults
                 to profile.agent_preferences.max_jobs_to_generate.
+            generate_pdf: If True, compile each generated .tex to PDF. Degrades
+                to .tex-only when no pdflatex is installed.
         """
         self.profile_name = profile_name
         self.checkpoint = checkpoint
@@ -87,6 +90,7 @@ class JobScoutOrchestrator:
         self.mock_embeddings = mock_embeddings or mock_mode
         self.input_file = input_file
         self.max_resumes = max_resumes
+        self.generate_pdf = generate_pdf
         
         # Load profile
         logger.info(f"📋 Loading profile: {profile_name}")
@@ -367,6 +371,7 @@ class JobScoutOrchestrator:
             self.profile,
             gen_parser,
             mock_mode=mock_gen,
+            generate_pdf=self.generate_pdf,
         )
 
         # Pass output_dir (not output_path) — generation agent adds
@@ -381,7 +386,10 @@ class JobScoutOrchestrator:
         valid = sum(1 for r in results if r.get('status') == 'valid')
         review = sum(1 for r in results if r.get('status') == 'needs_review')
         failed = sum(1 for r in results if r.get('status') == 'failed')
+        pdfs = sum(1 for r in results if r.get('pdf_path'))
         logger.info(f"✅ Generation: {valid} valid, {review} needs review, {failed} failed")
+        if self.generate_pdf:
+            logger.info(f"📄 PDFs compiled: {pdfs}")
 
         self._save_state()
     
@@ -552,6 +560,9 @@ class JobScoutOrchestrator:
                     
                     if result.get('latex_path'):
                         f.write(f"   - File: `{Path(result['latex_path']).name}`\n")
+
+                    if result.get('pdf_path'):
+                        f.write(f"   - PDF: `{Path(result['pdf_path']).name}`\n")
                     
                     if validation.get('errors'):
                         f.write(f"   - Errors: {len(validation['errors'])}\n")
@@ -686,6 +697,11 @@ Examples:
         help="Use mock embeddings for analysis (saves embedding API calls)"
     )
     parser.add_argument(
+        "--no-pdf",
+        action="store_true",
+        help="Write .tex only, skip pdflatex compilation"
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging"
@@ -717,6 +733,7 @@ Examples:
         mock_embeddings=args.mock_embeddings,
         input_file=args.input,
         max_resumes=args.max_resumes,
+        generate_pdf=not args.no_pdf,
     )
     
     orchestrator.run(max_jobs=args.max_jobs)

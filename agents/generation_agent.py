@@ -43,6 +43,7 @@ from tools.profile import load_profile, UserProfile
 from tools.resume import ResumeParser
 from tools.generation import build_generic_tailoring_prompt, build_validation_repair_prompt, validate_resume_output
 from tools.generation.bullet_fit import fit_bullet, FitResult
+from tools.generation.pdf_builder import compile_pdf, detect_flavor, find_pdflatex
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -60,11 +61,9 @@ class GenerationAgent:
     5. Saves to outputs directory
     """
     
-    # Drop-in replacement for GenerationAgent.__init__ in agents/generation_agent.py
-# Replace from "def __init__" down to (but not including) "def _escape_latex".
-
     def __init__(self, profile: UserProfile, resume_parser: ResumeParser,
-                 mock_mode: bool = False, use_cache: bool = True):
+                 mock_mode: bool = False, use_cache: bool = True,
+                 generate_pdf: bool = True):
         """
         Initialize Generation Agent.
 
@@ -74,6 +73,8 @@ class GenerationAgent:
             mock_mode: If True, use mock tailoring (no Gemini API calls)
             use_cache: If False, bypass the LLM response cache and force
                        fresh API calls (wired to the --no-cache CLI flag)
+            generate_pdf: If True, compile each written .tex to PDF. Silently
+                          degrades to .tex-only when no pdflatex is installed.
         """
         self.profile = profile
         self.resume_parser = resume_parser
@@ -85,10 +86,27 @@ class GenerationAgent:
         )
         self.last_model_used = None
 
+        # Resolve pdflatex once per run, not once per resume: find_pdflatex
+        # walks the filesystem and detect_flavor spawns a subprocess, and
+        # neither answer changes mid-batch.
+        self.generate_pdf = generate_pdf
+        self._pdflatex = find_pdflatex() if generate_pdf else None
+        self._pdflatex_flavor = detect_flavor(self._pdflatex) if self._pdflatex else None
+
         logger.info("📝 Initializing Generation Agent...")
         logger.info(f"Profile: {profile.personal_info.name}")
         logger.info(f"Mock mode: {mock_mode}")
         logger.info(f"Cache: {'enabled' if self.llm_cache.enabled else 'disabled'}")
+
+        if not generate_pdf:
+            logger.info("PDF: disabled (--no-pdf)")
+        elif self._pdflatex:
+            logger.info(f"PDF: {self._pdflatex_flavor} at {self._pdflatex}")
+        else:
+            logger.warning(
+                "⚠️  PDF: pdflatex not found — writing .tex only. "
+                "Install MiKTeX (Windows) or TeX Live to get PDFs."
+            )
 
         # Catch a missing key up front. Without this, a keyless run goes down
         # the real path, _call_gemini_json raises, and _gemini_tailor's bare
@@ -174,6 +192,7 @@ class GenerationAgent:
                         "job": job,
                         "status": "failed",
                         "latex_path": None,
+                        "pdf_path": None,
                         "validation": {
                             "valid": False,
                             "errors": ["Tailoring failed: no tailored content returned"],
@@ -214,10 +233,15 @@ class GenerationAgent:
                 else:
                     logger.info(f"   ⚠️  Saved for review: {latex_path.name}")
 
+                # Compile needs_review files too — a rendered PDF is usually
+                # the fastest way to see what's wrong with one.
+                pdf_path = self._compile_to_pdf(latex_path)
+
                 results.append({
                     "job": job,
                     "status": status,
                     "latex_path": str(latex_path),
+                    "pdf_path": str(pdf_path) if pdf_path else None,
                     "validation": {
                         "valid": validation.valid,
                         "errors": validation.errors,
@@ -233,6 +257,7 @@ class GenerationAgent:
                     "job": job,
                     "status": "failed",
                     "latex_path": None,
+                    "pdf_path": None,
                     "validation": {
                         "valid": False,
                         "errors": [str(e)],
@@ -248,6 +273,7 @@ class GenerationAgent:
         review_count = sum(1 for r in results if r["status"] == "needs_review")
         failed_count = sum(1 for r in results if r["status"] == "failed")
         files_written = sum(1 for r in results if r.get("latex_path"))
+        pdf_count = sum(1 for r in results if r.get("pdf_path"))
 
         logger.info(
             f"✅ Generation complete: "
@@ -255,8 +281,40 @@ class GenerationAgent:
             f"{failed_count} failed, {files_written} files written"
         )
 
+        if self.generate_pdf and self._pdflatex:
+            logger.info(f"📄 PDFs compiled: {pdf_count}/{files_written}")
+
         return results
-    
+
+    def _compile_to_pdf(self, latex_path: Path):
+        """
+        Compile one written .tex to PDF, returning the .pdf Path or None.
+
+        A compile failure is logged and swallowed. The .tex is the real
+        deliverable of this stage — losing a whole batch because one resume
+        tripped over a LaTeX escape would be a bad trade.
+        """
+        if not self.generate_pdf or not self._pdflatex:
+            return None
+
+        result = compile_pdf(
+            latex_path,
+            binary=self._pdflatex,
+            flavor=self._pdflatex_flavor,
+        )
+
+        if result.success:
+            logger.info(f"   📄 PDF: {result.pdf_path.name}")
+            return result.pdf_path
+
+        logger.warning(f"   ⚠️  PDF failed for {latex_path.name}: {result.error}")
+        if result.log_excerpt:
+            first_line = result.log_excerpt.splitlines()[0]
+            logger.warning(f"      LaTeX said: {first_line}")
+
+        return None
+
+
     # =========================================================================
     # BULLET LENGTH FITTING (deterministic post-LLM compression)
     # =========================================================================
@@ -1493,7 +1551,12 @@ def main():
         action="store_true",
         help="Bypass the LLM response cache (forces fresh API calls)"
     )
-    
+    parser.add_argument(
+        "--no-pdf",
+        action="store_true",
+        help="Write .tex only, skip pdflatex compilation"
+    )
+
     args = parser.parse_args()
     
     # Load profile
@@ -1560,7 +1623,8 @@ def main():
     print("📝 Running Generation Agent...")
     mock_gen = args.mock or args.mock_generation
     generator = GenerationAgent(profile, resume_parser,
-                            mock_mode=mock_gen, use_cache=not args.no_cache)
+                            mock_mode=mock_gen, use_cache=not args.no_cache,
+                            generate_pdf=not args.no_pdf)
     results = generator.generate_resumes(
         analysis_results[:args.max_jobs],
         output_dir=args.output
@@ -1575,6 +1639,7 @@ def main():
     review_count = sum(1 for r in results if r.get("status") == "needs_review")
     failed_count = sum(1 for r in results if r.get("status") == "failed")
     files_written = sum(1 for r in results if r.get("latex_path"))
+    pdf_count = sum(1 for r in results if r.get("pdf_path"))
 
     dated_output_dir = Path(args.output) / datetime.now().strftime("%Y-%m-%d")
 
@@ -1582,6 +1647,7 @@ def main():
     print(f"Needs review: {review_count}")
     print(f"Failed: {failed_count}")
     print(f"Files written: {files_written}")
+    print(f"PDFs compiled: {pdf_count}")
     print(f"Output directory: {dated_output_dir}")
     print()
 
@@ -1612,6 +1678,9 @@ def main():
 
             if result.get("latex_path"):
                 print(f"   File: {Path(result['latex_path']).name}")
+
+            if result.get("pdf_path"):
+                print(f"   PDF: {Path(result['pdf_path']).name}")
 
             if validation.get("errors"):
                 print(f"   Errors: {len(validation['errors'])}")

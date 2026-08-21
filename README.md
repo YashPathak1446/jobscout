@@ -5,7 +5,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue)](https://python.org)
 [![Google ADK](https://img.shields.io/badge/Google%20ADK-1.0+-green)](https://google.github.io/adk-docs/)
-[![Gemini](https://img.shields.io/badge/Gemini-2.5%20Flash-orange)](https://ai.google.dev/)
+[![Gemini](https://img.shields.io/badge/Gemini-3.5%20Flash-orange)](https://ai.google.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
 ---
@@ -17,10 +17,11 @@ Four specialized agents coordinated by an orchestrator. Each run:
 1. **Discovers** new-grad / entry-level software roles from curated sources
 2. **Enriches** each posting by scraping the full JD from its apply URL
 3. **Analyzes** resume fit using Gemini embeddings + composite scoring
-4. **Generates** tailored LaTeX resumes that mirror each JD's terminology
+4. **Generates** tailored LaTeX resumes that mirror each JD's terminology,
+   then compiles each one to PDF
 
-The result is a directory of LaTeX resumes (PDF generation coming) ready to
-review and submit.
+The result is a directory of PDFs (with their `.tex` sources) ready to review
+and submit.
 
 ---
 
@@ -114,6 +115,7 @@ Generated resumes appear in `outputs/<date>/`.
 | `--mock-generation` | Mock generation only (saves Gemini calls) |
 | `--input <path>` | Replay analysis on a cached `enriched_jobs.json` (skips Discovery + Enrichment, useful for debugging) |
 | `--checkpoint` | Pause for review between stages |
+| `--no-pdf` | Write `.tex` only, skip pdflatex compilation |
 | `--verbose` | Verbose logging |
 
 ---
@@ -145,24 +147,39 @@ jobscout/
 ├── README.md
 ├── known_questions.md      # Open architectural questions
 ├── migration_plan.md       # Multi-user migration roadmap
-├── requirements.txt
-└── pyproject.toml
+└── requirements.txt
 ```
 
 ---
 
 ## Status
 
-This is an active project. Current state (May 2026):
+This is an active project. Current state (August 2026):
 
 - ✅ End-to-end pipeline working with real data
 - ✅ Multi-agent architecture with ADK
 - ✅ Composite component scoring (embeddings + keywords + importance + conditional triggers)
 - ✅ Validation + repair loop for generation failures
-- ✅ Persistent caches (embeddings, scraped JDs)
+- ✅ Deterministic bullet-length fitting (LLM writes, Python fits)
+- ✅ Persistent caches (embeddings, scraped JDs, LLM responses by prompt hash)
 - ✅ Multi-source discovery (GitHub repos active; Serper/Adzuna wired but inactive)
-- 🚧 Working on: PDF output, format-agnostic resume parsing (PDF/DOCX inputs), wider discovery sources
+- ✅ PDF output via pdflatex (skips cleanly when no LaTeX is installed)
+- 🚧 Working on: format-agnostic resume parsing (PDF/DOCX inputs), profile
+  auto-derivation from the master resume, wider discovery sources
 - 📋 Tracked in `known_questions.md`
+
+### PDF output
+
+Generation compiles each `.tex` to a `.pdf` beside it. This needs a LaTeX
+toolchain on PATH — MiKTeX on Windows, TeX Live elsewhere:
+
+```bash
+winget install --id MiKTeX.MiKTeX     # Windows
+sudo apt install texlive-latex-extra  # Debian/Ubuntu
+```
+
+Without one, the pipeline logs a warning and writes `.tex` only — nothing
+fails. Pass `--no-pdf` to skip compilation even when LaTeX is available.
 
 ---
 
