@@ -84,6 +84,7 @@ class PdfResult:
     error: Optional[str] = None
     log_excerpt: Optional[str] = None
     passes: int = 0
+    pages: int = 0
 
     @property
     def success(self) -> bool:
@@ -225,6 +226,7 @@ def compile_pdf(
 
     pdf_path = tex_path.with_suffix('.pdf')
     log_excerpt = _read_log_excerpt(log_path)
+    pages = _read_page_count(log_path)
 
     # Trust the artifact over the exit code: MiKTeX sometimes returns nonzero
     # for warnings it recovered from, and a PDF on disk means it recovered.
@@ -239,6 +241,7 @@ def compile_pdf(
             pdf_path=pdf_path,
             log_excerpt=log_excerpt,
             passes=passes,
+            pages=pages,
         )
 
     fallback = (proc.stdout or proc.stderr or "").strip()[-500:]
@@ -250,6 +253,28 @@ def compile_pdf(
         log_excerpt=log_excerpt or fallback or None,
         passes=passes,
     )
+
+
+def _read_page_count(log_path: Path) -> int:
+    """
+    Page count of the produced PDF, from the log's "Output written" line.
+
+    Returns 0 when it can't be determined. Whitespace is flattened before
+    matching because pdflatex hard-wraps the log at ~79 columns, which
+    routinely splits "(1 page, 112672 bytes)" across two lines.
+    """
+    if not log_path.exists():
+        return 0
+
+    try:
+        text = log_path.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return 0
+
+    flat = re.sub(r'\s+', ' ', text)
+    match = re.search(r'Output written.*?\((\d+) page', flat)
+
+    return int(match.group(1)) if match else 0
 
 
 def _needs_rerun(log_path: Path) -> bool:

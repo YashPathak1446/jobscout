@@ -164,6 +164,8 @@ This is an active project. Current state (August 2026):
 - ✅ Persistent caches (embeddings, scraped JDs, LLM responses by prompt hash)
 - ✅ Multi-source discovery (GitHub repos active; Serper/Adzuna wired but inactive)
 - ✅ PDF output via pdflatex (skips cleanly when no LaTeX is installed)
+- ✅ One-page enforcement — resumes that render to 2+ pages are demoted to
+  `needs_review/` rather than shipped
 - 🚧 Working on: format-agnostic resume parsing (PDF/DOCX inputs), profile
   auto-derivation from the master resume, wider discovery sources
 - 📋 Tracked in `known_questions.md`

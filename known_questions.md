@@ -110,15 +110,45 @@ pdflatex available, we can measure actual rendered line counts and adjust
 budgets to fit the page.
 
 **Unblocked by R8 (August 2026).** PDF generation now runs in-pipeline, so
-rendered output is measurable for the first time. First observation from the
-Julius AI resume: the page bottoms out around 85% full — three experiences,
-four projects, and a skills block leave roughly an inch of dead space at the
-bottom. The count-based allocator is under-filling. Two components (AI
-Ensured, Search Engine) got one bullet each where the page had room for two.
+rendered output is measurable for the first time.
 
-Next concrete step: measure fill from a trial compile (the .log reports the
-final page's content height) and feed it back into
-`_allocate_with_importance()`.
+**Measured headroom** (trial compiles that append synthetic 2-line bullets
+until the page spills):
+
+| Resume | Components | Bullets | Headroom |
+|---|---|---|---|
+| IDT | 3 exp, 3 proj | 12 | **2 bullets** |
+| Julius AI | 3 exp, 4 proj | 13 | **0 — at capacity** |
+
+So under-fill is real but resume-dependent, not systematic. The allocator
+hits its own budget tables exactly (6 exp / 7 proj) — there is no allocation
+bug. The tables are simply conservative in the 3-project case.
+
+*Correction:* an earlier eyeball estimate in this doc claimed the Julius AI
+page was ~85% full with an inch of dead space. That was wrong — it has zero
+headroom. Screenshots are not a measurement.
+
+**Method note, worth keeping.** `\pagetotal / \pagegoal` read out of the .log
+is *not* a reliable fill metric. It reported 99.1% for the IDT resume that
+had room for two more bullets, because the template's vertical glue is
+stretchable and TeX absorbs the difference. Only a trial compile that
+actually spills tells the truth. Any future page-aware allocator has to
+measure, not predict.
+
+**Half-solved by R9.** The inverse failure — a resume rendering to two pages
+— is now caught and demoted to needs_review. Filling headroom when it exists
+is still open.
+
+Remaining options for filling it:
+- **Over-ask and trim.** Ask the LLM for ~2 extra bullets, then drop the
+  lowest-priority ones via trial compiles until it fits one page. Follows
+  R6's split (LLM writes content, Python handles fitting) and costs extra
+  output tokens rather than extra API calls.
+- **Predict from a calibrated line model.** Rejected for now — the glue
+  finding above shows prediction is unreliable here.
+
+Deferred until live-run data across more resumes shows how often headroom
+actually appears.
 
 **Open sub-questions:**
 - Should `SUBSTANTIVE_MIN = 60` be raised for experiences? Some compressed
@@ -502,6 +532,36 @@ Answers the PDF half of the old Q8. DOCX stays out of scope (OOS1).
 
 **Still open (moved to Q8b):** where pdflatex runs for the eventual web app,
 and whether to ship a Dockerfile.
+
+---
+
+## R9. Should generation enforce a one-page limit?
+
+**Decision:** Yes. Done (August 2026).
+
+Until PDF generation landed (R8) there was no way to know how many pages a
+resume rendered to. Validation is content-based — bullet counts, character
+zones, metric preservation — and none of that sees layout. A two-page
+new-grad resume would have shipped silently as "valid".
+
+**Implementation:**
+- `PdfResult.pages`, read from the log's "Output written ... (N pages)" line.
+  Whitespace is flattened before matching because pdflatex hard-wraps the log
+  at ~79 columns and routinely splits that line in half.
+- After compiling, a resume that validated clean but renders to more than one
+  page is demoted to needs_review, with an explicit validation error saying
+  so. `_demote_to_review()` moves both the .tex and the .pdf, since both are
+  already written by the time we can measure them.
+- Resumes already heading to needs_review are left alone — no point demoting
+  twice.
+
+**Verified:** a known-good resume reports `pages=1`; the same resume with one
+synthetic bullet appended reports `pages=2`. The move helper was tested for
+both the with-PDF and no-PDF cases.
+
+**Note:** mock-mode resumes render to two pages, because mock tailoring
+ignores the bullet budgets entirely. That's a mock artifact, not a
+regression — they already fail content validation for other reasons.
 
 ---
 

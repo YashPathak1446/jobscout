@@ -193,6 +193,7 @@ class GenerationAgent:
                         "status": "failed",
                         "latex_path": None,
                         "pdf_path": None,
+                        "page_count": 0,
                         "validation": {
                             "valid": False,
                             "errors": ["Tailoring failed: no tailored content returned"],
@@ -235,13 +236,34 @@ class GenerationAgent:
 
                 # Compile needs_review files too — a rendered PDF is usually
                 # the fastest way to see what's wrong with one.
-                pdf_path = self._compile_to_pdf(latex_path)
+                pdf_result = self._compile_to_pdf(latex_path)
+                pdf_path = pdf_result.pdf_path if pdf_result and pdf_result.success else None
+                page_count = pdf_result.pages if pdf_result else 0
+
+                # Page count is the one quality gate that can't be checked
+                # before rendering. A 2-page new-grad resume is a real defect,
+                # and content validation has no way to see it.
+                if status == "valid" and page_count > 1:
+                    logger.warning(
+                        f"   ⚠️  Renders to {page_count} pages, expected 1 — "
+                        f"demoting to needs_review"
+                    )
+                    status = "needs_review"
+                    validation.add_error(
+                        f"Resume renders to {page_count} pages; a new-grad "
+                        f"resume must fit on one. Reduce bullet budget or "
+                        f"drop a component."
+                    )
+                    latex_path, pdf_path = self._demote_to_review(
+                        latex_path, pdf_path, review_path
+                    )
 
                 results.append({
                     "job": job,
                     "status": status,
                     "latex_path": str(latex_path),
                     "pdf_path": str(pdf_path) if pdf_path else None,
+                    "page_count": page_count,
                     "validation": {
                         "valid": validation.valid,
                         "errors": validation.errors,
@@ -258,6 +280,7 @@ class GenerationAgent:
                     "status": "failed",
                     "latex_path": None,
                     "pdf_path": None,
+                    "page_count": 0,
                     "validation": {
                         "valid": False,
                         "errors": [str(e)],
@@ -288,7 +311,7 @@ class GenerationAgent:
 
     def _compile_to_pdf(self, latex_path: Path):
         """
-        Compile one written .tex to PDF, returning the .pdf Path or None.
+        Compile one written .tex to PDF, returning the PdfResult or None.
 
         A compile failure is logged and swallowed. The .tex is the real
         deliverable of this stage — losing a whole batch because one resume
@@ -304,15 +327,39 @@ class GenerationAgent:
         )
 
         if result.success:
-            logger.info(f"   📄 PDF: {result.pdf_path.name}")
-            return result.pdf_path
+            pages = f"{result.pages} page{'s' if result.pages != 1 else ''}"
+            logger.info(f"   📄 PDF: {result.pdf_path.name} ({pages})")
+            return result
 
         logger.warning(f"   ⚠️  PDF failed for {latex_path.name}: {result.error}")
         if result.log_excerpt:
             first_line = result.log_excerpt.splitlines()[0]
             logger.warning(f"      LaTeX said: {first_line}")
 
-        return None
+        return result
+
+    def _demote_to_review(self, latex_path: Path, pdf_path, review_path: Path):
+        """
+        Move an already-written .tex (and its .pdf) into needs_review/.
+
+        Used when a resume passes content validation but fails a check that
+        can only be made after rendering — currently just page count. The
+        files are written before we can compile them, so this moves rather
+        than redirects.
+        """
+        review_path.mkdir(parents=True, exist_ok=True)
+
+        new_latex = review_path / latex_path.name
+        latex_path.replace(new_latex)
+
+        new_pdf = None
+        if pdf_path:
+            pdf_path = Path(pdf_path)
+            if pdf_path.exists():
+                new_pdf = review_path / pdf_path.name
+                pdf_path.replace(new_pdf)
+
+        return new_latex, new_pdf
 
 
     # =========================================================================
