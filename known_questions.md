@@ -129,7 +129,17 @@ correctly retained with a full 3-hit bonus. Defensible, but a coin flip.
 **Two findings the metrics could not have surfaced** — see the Q3 addition
 below and Q17.
 
-## 3. Fix the `java` / `javascript` substring bug
+## 3. Fix the `java` / `javascript` substring bug — DONE (2026-08-22)
+
+**Done — see R18.** The `java`/`javascript` case was the least of it: the
+JD-side extractor had no word boundaries at all, so `ai` matched "email" and
+"training", `rag` matched "coverage" and "storage", and `go` matched
+"government" — in essentially every JD. Measured at 6/20 selections changed.
+A fresh baseline is due after item 5.
+
+The original entry follows.
+
+### Original
 
 `_extract_keywords` matches by substring above three characters, so every
 JavaScript mention also credits Java.
@@ -1489,6 +1499,68 @@ project was selected by score; the flag contributed nothing. The reasoning
 text now states the real cause and mentions the flag separately, since a run
 summary that misattributes causation is worse than one that says less —
 especially once it is shown in a UI.
+
+---
+
+## R18. Keyword matching credited substrings, not terms
+
+**Decision:** Done (August 2026). Word boundaries everywhere, with a narrow
+escape hatch.
+
+The motivating case — `java` matching inside `javascript` — turned out to be
+the *smallest* part of this.
+
+**The resume side** applied word boundaries only to terms of three characters
+or fewer and used plain substring matching above that. So `scala` matched
+"scalable" in 3 of 20 baseline JDs, `rust` matched "anti**trust** lawsuit",
+and `bert` matched "**Rober**ts" and "Gil**bert** family foundation" — investor
+names in a finance JD.
+
+**The JD side had no boundaries at all**, not even for short terms, and that
+is where the real damage was:
+
+| term | matched inside |
+|---|---|
+| `ai` | email, paid, maintain, training, obtain |
+| `rag` | coverage, storage, leverage |
+| `go` | government, ago, goldman |
+
+Those appear in essentially every job description, so any component carrying
+`ai`, `go` or `rag` as a keyword collected a match on almost every job. The
+keyword term was partly measuring nothing.
+
+**The fix** is one shared `term_matches()` used by both extractors: word
+boundaries, falling back to substring only for terms containing `+` or `#`,
+where `\b` cannot work (the boundary after "c++" sits between two non-word
+characters and never matches). Boundaries preserve the containments that
+*should* match — "github" inside "github actions", "html" inside "html/css" —
+because the following character is a non-word one. 14/14 unit cases pass.
+
+**Two legitimate matches were lost and recovered properly.** Boundaries stop
+`angular` matching "angularjs" and `bert` matching "distilbert", both of
+which are real. The right fix was not to weaken the matcher but to add
+`angularjs` and `distilbert` to the vocabulary — they are actual product
+names that were simply missing from a tech keyword list.
+
+**Measured: 6/20 selections changed** by the matcher alone, holding the
+conditional term at its recorded values so this isolates the keyword change
+from R14's.
+
+Four of the six are the same experience swap, `exp_ai_ensured` losing to
+`exp_tutor_com`. The cause is exactly the bug: `ai_ensured` carries `ai` as a
+keyword, so it was matching every JD containing "email" or "training". That
+credit is now gone. The outcome happens to reinforce Q17's concern about
+role-type blindness, but the mechanism here is a correction, not a
+regression.
+
+**Methodological note — the baseline reconstruction now reproduces 14/20 by
+design.** That check measured instrument fidelity against recorded values;
+once scoring intentionally changes, it measures the delta instead. The
+instrument itself is still trustworthy — item 2 validated it against a live
+run, where it predicted 8/20 exactly. **A fresh baseline should be recorded
+after item 5**, not before: re-baselining now would invalidate the comparison
+point that R14, R15 and Q7's numbers were all measured against, and item 5
+is going to move scoring again anyway.
 
 ---
 

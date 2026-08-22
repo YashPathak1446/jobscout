@@ -67,7 +67,7 @@ class LatexResume:
 TECH_KEYWORDS = [
     "python", "java", "javascript", "typescript", "c++", "c#", "go",
     "rust", "ruby", "scala", "kotlin", "swift", "sql", "html", "css",
-    "react", "angular", "vue", "next.js", "django", "flask", "fastapi",
+    "react", "angular", "angularjs", "vue", "next.js", "django", "flask", "fastapi",
     "spring", "express", "node.js", "rails",
     "aws", "gcp", "azure", "docker", "kubernetes", "terraform",
     "lambda", "ec2", "s3", "cloudwatch", "api gateway",
@@ -75,7 +75,7 @@ TECH_KEYWORDS = [
     "dynamodb", "firebase", "weaviate", "pinecone", "chromadb",
     "kafka", "rabbitmq", "spark", "airflow",
     "pytorch", "tensorflow", "keras", "huggingface", "transformers",
-    "bert", "llm", "rag", "langchain", "nlp", "scikit-learn",
+    "bert", "distilbert", "llm", "rag", "langchain", "nlp", "scikit-learn",
     "pandas", "numpy", "matplotlib",
     "git", "ci/cd", "github actions", "jenkins", "linux",
     "rest api", "graphql", "oauth", "jwt",
@@ -195,19 +195,44 @@ def build_tech_vocabulary(skill_categories: dict) -> list[str]:
     return sorted(vocab)
 
 
+def term_matches(term: str, text_lower: str) -> bool:
+    """
+    Does a vocabulary term appear in text as a term, rather than a substring?
+
+    Word boundaries for everything, with one exception. This used to apply
+    boundaries only to terms of three characters or fewer, and plain
+    substring matching above that, which credited:
+
+        "scala"  from "scalable"                  (3 of 20 baseline JDs)
+        "rust"   from "antitrust lawsuit"
+        "bert"   from "Roberts", "Gilbert family foundation"
+        "java"   from "javascript"
+
+    The exception is terms containing + or #, where \\b cannot work — the
+    boundary after "c++" sits between two non-word characters and never
+    matches. Those fall back to substring, which is safe because those
+    characters are rare in prose.
+
+    Boundaries also preserve the containments that *should* match: "github"
+    inside "github actions" and "html" inside "html/css" both still hit,
+    because the next character is a non-word one.
+
+    Note that `UserProfile._trigger_matches` implements the same idea for
+    conditional triggers. The two are deliberately not shared — importing
+    across the profile and resume packages would couple them in a direction
+    nothing else does.
+    """
+    if any(c in term for c in "+#"):
+        return term in text_lower
+
+    return re.search(rf"\b{re.escape(term)}\b", text_lower) is not None
+
+
 def _extract_keywords(text: str, vocabulary: list[str] | None = None) -> list[str]:
     """Extract tech keywords from text, against TECH_KEYWORDS unless told otherwise."""
     text_lower = text.lower()
-    found = []
-    short = {"ai", "ml", "go", "sql", "rag", "nlp"}
-    for kw in (vocabulary if vocabulary is not None else TECH_KEYWORDS):
-        if kw in short or len(kw) <= 3:
-            if re.search(rf"\b{re.escape(kw)}\b", text_lower):
-                found.append(kw)
-        else:
-            if kw in text_lower:
-                found.append(kw)
-    return sorted(set(found))
+    terms = vocabulary if vocabulary is not None else TECH_KEYWORDS
+    return sorted({kw for kw in terms if term_matches(kw, text_lower)})
 
 
 def _clean_latex(text: str) -> str:

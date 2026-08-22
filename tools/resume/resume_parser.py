@@ -514,13 +514,16 @@ def _extract_jd_keywords(jd_lower: str, vocabulary=None) -> set:
     words, or a JD term can match nothing simply because the resume side
     never learned it.
     """
-    from tools.resume.latex_parser import TECH_KEYWORDS
+    from tools.resume.latex_parser import TECH_KEYWORDS, term_matches
     found = set()
     for kw in (vocabulary if vocabulary is not None else TECH_KEYWORDS):
         kw_lower = kw.lower()
         if kw_lower in _GENERIC_TERMS:
             continue
-        if kw_lower in jd_lower:
+        # Same matcher as the resume side. This was plain substring matching,
+        # with no boundaries at all, so a JD saying "scalable" credited Scala
+        # and "antitrust" credited Rust.
+        if term_matches(kw_lower, jd_lower):
             found.add(kw_lower)
     return found
 
