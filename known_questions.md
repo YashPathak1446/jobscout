@@ -205,7 +205,15 @@ full bonus and a passing mention earns 0.07 — which is the behaviour wanted.
 from a user. Threading it through as a parameter is small now and invasive
 once a UI exists — the same argument as R11's cache guard.
 
-## 7. Decide the pdflatex distribution story — before designing screens
+## 7. Decide the pdflatex distribution story — DONE (2026-08-22)
+
+**Done — see R20.** Decided: `.tex` always, PDF when `pdflatex` is present,
+and an install pointer when it is not. No bundling. The Overleaf handoff is
+recorded as the known escape hatch if the gap turns out to bite.
+
+The original entry follows, including the premise R20 rejects.
+
+### Original
 
 Asking a non-technical user to install MiKTeX is probably fatal to adoption.
 The options are bundling a TeX distribution, falling back to `.tex`-only
@@ -1589,6 +1597,58 @@ is now a named regression test.
 `select_components` end to end. The latter is better served by the frozen
 baseline, which measures real selection against recorded output — a unit test
 asserting a particular component wins would just restate the scoring formula.
+
+---
+
+## R20. What happens to users with no LaTeX toolchain?
+
+**Decision:** (August 2026) Ship the `.tex` always, the PDF when `pdflatex`
+is present, and a plain install pointer when it is not. No bundled TeX
+distribution. No Overleaf integration for now.
+
+**The roadmap's premise was stale, and rejecting it is most of the
+decision.** Item 7 argued that "asking a non-technical user to install
+MiKTeX is probably fatal to adoption." That sentence predates — or at least
+never reconciled with — item 0's local-app decision. A local app already
+asks the user to install Python, clone a repo, obtain their own Gemini API
+key and place it in a `.env`. Against that, installing MiKTeX is not a cliff;
+it is a fifth step for someone who has cleared four harder ones. The
+fatal-to-adoption argument is a *hosted-app* argument that got carried over
+when the product shape changed underneath it.
+
+**What survives the reframing is narrower but real.** A user without LaTeX
+gets a `.tex` file, and most applications want a PDF upload — so that user
+cannot actually submit. That is the genuine gap. It is just much smaller than
+"fatal", and it has an escape hatch that costs nothing to leave open.
+
+**Why not bundle.** TinyTeX or MiKTeX-basic adds 100–200MB to distribution
+and packaging work on three platforms, and still fetches `titlesec` and
+`marvosym` over the network on first compile, because the template needs
+them and neither base install carries them. Paying a packaging tax that does
+not even remove the network dependency is the worst trade available here.
+
+**Why not Overleaf yet.** An "Open in Overleaf" button would close the
+can't-submit gap without any local install, by POSTing the document source
+from the user's browser. It is the right thing to build *if* the gap turns
+out to bite. It is not the right thing to build before a single external user
+has hit it, and the mechanics need verifying against Overleaf's current API
+rather than assumed.
+
+**This item was on the roadmap ahead of the UI for a good reason, and that
+reason still holds** — the answer determines a screen, not a button. It just
+determines a simpler screen than item 7 expected:
+
+```
+pdflatex found:      [Download PDF]  [Download .tex]
+pdflatex missing:    [Download .tex]  ⓘ Install MiKTeX or TeX Live for PDFs
+```
+
+**Nothing needs building to detect the case.** `find_pdflatex()` (R8) resolves
+the binary once per run, and `PdfResult.status` already separates `skipped`
+— no engine on this machine — from `failed` and `timeout`. The UI branches on
+a signal that exists. What item 8 owes this decision is the second line of
+that sketch, and an install pointer that names both distributions rather than
+just MiKTeX.
 
 ---
 
