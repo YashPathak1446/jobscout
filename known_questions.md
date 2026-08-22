@@ -200,6 +200,18 @@ simply do not mention the added tooling. The gap was real and is now closed,
 but it will only move outcomes on mobile- or design-adjacent JDs. Recorded
 here so nobody re-opens this expecting a scoring win.
 
+**A regression shipped and was fixed (August 2026).** The first version of
+this change recomputed component keywords from `tech + bullets`, while the
+parser builds them from `title + company + bullets` for experiences and
+`name + tech + bullets` for projects. Narrow but real: `exp_101gen_ai` and
+`exp_ai_ensured` lost the keyword `ai`, which appears only in the employer
+name and never in a bullet. Both sites now call the shared
+`keyword_source_text()`, so the two definitions cannot drift again — the
+duplication was the actual defect, the lost keyword only its symptom.
+
+Re-measured afterwards with the exact instrument: the vocabulary expansion
+still changes **0/20** selections. The original null result holds.
+
 **Still open:**
 - `_extract_keywords` matches by substring above 3 characters, so **`java`
   matches inside `javascript`**. Every JavaScript mention credits Java.
@@ -396,21 +408,24 @@ genuinely on-topic match. Both fixes clear all five spot checks.
 structural bias — `min2` favours components with longer trigger lists, since
 14 keywords reach two hits far more easily than 7.
 
-**Blocking everything downstream: the measurement gap.** The offline
-reconstruction reproduces only **16/20** recorded selections. Cause not yet
-found; it is not component keywords (checked). Until it reproduces 20/20, no
-scoring change can be measured more finely than "4 JDs of noise", which is
-larger than several effects worth detecting. **Fix this first.** The likely
-suspects are the exact `comp_text` passed to `_keyword_match_score` and
-tie-breaking in `_pick_top`.
+**~~Blocking everything downstream: the measurement gap.~~ CLOSED
+(August 2026).** The reconstruction now reproduces **20/20** selections and
+**360/360** keyword terms exactly. The cause was the `comp_text` handed to
+`_keyword_match_score`: the real call passes `title company bullets` for
+experiences and `name bullets` — *without* tech — for projects, while the
+reconstruction used `tech + bullets` for both. Tie-breaking in `_pick_top`
+was never involved. The instrument is now exact, and every measurement below
+was taken with it.
 
 **Remaining Step 7 work, in order:**
-1. Close the 16/20 reconstruction gap (above).
-2. Apply the firing-rule change and measure it.
+1. ~~Close the reconstruction gap.~~ Done — see above.
+2. ~~Apply the firing-rule change and measure it.~~ Done — see R14.
+   Shipped `scaled`; 8/20 selections changed, matching simulation.
 3. `component_importance` derived from resume order (high -> medium -> low).
 4. Personal info derived from the resume header.
-5. Trigger vocabulary derivation — only after 2, since the firing rule
-   determines what kind of vocabulary is even useful.
+5. Trigger vocabulary derivation — only now genuinely unblocked, since R14
+   settled what kind of vocabulary is useful: terms specific enough that a
+   real match produces several hits, not one.
 
 **Smaller items found and deliberately not changed:**
 - `_extract_keywords` uses substring matching above 3 characters, so
@@ -959,6 +974,49 @@ a false-positive guard ("Arrow Electronics" must not match).
   above".
 - A continuation row that can't resolve an employer is dropped at Discovery,
   rather than flowing through with a placeholder.
+
+---
+
+## R14. Conditional triggers fired on a single incidental keyword
+
+**Decision:** Done (August 2026). Partial credit by hit count, replacing
+all-or-nothing.
+
+A conditional match was worth a flat **+0.20** the moment *any* one trigger
+appeared anywhere in the JD. Measured on the frozen 20-JD baseline, **22 of
+26 fires (85%) came from a single keyword**, and those single keywords were
+usually incidental:
+
+| fired | on | matched |
+|---|---|---|
+| UberEats UX redesign | Uber, Palantir backend roles | `prototyping` |
+| UberEats UX redesign | Confido, Warp, Samsara | `user experience` |
+| Sleep-tracker app | backend JDs mentioning the company has an app | `native app` |
+
+A JD saying "rapid prototyping" gave a UX project the same bonus as a
+genuinely on-topic match. Only Ramp's *Mobile Engineer, Android* looked
+right — and notably it hit three triggers, not one.
+
+**What changed:** the rules now report `conditional_hits` (distinct triggers
+matched per component), and the score is `min(0.07 * hits, 0.20)`. Three
+hits still earns the full bonus; one earns a nudge.
+
+**Why scaled rather than a >=2 threshold.** Both cleared every spot check in
+simulation, but `min2` structurally favours components with longer trigger
+lists — 14 keywords reach two hits far more easily than 7 — which would have
+made trigger-list length a scoring input. Scaling degrades gracefully and
+changed fewer selections (8/20 vs 11/20).
+
+**Verified:** the shipped implementation changes 8/20 selections, exactly as
+simulated. Hit counts on the live path are what the design predicts — Ramp's
+mobile project scores 3 hits (full 0.20) while Uber's and Samsara's
+incidental matches score 1 (0.07). Samsara no longer carries a UX redesign
+into a backend resume; Ramp keeps its mobile project.
+
+**Method note.** This was measured with a reconstruction that reproduces the
+recorded baseline exactly — 20/20 selections and 360/360 keyword terms. An
+earlier version reproduced only 16/20 and would not have resolved an effect
+this size reliably. See Q14.
 
 ---
 

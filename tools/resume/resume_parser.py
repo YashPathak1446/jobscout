@@ -68,7 +68,9 @@ class ResumeParser:
         # every tool in this resume's own skills section. Without this, a JD
         # naming a tool you actually list produces no keyword match at all
         # (Q7 — 45 of this resume's 74 skills were invisible).
-        from tools.resume.latex_parser import build_tech_vocabulary, _extract_keywords
+        from tools.resume.latex_parser import (
+            build_tech_vocabulary, keyword_source_text, _extract_keywords,
+        )
 
         self.tech_vocabulary = build_tech_vocabulary(
             self.parsed_resume.skills.categories
@@ -76,12 +78,14 @@ class ResumeParser:
 
         # Component keywords are computed during parsing, against the base
         # list. Recompute them against the augmented vocabulary so both sides
-        # of the keyword comparison use the same words.
+        # of the keyword comparison use the same words. keyword_source_text
+        # is shared with the parser so the two cannot drift — an earlier
+        # version built the text here as tech+bullets and silently dropped
+        # keywords that appear only in a title or employer name.
         for comp in list(self.parsed_resume.experiences) + list(self.parsed_resume.projects):
-            text = " ".join(
-                filter(None, [getattr(comp, "tech", ""), " ".join(comp.bullets)])
+            comp.keywords = _extract_keywords(
+                keyword_source_text(comp), vocabulary=self.tech_vocabulary
             )
-            comp.keywords = _extract_keywords(text, vocabulary=self.tech_vocabulary)
 
         logger.info(f"✅ Parsed: {len(self.parsed_resume.experiences)} experiences, "
                    f"{len(self.parsed_resume.projects)} projects, "
@@ -290,6 +294,13 @@ class ResumeParser:
         max_proj = profile.resume_preferences.projects.max_count
 
         # ── Experience selection ──────────────────────────────────────────────
+        # Hit counts keyed by canonical id, matching how conditional_ids is
+        # resolved below — a profile may reference a component by alias.
+        exp_hits = {
+            self._resolve_exp_canonical(eid): n
+            for eid, n in (exp_rules.get('conditional_hits') or {}).items()
+        }
+
         never_exp = set(
             self._resolve_exp_canonical(eid)
             for eid in (profile.resume_preferences.experiences.never_include or [])
@@ -316,12 +327,18 @@ class ResumeParser:
                     for eid in exp_rules['conditional']
                 ),
                 importance_map=exp_importance,
+                conditional_hits=exp_hits,
             )
             exp_scores[exp.id] = score
 
         selected_experiences = _pick_top(exp_scores, max_exp)
 
         # ── Project selection ─────────────────────────────────────────────────
+        proj_hits = {
+            self._resolve_proj_canonical(pid): n
+            for pid, n in (proj_rules.get('conditional_hits') or {}).items()
+        }
+
         never_proj = set(
             self._resolve_proj_canonical(pid)
             for pid in (profile.resume_preferences.projects.never_include or [])
@@ -350,6 +367,7 @@ class ResumeParser:
                 always_ids=always_proj,
                 conditional_ids=conditional_proj,
                 importance_map=proj_importance,
+                conditional_hits=proj_hits,
             )
             proj_scores[proj.id] = score
 
@@ -520,6 +538,11 @@ def _keyword_match_score(
     return min(score, 0.25)
 
 
+# Conditional-trigger weighting. Per-hit rather than all-or-nothing: see R14.
+CONDITIONAL_PER_HIT = 0.07
+CONDITIONAL_MAX = 0.20
+
+
 def _composite_score(
     comp_id: str,
     embedding_scores: dict,
@@ -530,6 +553,7 @@ def _composite_score(
     always_ids: set,
     conditional_ids: set,
     importance_map: dict,
+    conditional_hits: dict | None = None,
 ) -> dict:
     """
     Compute the composite selection score for one component.
@@ -537,7 +561,7 @@ def _composite_score(
     Components:
         embedding    : semantic similarity (0.0–1.0)
         keyword      : exact tech match bonus (0.0–0.25, capped)
-        conditional  : +0.20 if conditional rule triggered
+        conditional  : +0.07 per distinct trigger matched, capped at +0.20
         importance   : high=+0.15, medium=+0.05, low=+0.00
         always       : +0.30 if in always_include list
         final        : sum of above
@@ -551,6 +575,8 @@ def _composite_score(
         comp_keywords: Pre-extracted keyword list from parser
         always_ids: Set of canonical IDs in always_include
         conditional_ids: Set of canonical IDs triggered by conditional rules
+        conditional_hits: {comp_id: number of distinct triggers matched}.
+            Absent or empty falls back to the old all-or-nothing +0.20.
         importance_map: Dict of {comp_id: 'high'|'medium'|'low'}
 
     Returns:
@@ -561,7 +587,16 @@ def _composite_score(
 
     kw = _keyword_match_score(jd_keywords, comp_tech, comp_keywords, comp_text)
 
-    cond = 0.20 if comp_id in conditional_ids else 0.0
+    # Partial credit by hit count. A single incidental keyword used to earn
+    # the same +0.20 as a genuinely on-topic match, and 85% of fires were
+    # single-hit: a JD saying "rapid prototyping" gave a UX project the full
+    # bonus against a backend role. Scaling removes the cliff without
+    # discarding weak evidence outright. See R14.
+    if conditional_hits:
+        cond = min(CONDITIONAL_PER_HIT * conditional_hits.get(comp_id, 0),
+                   CONDITIONAL_MAX)
+    else:
+        cond = CONDITIONAL_MAX if comp_id in conditional_ids else 0.0
 
     imp_tier = importance_map.get(comp_id, "medium")
     imp = {"high": 0.15, "medium": 0.05, "low": 0.0}.get(imp_tier, 0.05)

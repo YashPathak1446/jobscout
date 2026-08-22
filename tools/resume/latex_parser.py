@@ -87,6 +87,41 @@ TECH_KEYWORDS = [
 ]
 
 
+def experience_keyword_text(title: str, company: str, bullets: list[str]) -> str:
+    """Text an experience's keywords are extracted from."""
+    return f"{title} {company} {' '.join(bullets)}"
+
+
+def project_keyword_text(name: str, tech: str, bullets: list[str]) -> str:
+    """Text a project's keywords are extracted from."""
+    return f"{name} {tech} {' '.join(bullets)}"
+
+
+def keyword_source_text(component) -> str:
+    """
+    Same thing, for an already-constructed component.
+
+    One definition shared by the parser and by any later recompute. These
+    drifted apart once: a recompute using only tech+bullets silently dropped
+    "ai" from exp_101gen_ai and exp_ai_ensured, where the term appears only
+    in the employer name and never in a bullet.
+    """
+    bullets = getattr(component, "bullets", []) or []
+
+    if hasattr(component, "company"):
+        return experience_keyword_text(
+            getattr(component, "title", "") or "",
+            getattr(component, "company", "") or "",
+            bullets,
+        )
+
+    return project_keyword_text(
+        getattr(component, "name", "") or "",
+        getattr(component, "tech", "") or "",
+        bullets,
+    )
+
+
 def split_skill_list(value: str) -> list[str]:
     """
     Split one Technical Skills line into individual tokens.
@@ -305,7 +340,7 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
                         bullets.append(cleaned)
 
             exp_id = f"exp_{_slugify(company or title)}"
-            all_text = f"{title} {company} {' '.join(bullets)}"
+            all_text = experience_keyword_text(title, company, bullets)
             keywords = _extract_keywords(all_text)
 
             experiences.append(LatexExperience(
@@ -381,7 +416,7 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
                         bullets.append(cleaned)
 
             proj_id = f"proj_{_slugify(name_part)}"
-            all_text = f"{name_part} {tech_part} {' '.join(bullets)}"
+            all_text = project_keyword_text(name_part, tech_part, bullets)
             keywords = _extract_keywords(all_text)
 
             projects.append(LatexProject(

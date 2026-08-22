@@ -337,13 +337,22 @@ class UserProfile(BaseModel):
         result = {
             'always': self.resume_preferences.experiences.always_include.copy(),
             'conditional': [],
+            'conditional_hits': {},
             'rarely': []
         }
 
-        # Check conditional inclusion rules
+        # Check conditional inclusion rules. The number of distinct triggers
+        # that match is recorded, not just whether any did: one incidental
+        # word is weak evidence and several is strong, and the scorer needs
+        # to tell them apart (see R14).
         for exp_id, rule in self.resume_preferences.experiences.conditional_inclusion.items():
-            if any(self._trigger_matches(kw, jd_normalized) for kw in rule.include_if_jd_contains):
+            hits = sum(
+                1 for kw in rule.include_if_jd_contains
+                if self._trigger_matches(kw, jd_normalized)
+            )
+            if hits:
                 result['conditional'].append(exp_id)
+                result['conditional_hits'][exp_id] = hits
 
         # Check rarely include rules
         for exp_id, rule in self.resume_preferences.experiences.rarely_include.items():
@@ -371,13 +380,19 @@ class UserProfile(BaseModel):
         result = {
             'always': self.resume_preferences.projects.always_include.copy(),
             'high_priority': self.resume_preferences.projects.high_priority.copy(),
-            'conditional': []
+            'conditional': [],
+            'conditional_hits': {}
         }
 
-        # Check conditional inclusion rules
+        # Check conditional inclusion rules (hit counts as above).
         for proj_id, rule in self.resume_preferences.projects.conditional_inclusion.items():
-            if any(self._trigger_matches(kw, jd_normalized) for kw in rule.include_if_jd_contains):
+            hits = sum(
+                1 for kw in rule.include_if_jd_contains
+                if self._trigger_matches(kw, jd_normalized)
+            )
+            if hits:
                 result['conditional'].append(proj_id)
+                result['conditional_hits'][proj_id] = hits
 
         return result
 
