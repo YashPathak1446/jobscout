@@ -63,9 +63,29 @@ class ResumeParser:
         
         # Parse the LaTeX resume
         self.parsed_resume: LatexResume = parse_latex_resume(str(self.resume_path))
-        
+
+        # Keyword vocabulary is per-user: the curated TECH_KEYWORDS base plus
+        # every tool in this resume's own skills section. Without this, a JD
+        # naming a tool you actually list produces no keyword match at all
+        # (Q7 — 45 of this resume's 74 skills were invisible).
+        from tools.resume.latex_parser import build_tech_vocabulary, _extract_keywords
+
+        self.tech_vocabulary = build_tech_vocabulary(
+            self.parsed_resume.skills.categories
+        )
+
+        # Component keywords are computed during parsing, against the base
+        # list. Recompute them against the augmented vocabulary so both sides
+        # of the keyword comparison use the same words.
+        for comp in list(self.parsed_resume.experiences) + list(self.parsed_resume.projects):
+            text = " ".join(
+                filter(None, [getattr(comp, "tech", ""), " ".join(comp.bullets)])
+            )
+            comp.keywords = _extract_keywords(text, vocabulary=self.tech_vocabulary)
+
         logger.info(f"✅ Parsed: {len(self.parsed_resume.experiences)} experiences, "
-                   f"{len(self.parsed_resume.projects)} projects")
+                   f"{len(self.parsed_resume.projects)} projects, "
+                   f"{len(self.tech_vocabulary)} keyword vocabulary")
         
         if skip_embeddings:
             logger.info("⏭️  Skipping embeddings (--input mode, saves API calls)")
@@ -264,7 +284,7 @@ class ResumeParser:
         proj_importance = dict(importance_cfg.projects)
 
         jd_lower = jd_text.lower()
-        jd_keywords = _extract_jd_keywords(jd_lower)
+        jd_keywords = _extract_jd_keywords(jd_lower, self.tech_vocabulary)
 
         max_exp = profile.resume_preferences.experiences.max_count
         max_proj = profile.resume_preferences.projects.max_count
@@ -443,16 +463,19 @@ _GENERIC_TERMS = {
 }
 
 
-def _extract_jd_keywords(jd_lower: str) -> set:
+def _extract_jd_keywords(jd_lower: str, vocabulary=None) -> set:
     """
     Extract meaningful tech keywords from the JD text.
 
-    Uses the same TECH_KEYWORDS list from latex_parser to stay consistent
-    with what gets embedded in component keywords.
+    Uses the caller's vocabulary — the parser's per-user augmented list —
+    falling back to the shared TECH_KEYWORDS base so this stays usable
+    standalone. Both sides of the keyword comparison must use the same
+    words, or a JD term can match nothing simply because the resume side
+    never learned it.
     """
     from tools.resume.latex_parser import TECH_KEYWORDS
     found = set()
-    for kw in TECH_KEYWORDS:
+    for kw in (vocabulary if vocabulary is not None else TECH_KEYWORDS):
         kw_lower = kw.lower()
         if kw_lower in _GENERIC_TERMS:
             continue

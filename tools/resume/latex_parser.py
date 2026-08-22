@@ -87,12 +87,85 @@ TECH_KEYWORDS = [
 ]
 
 
-def _extract_keywords(text: str) -> list[str]:
-    """Extract tech keywords from text."""
+def split_skill_list(value: str) -> list[str]:
+    """
+    Split one Technical Skills line into individual tokens.
+
+    Naively splitting on commas breaks the parenthesised groups these
+    sections are full of — "AWS (EC2, S3, Lambda)" becomes "AWS (EC2" and
+    "Lambda)". This splits at depth zero and then expands each group into
+    its head plus its members:
+
+        "AWS (EC2, S3, Lambda)"    -> aws, ec2, s3, lambda
+        "SQL (MySQL, PostgreSQL)"  -> sql, mysql, postgresql
+        "C/C++"                    -> c/c++, c, c++
+    """
+    items, depth, buf = [], 0, []
+    for ch in value:
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth = max(0, depth - 1)
+        if ch == ',' and depth == 0:
+            items.append(''.join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    items.append(''.join(buf))
+
+    tokens = []
+    for item in items:
+        item = item.strip().rstrip('}').strip()
+        if not item:
+            continue
+
+        group = re.match(r'^([^(]+)\(([^)]*)\)\s*$', item)
+        if group:
+            tokens.append(group.group(1).strip())
+            tokens.extend(p.strip() for p in group.group(2).split(','))
+        else:
+            tokens.append(item.replace('(', ' ').replace(')', ' ').strip())
+
+    out = set()
+    for t in tokens:
+        t = t.strip().lower()
+        if len(t) < 2:
+            continue
+        out.add(t)
+        # "C/C++" and "HTML/CSS" are one skill written as two. Require 3+
+        # chars on the parts: "ci/cd" would otherwise contribute "ci" and
+        # "cd", and the JD matcher tests plain substrings, so "ci" hits
+        # "specific" and "efficient".
+        if '/' in t:
+            out.update(p.strip() for p in t.split('/') if len(p.strip()) >= 3)
+
+    return sorted(out)
+
+
+def build_tech_vocabulary(skill_categories: dict) -> list[str]:
+    """
+    TECH_KEYWORDS plus everything in this user's own skills section.
+
+    The curated base carries generic terms JDs use but resumes rarely list
+    verbatim ("backend", "distributed systems", "microservices"). The user's
+    skills carry the specific tools the base can't know about — for this
+    resume that is 45 of 74 skills, including Figma, Ionic, Capacitor,
+    Jasypt, EdgeShark and Biopython, none of which could previously produce
+    a JD keyword match. This is Q7's fix: the vocabulary becomes per-user
+    without losing the shared terms.
+    """
+    vocab = {k.lower() for k in TECH_KEYWORDS}
+    for value in (skill_categories or {}).values():
+        vocab.update(split_skill_list(value))
+    return sorted(vocab)
+
+
+def _extract_keywords(text: str, vocabulary: list[str] | None = None) -> list[str]:
+    """Extract tech keywords from text, against TECH_KEYWORDS unless told otherwise."""
     text_lower = text.lower()
     found = []
     short = {"ai", "ml", "go", "sql", "rag", "nlp"}
-    for kw in TECH_KEYWORDS:
+    for kw in (vocabulary if vocabulary is not None else TECH_KEYWORDS):
         if kw in short or len(kw) <= 3:
             if re.search(rf"\b{re.escape(kw)}\b", text_lower):
                 found.append(kw)
@@ -329,7 +402,11 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
     )
     if skills_match:
         skills_section = skills_match.group(1)
-        for m in re.finditer(r"\\textbf\{([^}]+)\}\{:\s*([^\\]+)\}", skills_section):
+        # The value group stops at a closing brace as well as a backslash.
+        # With only [^\\]+ the final category ran past its own "}" and picked
+        # up the section's trailing braces, so the last category always ended
+        # in LaTeX residue ("Agile/Scrum}\n    }").
+        for m in re.finditer(r"\\textbf\{([^}]+)\}\{:\s*([^\\}]+)\}", skills_section):
             label = _clean_latex(m.group(1))
             value = _clean_latex(m.group(2)).strip().rstrip("\\").strip()
             if label and value:
