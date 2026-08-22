@@ -183,7 +183,33 @@ further deterministically if needed.
 
 ## Q7. How do we ensure JD keyword matching against an 80+ entry tech skills section?
 
-**Status:** Open. Bottleneck is the parser's `TECH_KEYWORDS` set.
+**Status:** Mechanism shipped (August 2026). Two sub-questions still open.
+
+`build_tech_vocabulary()` unions the curated `TECH_KEYWORDS` base with every
+tool in the user's own skills section — 91 → 135 for this resume, picking up
+all 45 skills that were previously invisible to JD matching (Figma, Ionic,
+Capacitor, Jasypt, EdgeShark, Biopython among them). Union rather than
+replace, which answers the "per-user or global?" sub-question below: both.
+Component keywords are recomputed against the augmented vocabulary so the
+two sides of the comparison use the same words.
+
+**Measured effect on selection: zero.** Against the frozen 20-JD baseline
+the expansion changed no selections, and JD keyword matches rose only +0.5
+per JD on average. These are new-grad backend and full-stack roles that
+simply do not mention the added tooling. The gap was real and is now closed,
+but it will only move outcomes on mobile- or design-adjacent JDs. Recorded
+here so nobody re-opens this expecting a scoring win.
+
+**Still open:**
+- `_extract_keywords` matches by substring above 3 characters, so **`java`
+  matches inside `javascript`**. Every JavaScript mention credits Java.
+  Fixing it means word boundaries everywhere — a broad scoring change, see
+  Q14.
+- Near-miss matching ("K8s" vs "Kubernetes") is still unaddressed.
+
+Original entry follows.
+
+**Status (original):** Open. Bottleneck is the parser's `TECH_KEYWORDS` set.
 
 The new resume has ~80 specific tools across 7 skill categories
 (Languages, Backend, Frontend, Cloud, Databases, AI/ML, Dev Tools). When
@@ -332,6 +358,142 @@ for most resumes. Worth establishing the convention.
   output quality. `job_filter` and `location_matcher` are close behind.
 - Does a test suite that needs pdflatex belong in CI, or should the LaTeX
   ones stay opt-in?
+
+---
+
+## Q14. Step 7 — what is built, and where to pick up
+
+**Status:** In progress. This entry is the resume point for the next
+session; read it before starting anything else in Step 7.
+
+**Decided already (do not re-litigate):**
+- Conditional triggers are **not** redundant with embeddings. Measured by
+  ablation on the frozen 20-JD baseline: removing the conditional term
+  changes **12/20** selections. The decision rule was "delete if <=2".
+  Deleting is off the table.
+- Triggers cannot be derived from `component.keywords`. Overlap with the
+  hand-written triggers is **3 terms out of ~104**; nine of eleven
+  components overlap by zero. Auto keywords describe what a project is
+  *built with*; triggers describe what kind of job it is *evidence for*.
+  Deriving from the former would also neutralise the mechanism — generic
+  terms fire for every JD, so the +0.20 stops discriminating.
+
+**The open decision — the firing rule.** Simulated against the baseline
+using the real matcher (`_normalize_jd_for_matching` + `_trigger_matches`;
+recorded 26 fires, recomputed 26, all agreeing):
+
+| rule | fires | multi-hit share | selections changed | spot checks |
+|---|---|---|---|---|
+| current (any 1 hit) | 26 | 15% | — | 4/5 |
+| min2 (>=2 hits) | 4 | 100% | 11/20 | 5/5 |
+| scaled (+0.07/hit, cap 0.20) | 26 | 15% | 8/20 | 5/5 |
+| off | 0 | — | 12/20 | 4/5 |
+
+**85% of fires (22/26) come from a single incidental keyword** — a JD saying
+"rapid prototyping" grants the UberEats UX project the same +0.20 as a
+genuinely on-topic match. Both fixes clear all five spot checks.
+**Recommendation: `scaled`.** Less disruptive than `min2`, and it avoids a
+structural bias — `min2` favours components with longer trigger lists, since
+14 keywords reach two hits far more easily than 7.
+
+**Blocking everything downstream: the measurement gap.** The offline
+reconstruction reproduces only **16/20** recorded selections. Cause not yet
+found; it is not component keywords (checked). Until it reproduces 20/20, no
+scoring change can be measured more finely than "4 JDs of noise", which is
+larger than several effects worth detecting. **Fix this first.** The likely
+suspects are the exact `comp_text` passed to `_keyword_match_score` and
+tie-breaking in `_pick_top`.
+
+**Remaining Step 7 work, in order:**
+1. Close the 16/20 reconstruction gap (above).
+2. Apply the firing-rule change and measure it.
+3. `component_importance` derived from resume order (high -> medium -> low).
+4. Personal info derived from the resume header.
+5. Trigger vocabulary derivation — only after 2, since the firing rule
+   determines what kind of vocabulary is even useful.
+
+**Smaller items found and deliberately not changed:**
+- `_extract_keywords` uses substring matching above 3 characters, so
+  **`java` matches inside `javascript`** — every JavaScript mention also
+  credits Java. Fixing it means word boundaries for all keywords, which
+  moves scoring broadly and needs its own measured change.
+- `rarely_include` keys `exp_outlier` and `exp_tutor` **do not resolve** to
+  real component IDs (`exp_outlier_ai`, `exp_tutor_com`). Those rules have
+  never fired. Fixing the aliases *starts* them firing, so it is a scoring
+  change to opt into, not a typo fix to slip in.
+
+**Baseline:** `baselines/2026-08-21-pre-step7/` — 20 enriched JDs, 20
+analysis records, 3 generated resumes. Gitignored. Every Step 7 change is
+measured against this, or it is not measured.
+
+**Already shipped in Step 7:** per-user keyword vocabulary (Q7) — see the
+Q7 entry. Measured effect on selection: **zero** on this baseline. Correct
+fix, no observable impact on new-grad backend JDs.
+
+---
+
+## Q15. Does any of this survive multiple users?
+
+**Status:** Open, and worth answering before Phase 3 rather than during it.
+
+Prompted by the question "will these changes eventually lead to the
+multi-user migration plan?". Mostly yes on direction, with concrete blockers
+that are cheap now and expensive later. Audited 2026-08-21 against the code,
+not from memory.
+
+**Pointing the right way:**
+- The per-user keyword vocabulary (Q7) is exactly the DERIVED pattern from
+  `migration_plan.md` — the vocabulary now comes from the user's own resume
+  instead of a global hardcoded list. That generalises to any user with no
+  code change.
+- R11's model-aware embedding cache prevents a whole class of silent
+  cross-contamination bug that gets much worse with more users.
+- PDF generation, the one-page gate, and the discovery fixes are all
+  user-agnostic infrastructure.
+
+**Blockers, specific:**
+
+1. **The embedding cache is one file for one resume.**
+   `EmbeddingCache` writes `cache/resume_embeddings.json`, keyed only on the
+   resume hash. Two users means whoever runs second overwrites the first.
+   It degrades safely rather than corrupting — `get()` sees a hash mismatch
+   and returns None — but the result is a permanent 0% hit rate and ~19
+   re-embeddings per user per run. Needs per-user namespacing.
+
+2. **`job_cache.json` is likewise a single global file.**
+
+3. **Output directories are keyed on date alone.** `outputs/<YYYY-MM-DD>/`.
+   Resume filenames embed the candidate's name so those will not collide,
+   but `state.json`, `summary.md`, `analysis_results.json` and
+   `enriched_jobs.json` are fixed names in that directory — two users on the
+   same day overwrite each other's run metadata.
+
+4. **One API key, shared quota.** R10's per-model chain adds capacity but
+   does nothing about concurrency. Quota is per key, so users compete.
+
+5. **`pdflatex` is a local binary.** Already tracked as Q8b.
+
+6. **Conditional triggers are still hand-authored** — the single largest
+   onboarding blocker, and Q14 shows the mechanism needs fixing before it
+   can be automated.
+
+7. **The LLM cache is content-addressed on prompt text**, so keys will not
+   collide between users (resume content is in the prompt). But the store is
+   shared, meaning one user's generated bullets are readable by another
+   user's process. A privacy boundary, not a correctness one.
+
+**Cheap now, expensive later.** Items 1–3 are all the same shape: a
+hardcoded path that assumes one user. Threading a `user_id` through the
+cache and output paths is a small change today and a migration later. Worth
+doing opportunistically the next time any of those files is touched, rather
+than as its own project.
+
+**Open sub-question:** is the target actually multi-tenant (one deployment,
+many users, shared caches namespaced by user) or single-tenant-per-instance
+(each user gets their own container and the current layout is fine)? That
+choice decides whether items 1–3 are blockers or non-issues, and it is not
+recorded anywhere yet. `migration_plan.md` assumes the former without
+saying so.
 
 ---
 
