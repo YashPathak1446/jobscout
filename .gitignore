@@ -40,6 +40,9 @@ env/
 # Outputs (run-generated, not source)
 outputs/
 
+# Frozen before/after comparison sets for scoring changes (run-generated)
+/baselines/
+
 # Cache (run-generated, not source)
 # Leading slash matters: a bare "cache/" matches at ANY depth, which silently
 # swallowed tools/cache/ — llm_cache.py never got committed and every fresh
