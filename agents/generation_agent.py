@@ -37,6 +37,7 @@ from config import (
     LLM_CACHE_DIR,
     LLM_CACHE_ENABLED,
     classify_api_error,
+    resolve_api_key,
 )
 
 from tools.profile import load_profile, UserProfile
@@ -63,7 +64,7 @@ class GenerationAgent:
     
     def __init__(self, profile: UserProfile, resume_parser: ResumeParser,
                  mock_mode: bool = False, use_cache: bool = True,
-                 generate_pdf: bool = True):
+                 generate_pdf: bool = True, api_key: str = None):
         """
         Initialize Generation Agent.
 
@@ -75,10 +76,12 @@ class GenerationAgent:
                        fresh API calls (wired to the --no-cache CLI flag)
             generate_pdf: If True, compile each written .tex to PDF. Silently
                           degrades to .tex-only when no pdflatex is installed.
+            api_key: Explicit Gemini key. None falls back to the environment.
         """
         self.profile = profile
         self.resume_parser = resume_parser
         self.mock_mode = mock_mode
+        self.api_key = api_key
 
         self.llm_cache = LLMCache(
             cache_dir=LLM_CACHE_DIR,
@@ -112,8 +115,8 @@ class GenerationAgent:
         # the real path, _call_gemini_json raises, and _gemini_tailor's bare
         # except silently degrades to mock — producing needs_review files with
         # no visible cause.
-        if not mock_mode and not os.getenv("GOOGLE_API_KEY"):
-            logger.warning("⚠️  GOOGLE_API_KEY not set, will use mock mode")
+        if not mock_mode and not resolve_api_key(api_key):
+            logger.warning("⚠️  No Gemini API key supplied or set, will use mock mode")
             self.mock_mode = True
 
         logger.info("✅ Ready to generate resumes")
@@ -824,7 +827,7 @@ Source bullets:
             self.last_model_used = "cache"
             return cached
 
-        client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        client = genai.Client(api_key=resolve_api_key(self.api_key))
 
         last_error = None
         retired_models = []

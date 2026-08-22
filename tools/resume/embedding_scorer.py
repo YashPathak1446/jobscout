@@ -50,7 +50,11 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
 # GEMINI EMBEDDINGS (Real)
 # =========================================================================
 
-def _get_embedding(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[float]:
+def _get_embedding(
+    text: str,
+    task_type: str = "RETRIEVAL_DOCUMENT",
+    api_key: str = None,
+) -> list[float]:
     """
     Get embedding vector from Gemini API, using config.EMBEDDING_MODEL.
 
@@ -58,11 +62,14 @@ def _get_embedding(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[flo
         text: Text to embed (max 2048 tokens).
         task_type: RETRIEVAL_DOCUMENT for resume/JD content,
                    RETRIEVAL_QUERY for search queries.
+        api_key: Explicit key; falls back to the environment when None.
     """
     try:
         from google import genai
 
-        client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        from config import resolve_api_key
+
+        client = genai.Client(api_key=resolve_api_key(api_key))
 
         result = client.models.embed_content(
             model=EMBEDDING_MODEL,
@@ -80,7 +87,7 @@ def _get_embedding(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[flo
         return []
 
 
-def embed_resume_components(parsed_resume) -> dict[str, list[float]]:
+def embed_resume_components(parsed_resume, api_key: str = None) -> dict[str, list[float]]:
     """
     Embed all resume components (experiences + projects).
     Returns dict mapping component_id → embedding vector.
@@ -91,7 +98,7 @@ def embed_resume_components(parsed_resume) -> dict[str, list[float]]:
     # Embed each experience
     for exp in parsed_resume.experiences:
         text = f"{exp.title} {exp.company} {' '.join(exp.bullets)}"
-        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT")
+        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT", api_key=api_key)
         if vec:
             embeddings[exp.id] = vec
             logger.debug(f"Embedded experience: {exp.id}")
@@ -99,7 +106,7 @@ def embed_resume_components(parsed_resume) -> dict[str, list[float]]:
     # Embed each project
     for proj in parsed_resume.projects:
         text = f"{proj.name} {proj.tech} {' '.join(proj.bullets)}"
-        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT")
+        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT", api_key=api_key)
         if vec:
             embeddings[proj.id] = vec
             logger.debug(f"Embedded project: {proj.id}")
@@ -108,7 +115,7 @@ def embed_resume_components(parsed_resume) -> dict[str, list[float]]:
     # Embed skills section
     if parsed_resume.skills and parsed_resume.skills.categories:
         skills_text = " ".join(parsed_resume.skills.categories.values())
-        vec = _get_embedding(skills_text, "RETRIEVAL_DOCUMENT")
+        vec = _get_embedding(skills_text, "RETRIEVAL_DOCUMENT", api_key=api_key)
         if vec:
             embeddings["__skills__"] = vec
 
@@ -122,6 +129,7 @@ def score_job_with_embeddings(
     parsed_resume,
     max_experiences: int = 3,
     max_projects: int = 4,
+    api_key: str = None,
 ) -> EmbeddingScore | None:
     """
     Score a single JD against pre-computed resume embeddings.
@@ -137,7 +145,7 @@ def score_job_with_embeddings(
         EmbeddingScore with similarity scores, or None on failure.
     """
     # Embed the JD
-    jd_vec = _get_embedding(jd_text, "RETRIEVAL_QUERY")
+    jd_vec = _get_embedding(jd_text, "RETRIEVAL_QUERY", api_key=api_key)
     if not jd_vec:
         return None
 

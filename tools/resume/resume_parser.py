@@ -43,7 +43,8 @@ class ResumeParser:
         >>> selected = parser.select_components(jd_text, profile)
     """
     
-    def __init__(self, resume_path: str, skip_embeddings: bool = False, mock_embeddings: bool = False):
+    def __init__(self, resume_path: str, skip_embeddings: bool = False,
+                 mock_embeddings: bool = False, api_key: str = None):
         """
         Initialize parser with a LaTeX resume.
         
@@ -53,8 +54,11 @@ class ResumeParser:
                            Use when you only need parsed resume data, not scoring.
             mock_embeddings: If True, use deterministic local mock embeddings for testing
                              analysis/scoring without calling the Gemini Embeddings API.
+            api_key: Explicit Gemini key. None falls back to the environment,
+                     which is what the CLI wants; a UI passes the user's own.
         """
         self.resume_path = Path(resume_path)
+        self.api_key = api_key
         
         if not self.resume_path.exists():
             raise FileNotFoundError(f"Resume not found: {resume_path}")
@@ -156,7 +160,7 @@ class ResumeParser:
         logger.info("🔢 Computing embeddings for resume components...")
         
         self.component_embeddings: Dict[str, List[float]] = embed_resume_components(
-            self.parsed_resume
+            self.parsed_resume, api_key=self.api_key
         )
         
         # Fall back to mock if real embeddings failed
@@ -255,6 +259,7 @@ class ResumeParser:
                 parsed_resume=self.parsed_resume,
                 max_experiences=5,
                 max_projects=5,
+                api_key=self.api_key,
             )
         
         # Update the job metadata

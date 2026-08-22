@@ -37,7 +37,8 @@ class AnalysisAgent:
     4. Returns analysis results with scores and selected components
     """
     
-    def __init__(self, profile: UserProfile, resume_path: str, mock_embeddings: bool = False):
+    def __init__(self, profile: UserProfile, resume_path: str,
+                 mock_embeddings: bool = False, api_key: str = None):
         """
         Initialize Analysis Agent.
         
@@ -45,6 +46,7 @@ class AnalysisAgent:
             profile: User profile with selection rules
             resume_path: Path to master resume (.tex file)
             mock_embeddings: If True, use deterministic local mock embeddings instead of Gemini embeddings.
+            api_key: Explicit Gemini key. None falls back to the environment.
         """
         self.profile = profile
         self.resume_path = Path(resume_path)
@@ -58,6 +60,7 @@ class AnalysisAgent:
         self.resume_parser = ResumeParser(
             str(self.resume_path),
             mock_embeddings=mock_embeddings,
+            api_key=api_key,
         )
         
         logger.info(f"✅ Ready to analyze jobs")

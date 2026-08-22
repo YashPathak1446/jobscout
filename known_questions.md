@@ -214,7 +214,17 @@ would have fired on every JD and destroyed the term's ability to
 discriminate. Under hit-count scoring, three matching stack terms earn the
 full bonus and a passing mention earns 0.07 — which is the behaviour wanted.
 
-## 6. Make the API key injectable
+## 6. Make the API key injectable — DONE (2026-08-22)
+
+**Done — see R22.** `config.resolve_api_key()` is the single place that
+decides what "no key passed" means, and `api_key` threads through
+`JobScoutOrchestrator`, `AnalysisAgent`, `GenerationAgent`, `ResumeParser` and
+the embedding scorer. Four of the five sites are injectable; the fifth is
+`scripts/check_models.py`, a hand-run probe no UI calls. 6 new tests.
+
+The original entry follows.
+
+### Original
 
 `os.getenv("GOOGLE_API_KEY")` is read at five sites, including inside
 `_call_gemini_json` and the embedding scorer.
@@ -1781,6 +1791,44 @@ a bootstrapped user is all of them. R17's validation confirms every derived ID
 resolves to a real component. The honest summary is that a bootstrapped user
 goes from no trigger signal to some trigger signal, and whether that is better
 is not yet known.
+
+---
+
+## R22. Threading the API key instead of reading the environment
+
+**Decision:** (August 2026) Done. `resolve_api_key(explicit=None)` in
+`config.py` is the one place that resolves a key; `api_key` is a parameter on
+`JobScoutOrchestrator`, `AnalysisAgent`, `GenerationAgent`, `ResumeParser`,
+`embed_resume_components`, `score_job_with_embeddings` and `_get_embedding`.
+Every default is `None`, meaning "no opinion" rather than "no key", so CLI
+behaviour is byte-identical: nothing passed, environment used.
+
+**Why a parameter and not a module-level setter.** A setter would have been
+fewer lines, and it is the wrong shape. A UI that collects a key would have to
+write it somewhere global for the pipeline to see it — in the worst version,
+back into `os.environ` — which makes one user's credential process-wide,
+order-dependent, and impossible to scope to a single run. A parameter that
+defaults to the environment gets the UI what it needs while leaving the CLI
+untouched.
+
+**Empty string, not None, is the "nothing found" answer.** Callers can test it
+plainly, and a missing key can never reach the API as the literal string
+"None" — which would produce a puzzling auth error rather than an obvious
+absence. An empty *explicit* key falls through to the environment too: a UI
+form the user left blank means "no opinion", not "use no key".
+
+**One site was deliberately left alone.** `scripts/check_models.py` still
+reads `os.getenv` directly. It is a hand-run probe for checking which Gemini
+models are alive, it is never called by the pipeline, and a UI has no path to
+it. Threading a parameter into a script whose only caller is a human would be
+ceremony.
+
+**Tested by injection, not just by unit.** The resolution rules are unit
+tested, but the test that matters replaces `genai.Client` with a fake and
+asserts an explicit key reaches it *while a different key sits in the
+environment*. That is the actual failure this work exists to prevent, and it
+would pass trivially if the plumbing silently fell back to the environment
+somewhere in the middle.
 
 ---
 

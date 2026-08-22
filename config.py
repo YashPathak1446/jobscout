@@ -81,3 +81,38 @@ def classify_api_error(exc: Exception) -> str:
         return 'transient'
 
     return 'fatal'
+
+# --- API key resolution -----------------------------------------------------
+
+# Read at five sites before this existed, always straight from the process
+# environment. That is correct for a CLI, where the key comes from `.env`, and
+# wrong the moment a UI collects it from a user: the value would have to be
+# pushed back into `os.environ` to be seen, which makes a user's credential
+# process-global and racy.
+#
+# So callers pass one down instead, and this is the single place that decides
+# what "no key passed" means. Threading the parameter is cheap now and
+# invasive after a UI exists — the same argument R11 made for the cache guard.
+
+API_KEY_ENV_VAR = "GOOGLE_API_KEY"
+
+
+def resolve_api_key(explicit: str = None) -> str:
+    """
+    The key to use: an explicitly supplied one, else the environment's.
+
+    Args:
+        explicit: A key from a caller — a UI form, a test, an orchestrator
+            that was handed one. None means "no opinion", not "no key".
+
+    Returns:
+        The resolved key, or "" when neither source has one. Empty rather
+        than None so callers can test it plainly, and so a missing key
+        reaches the API as an obvious absence rather than the string "None".
+    """
+    import os
+
+    if explicit:
+        return explicit
+
+    return os.getenv(API_KEY_ENV_VAR) or ""

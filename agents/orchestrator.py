@@ -63,6 +63,7 @@ class JobScoutOrchestrator:
         input_file: Optional[str] = None,
         max_resumes: Optional[int] = None,
         generate_pdf: bool = True,
+        api_key: str = None,
     ):
         """
         Initialize orchestrator.
@@ -82,8 +83,13 @@ class JobScoutOrchestrator:
                 to profile.agent_preferences.max_jobs_to_generate.
             generate_pdf: If True, compile each generated .tex to PDF. Degrades
                 to .tex-only when no pdflatex is installed.
+            api_key: Explicit Gemini key, threaded to every agent that calls the
+                API. None falls back to the environment, which is what the CLI
+                wants; a UI collecting a key from a user passes it here and it
+                never touches os.environ.
         """
         self.profile_name = profile_name
+        self.api_key = api_key
         self.checkpoint = checkpoint
         self.mock_mode = mock_mode
         self.mock_generation = mock_generation
@@ -295,6 +301,7 @@ class JobScoutOrchestrator:
             self.profile,
             str(self.resume_path),
             mock_embeddings=self.mock_embeddings,
+            api_key=self.api_key,
         )
         results = agent.analyze_jobs(jobs)
         
@@ -365,7 +372,8 @@ class JobScoutOrchestrator:
 
         # Generation Agent gets its own ResumeParser with skip_embeddings
         # since it only needs parsed resume data, not scoring.
-        gen_parser = ResumeParser(str(self.resume_path), skip_embeddings=True)
+        gen_parser = ResumeParser(str(self.resume_path), skip_embeddings=True,
+                                  api_key=self.api_key)
 
         # A profile rule keyed to a component that no longer exists is ignored
         # silently at scoring time — it looks exactly like a rule that simply
@@ -378,6 +386,7 @@ class JobScoutOrchestrator:
             gen_parser,
             mock_mode=mock_gen,
             generate_pdf=self.generate_pdf,
+            api_key=self.api_key,
         )
 
         # Pass output_dir (not output_path) — generation agent adds
