@@ -425,7 +425,9 @@ was taken with it.
    Shipped `scaled`; 8/20 selections changed, matching simulation.
 3. ~~`component_importance` derived from resume order.~~ Done — see R15.
    top-2 high / next-4 medium, as a default the profile overrides.
-4. Personal info derived from the resume header.
+4. ~~Personal info derived from the resume header.~~ Done — see R16.
+   Derived at profile-creation time via `scripts/init_profile.py`, since it
+   is stable and changes no runtime output.
 5. Trigger vocabulary derivation — only now genuinely unblocked, since R14
    settled what kind of vocabulary is useful: terms specific enough that a
    real match produces several hits, not one.
@@ -1067,6 +1069,67 @@ against it.
 **Home for the rest of Step 7:** `tools/profile/derivation.py`. Items 4 and 5
 (header parsing, trigger vocabulary) belong there too, under the same
 contract — derived is a default, stated wins.
+
+---
+
+## R16. Deriving personal info, and bootstrapping a profile from a resume
+
+**Decision:** Done (August 2026). Derived at profile-creation time, not at
+runtime, via `scripts/init_profile.py`.
+
+**Why creation-time and not runtime.** The other derivations (importance,
+vocabulary) are computed on every run because they track resume edits.
+Personal info does not: it is stable, and the user may legitimately want to
+override what the resume says. Deriving it once into a starter profile, then
+letting the user correct it, is the better fit.
+
+It also would not have helped at runtime. `personal_info` is consumed only
+for logging, the output filename and `summary.md` — **the generated .tex
+header is copied from the master resume, not built from the profile.** So
+this changes no generated output whatsoever. The entire value is onboarding.
+
+**The burden it removes.** All 13 `PersonalInfo` fields are required by the
+schema, so a new user hand-writes every one — including eight the resume
+header already states. `derive_personal_info()` covers nine:
+name, email, phone, github_url, linkedin_url, school, degree,
+graduation_date, graduation_term. **All nine match this project's
+hand-written profile exactly.**
+
+Left alone deliberately: `location`, `visa_status`, `us_citizen`,
+`permanent_resident`. These carry legal and eligibility meaning a resume does
+not reliably state — an address line is where you live, not where you are
+allowed to work.
+
+**Graduation parsing is the fiddly part** and the place a wrong answer does
+real damage: an incorrect graduation date changes which jobs a user is
+eligible for. It therefore fails to blank rather than guess. Two cases forced
+the design:
+- `"Sept 2022 – Present"` originally returned the *start* date, reporting a
+  current student as already graduated. Only the last chunk of the range is
+  considered now; no year there means the answer is unknown.
+- `"Expected May 2026"` lost its month, because probing for any three letters
+  matched "Exp". It searches for month names now, and normalises the result
+  to `"May 2026"`.
+
+Term inference maps months to Spring/Summer/Fall, with June deliberately in
+Spring — commencement is June at plenty of schools while the term is still
+Spring, which is what this project's own profile records. 7/7 cases pass.
+
+**`scripts/init_profile.py`** ties it together: reads a resume, fills derived
+`personal_info` and order-derived `component_importance` (R15), points
+`master_resume_path` at the resume, writes `user_profiles/<name>.json`,
+refuses to clobber without `--force`, prints exactly which fields still need
+a human, and validates the result against the schema before exiting.
+
+**Verified:** a bootstrapped profile validates and runs the full mock
+pipeline end to end — discovery, analysis and generation — with no
+hand-editing.
+
+**What this does and does not prove about multi-user (Q15).** It removes the
+single biggest onboarding blocker for personal data. It does not touch the
+harder one: `conditional_inclusion` is still hand-authored, and R14 showed
+the mechanism needed fixing before the vocabulary could be automated at all.
+That remains Q14 item 5.
 
 ---
 
