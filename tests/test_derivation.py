@@ -17,7 +17,9 @@ from tools.profile.derivation import (  # noqa: E402
     DEFAULT_MEDIUM_COUNT,
     _graduation_from_dates,
     derive_component_importance,
+    derive_conditional_triggers,
     derive_personal_info,
+    merge_conditional_triggers,
     merge_importance,
 )
 
@@ -149,6 +151,122 @@ class TestPersonalInfoDerivation(unittest.TestCase):
         self.assertIn("name", info)
         self.assertNotIn("email", info)
         self.assertNotIn("graduation_date", info)
+
+
+class _FakeComponent:
+    """Minimum surface derive_conditional_triggers reads."""
+
+    def __init__(self, comp_id, tech="", keywords=()):
+        self.id = comp_id
+        self.tech = tech
+        self.keywords = list(keywords)
+
+
+class TestConditionalTriggerDerivation(unittest.TestCase):
+    """The last DERIVED field (R21). A bootstrapped user gets these or nothing."""
+
+    def test_derives_triggers_from_the_tech_stack(self):
+        comps = [
+            _FakeComponent("proj_a", tech="Angular, TypeScript, OAuth 2.0"),
+            _FakeComponent("proj_b", tech="Blender, OpenCV"),
+        ]
+        out = derive_conditional_triggers(comps)
+        self.assertIn("angular", out["proj_a"])
+        self.assertIn("blender", out["proj_b"])
+
+    def test_drops_terms_carried_by_too_much_of_the_pool(self):
+        # python in 3 of 4 is 75%, well past the 0.4 ratio; it cannot
+        # discriminate between components, which is the whole job of a trigger.
+        comps = [
+            _FakeComponent("p1", tech="Python, Django"),
+            _FakeComponent("p2", tech="Python, Flask"),
+            _FakeComponent("p3", tech="Python, NumPy"),
+            _FakeComponent("p4", tech="Rust"),
+        ]
+        out = derive_conditional_triggers(comps)
+        for comp_id, triggers in out.items():
+            self.assertNotIn("python", triggers, f"python survived on {comp_id}")
+        self.assertIn("django", out["p1"])
+
+    def test_a_term_unique_to_one_component_survives(self):
+        comps = [
+            _FakeComponent("p1", tech="Python, Django"),
+            _FakeComponent("p2", tech="Python, Flask"),
+        ]
+        out = derive_conditional_triggers(comps)
+        self.assertIn("django", out["p1"])
+        self.assertIn("flask", out["p2"])
+
+    def test_prunes_a_compound_when_its_part_is_already_a_trigger(self):
+        # The tech stack contributes "oauth 2.0" and the keyword vocabulary
+        # contributes "oauth" — which is exactly how the real resume produces
+        # both. Keeping the pair would score two hits for one listed
+        # technology, and R14 counts per hit.
+        comps = [
+            _FakeComponent("p1", tech="OAuth 2.0", keywords=["OAuth"]),
+            _FakeComponent("p2", tech="Rust"),
+        ]
+        out = derive_conditional_triggers(comps)
+        self.assertIn("oauth", out["p1"])
+        self.assertNotIn("oauth 2.0", out["p1"])
+
+    def test_component_name_is_never_a_trigger_source(self):
+        # Names yield 'resume' and 'computer', which every JD contains. Only
+        # vocabulary-controlled terms may become triggers.
+        comp = _FakeComponent("proj_search_engine", tech="BeautifulSoup")
+        comp.name = "Search Engine Resume Computer"
+        out = derive_conditional_triggers([comp, _FakeComponent("p2", tech="Rust")])
+        for banned in ("search", "engine", "resume", "computer"):
+            self.assertNotIn(banned, out["proj_search_engine"])
+
+    def test_component_with_nothing_distinctive_is_omitted(self):
+        # An empty rule is indistinguishable from one that never matched,
+        # which is the silence R17 set out to remove.
+        comps = [_FakeComponent("p1", tech="Python"), _FakeComponent("p2", tech="Python")]
+        self.assertEqual(derive_conditional_triggers(comps), {})
+
+    def test_generic_terms_are_excluded(self):
+        comps = [_FakeComponent("p1", tech="Backend, Rust"), _FakeComponent("p2", tech="Go")]
+        self.assertNotIn("backend", out_p1 := derive_conditional_triggers(comps)["p1"])
+        self.assertIn("rust", out_p1)
+
+    def test_empty_pool_derives_nothing(self):
+        self.assertEqual(derive_conditional_triggers([]), {})
+
+    def test_experiences_derive_from_keywords_without_a_tech_stack(self):
+        comps = [
+            _FakeComponent("exp_a", keywords=["Kubernetes", "Terraform"]),
+            _FakeComponent("exp_b", keywords=["PyTorch"]),
+        ]
+        out = derive_conditional_triggers(comps)
+        self.assertIn("kubernetes", out["exp_a"])
+        self.assertIn("pytorch", out["exp_b"])
+
+
+class TestMergeConditionalTriggers(unittest.TestCase):
+    """Same contract as merge_importance: anything explicit wins."""
+
+    def test_hand_authored_rule_survives_untouched(self):
+        hand = {"p1": {"include_if_jd_contains": ["radiology"], "description": "mine"}}
+        merged = merge_conditional_triggers(hand, {"p1": ["pytorch"], "p2": ["rust"]})
+        self.assertEqual(merged["p1"]["include_if_jd_contains"], ["radiology"])
+        self.assertEqual(merged["p1"]["description"], "mine")
+
+    def test_components_the_profile_omits_take_the_derived_rule(self):
+        merged = merge_conditional_triggers({"p1": {"include_if_jd_contains": ["x"],
+                                                    "description": "mine"}},
+                                            {"p1": ["pytorch"], "p2": ["rust"]})
+        self.assertEqual(merged["p2"]["include_if_jd_contains"], ["rust"])
+
+    def test_derived_rules_carry_the_schema_required_description(self):
+        merged = merge_conditional_triggers(None, {"p1": ["rust"]})
+        self.assertTrue(merged["p1"]["description"])
+
+    def test_derived_rules_validate_against_the_schema(self):
+        from tools.profile.profile_schema import ConditionalInclusion
+        merged = merge_conditional_triggers(None, {"p1": ["rust", "go"]})
+        rule = ConditionalInclusion(**merged["p1"])
+        self.assertEqual(rule.include_if_jd_contains, ["rust", "go"])
 
 
 if __name__ == "__main__":

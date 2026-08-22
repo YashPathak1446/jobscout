@@ -35,7 +35,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.profile.derivation import (  # noqa: E402
     derive_component_importance,
+    derive_conditional_triggers,
     derive_personal_info,
+    merge_conditional_triggers,
 )
 from tools.resume.resume_parser import ResumeParser  # noqa: E402
 
@@ -75,6 +77,17 @@ def build_profile(resume_path: Path, name: str) -> dict:
         "projects": derive_component_importance([p.id for p in resume.projects]),
     }
 
+    # Conditional triggers. The template ships none, so in practice this is
+    # pure derivation — but it goes through the merge so that regenerating
+    # over a profile someone has since tuned keeps their rules rather than
+    # flattening them.
+    for section, components in (("experiences", resume.experiences),
+                                ("projects", resume.projects)):
+        rp[section]["conditional_inclusion"] = merge_conditional_triggers(
+            rp[section].get("conditional_inclusion"),
+            derive_conditional_triggers(components),
+        )
+
     return profile, derived_info, resume
 
 
@@ -108,6 +121,17 @@ def main():
     imp = profile["resume_preferences"]["component_importance"]
     print(f"\nImportance tiers from resume order: "
           f"{len(imp['experiences'])} experiences, {len(imp['projects'])} projects")
+
+    rules = profile["resume_preferences"]
+    n_exp = len(rules["experiences"]["conditional_inclusion"])
+    n_proj = len(rules["projects"]["conditional_inclusion"])
+    n_terms = sum(
+        len(r["include_if_jd_contains"])
+        for section in ("experiences", "projects")
+        for r in rules[section]["conditional_inclusion"].values()
+    )
+    print(f"Conditional triggers derived: {n_exp} experiences, "
+          f"{n_proj} projects ({n_terms} terms)")
 
     missing = [f for f in NEEDS_HUMAN["personal_info"] if f not in derived_info]
     print("\nSTILL NEEDS YOU — these are placeholders, not derived:")

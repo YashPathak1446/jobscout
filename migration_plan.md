@@ -270,10 +270,17 @@ These fields are USER-INPUT but currently hand-edited in JSON:
 
 These fields are DERIVED but currently hand-edited:
 
-- [ ] `experiences.conditional_inclusion` — needs auto-generation from bullets
-- [ ] `projects.conditional_inclusion` — needs auto-generation from tech stack.
-      **Viable now:** the algorithm below was unsafe under all-or-nothing
-      trigger scoring and became workable once R14 switched to hit counts.
+- [x] `experiences.conditional_inclusion` — **done (R21)**, derived from the
+      bullet keyword vocabulary, since experiences carry no tech stack.
+- [x] `projects.conditional_inclusion` — **done (R21)**, derived from the tech
+      stack plus bullet keywords. The algorithm below is implemented with
+      three departures, each recorded in R21: document-frequency filtering
+      (the generic-term set alone cannot know `python` is in 7 of 13 stacks),
+      no component-name source (it yields `resume` and `computer`, which every
+      JD contains), and compound-vs-part pruning (R14 counts per hit, so
+      "oauth 2.0" plus "oauth" double-scores one technology).
+      **Caveat:** shipping it did not measurably close the gap to a hand-tuned
+      profile — see R21 for what the measurement could and could not show.
 - [ ] `experiences.rarely_include` — needs derivation from importance map.
       Note the current keys `exp_outlier` and `exp_tutor` do not resolve to
       real component IDs, so these rules have never fired.

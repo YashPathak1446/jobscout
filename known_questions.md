@@ -179,7 +179,25 @@ this roadmap said "everything above changes scoring, which is exactly when a
 regression net earns its keep" while scheduling tests underneath three
 scoring changes. That argument does not survive its own placement.
 
-## 5. Derive `conditional_inclusion` — the product blocker
+## 5. Derive `conditional_inclusion` — DONE, with the premise unproven (2026-08-22)
+
+**Done — see R21.** The derivation ships and bootstrapped profiles now get 17
+rules and 104 triggers instead of an empty map. But the measurement did not
+support this item's central claim. Derived triggers change 7 of 20 selections
+against an empty map, so they do real work — and they land no closer to the
+hand-tuned profile than the empty map does (8/20 either way). The gap this
+item was written to close is not measurably closed, and the reason looks
+structural: hand-authored triggers are domain words, derivation only reaches
+technology words.
+
+It is still the right thing to ship — it never overrides a hand-authored rule,
+and it is strictly more signal than nothing — but "a bootstrapped user now
+selects as well as a tuned one" is **not** demonstrated, and R21 says what
+would demonstrate it.
+
+The original entry follows.
+
+### Original
 
 The last DERIVED field still hand-authored, and the only item here that
 stands between the current state and something usable by someone else.
@@ -1649,6 +1667,120 @@ the binary once per run, and `PdfResult.status` already separates `skipped`
 a signal that exists. What item 8 owes this decision is the second line of
 that sketch, and an install pointer that names both distributions rather than
 just MiKTeX.
+
+---
+
+## R21. Deriving conditional triggers, and what the measurement would not say
+
+**Decision:** (August 2026) Shipped. `derive_conditional_triggers()` and
+`merge_conditional_triggers()` in `tools/profile/derivation.py`, wired into
+`scripts/init_profile.py`. A bootstrapped profile now carries 17 rules and 104
+triggers where it used to carry none. 13 new tests.
+
+### Three departures from the algorithm in `migration_plan.md`
+
+Each came from looking at what the resume actually produces, not from taste.
+
+**1. Genericness is corpus-relative, so `_GENERIC_TERMS` is the wrong
+instrument on its own.** The plan says to filter candidates through the
+scorer's generic-term set. That set holds words generic *in the abstract*
+("backend", "api"). It cannot know that on this resume `python` sits in 7 of
+13 project tech stacks — and a trigger carried by more than half the pool
+moves every component together and separates none of them, which is the only
+job a trigger has. So terms are also dropped by document frequency within
+their pool.
+
+**2. The component name is not a trigger source, though the plan proposes
+it.** Names do yield the occasional good trigger — "spotify", "minecraft" —
+but they are free text, and splitting the same 13 projects also yields
+`resume`, `computer`, `object`, `search`, `engine` and `image`. Those are rare
+across the resume, so the document-frequency filter sees nothing wrong with
+them. They are common in *job descriptions*, which is the corpus that decides
+whether a trigger fires and the one not available at derivation time. Every JD
+says "resume" and "Computer Science"; `object` matches "object-oriented".
+
+Dropping the name buys a property worth more than the terms it costs: every
+derived trigger is a term from `TECH_KEYWORDS` or the user's own skills
+section, so no free-text word can reach a trigger list at all.
+
+**3. Compounds are pruned against their own parts.** `split_skill_list`
+deliberately emits both "oauth 2.0" and "oauth", and the keyword vocabulary
+supplies the short form too. R14 made the trigger term score per-hit, so
+keeping the pair scores two hits for one listed technology. The shorter term
+is kept, and it fires wherever the longer one would.
+
+### The measurement, and the part that did not work
+
+Replayed against `baselines/2026-08-21-pre-step7` — 20 JDs, verified against
+its manifest first, embeddings computed once and reused so every
+configuration saw identical inputs.
+
+| config | differs from hand | vs. empty map |
+|---|---|---|
+| empty map (`none`) | 8/20 | — |
+| derived, ratio 0.3 / 0.4 / 0.5 | 8/20 | 7/20 |
+| derived, no ratio filter (plan as written) | 8/20 | 4/20 |
+| domain terms harvested from bullets | 8/20 | — |
+
+**Derivation does real work**: it changes 7 of 20 selections against an empty
+map. **It does not converge on the hand-tuned profile**: 8/20 either way. It
+fixes two JDs and breaks two others.
+
+**A metric that looked finer and was not.** Counting mismatched component
+slots rather than JDs gave exactly 16 in every row — including for pure noise.
+That is not five coincidences: it is 2 x the JD count in all cases, because
+every difference is a single one-for-one swap. The slot metric is a linear
+function of the JD metric and carries no extra information. Recorded because
+it looked like a better instrument for about ten minutes.
+
+**Harvesting domain terms from bullets was tried and rejected.** The missing
+signal is visible — hand-authored triggers for Diagnosify are `healthcare`,
+`medical`, `clinical`; derivation reaches `distilbert`, `flask`, `pytorch`.
+So bullets were mined for terms unique to one component, with a stoplist of
+words appearing in half the baseline JDs. It surfaced the right kind of thing
+(`clinical`, `ospf`, `bgp`, `accessibility`) buried in far more of the wrong
+kind (`approaches`, `compare`, `configured`, `concrete`), and scored the same
+8/20. Free-text harvesting reintroduces exactly the hazard departure 2 avoids.
+
+**How much the 0.4 ratio is worth.** Less than it looks. 0.3, 0.4 and 0.5
+produce identical selections, because only `python` is common enough for any
+of them to drop. 0.4 is the middle of an indistinguishable band, not a
+measured optimum. The filter *existing* is justified on principle; its exact
+value is not justified by anything yet.
+
+### Why agreement-with-hand could not settle this
+
+Two reasons, and they were foreseeable:
+
+- **Derivation structurally cannot reach the hand-authored vocabulary.** Those
+  triggers are domain words — `radiology`, `ehr`, `ospf`, `pathfinding` — that
+  appear in neither the tech stack nor the tech keyword list. Perfect
+  agreement was never available, so distance-from-hand measures the gap
+  between two vocabularies as much as it measures quality.
+- **The hand-tuned profile is not ground truth about job fit.** It is one
+  person's tuning. Item 2's verification run found the opposite assumption
+  wrong once already: the Palantir swap looked worse on a skim and the numbers
+  said it was better.
+
+**What would actually validate this**: an item-2 style run — generate
+resumes from a bootstrapped profile, read the PDFs, judge whether the selected
+components suit the JDs. That is a qualitative check, and it is the same
+instrument that settled item 2. It is not scheduled yet.
+
+**A correction to item 5's own numbers.** It cited R14's finding that removing
+conditionals changes 12/20. Measured now, empty-map vs hand is 8/20. The
+difference is R18: the substring fix changed keyword scoring underneath, so
+the older figure no longer describes current code.
+
+### Why ship it anyway
+
+Because the risk is bounded and the alternative is nothing. `merge_conditional_triggers`
+gives explicit rules priority per component, so no hand-tuned profile changes
+behaviour — this reaches only components whose profile says nothing, which for
+a bootstrapped user is all of them. R17's validation confirms every derived ID
+resolves to a real component. The honest summary is that a bootstrapped user
+goes from no trigger signal to some trigger signal, and whether that is better
+is not yet known.
 
 ---
 

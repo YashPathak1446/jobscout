@@ -22,7 +22,9 @@ from .profile_loader import (
 )
 from .derivation import (
     derive_component_importance,
+    derive_conditional_triggers,
     derive_personal_info,
+    merge_conditional_triggers,
     merge_importance,
 )
 from .validation import (
@@ -47,7 +49,9 @@ __all__ = [
     'ProfileLoadError',
     # Derivation
     'derive_component_importance',
+    'derive_conditional_triggers',
     'derive_personal_info',
+    'merge_conditional_triggers',
     'merge_importance',
     # Validation
     'find_unresolvable_ids',
