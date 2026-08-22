@@ -273,14 +273,19 @@ class AnalysisAgent:
                     self.profile.resume_preferences.projects.high_priority
                 )
 
+                proj_score = score.project_scores.get(proj_id, 0)
+
                 if proj_id in always_include_proj_ids:
                     reason = f"Always included (profile rule)"
-                # Check if high_priority
                 elif proj_id in high_priority_proj_ids:
-                    reason = f"High priority (profile)"
-                # Otherwise score-based
+                    # high_priority no longer feeds the score — the composite
+                    # scorer replaced that waterfall deliberately. Reporting it
+                    # as the reason claimed a cause that does not exist, so
+                    # state the real one and mention the flag separately.
+                    reason = (f"High relevance score ({proj_score:.2f}); "
+                              f"also flagged high_priority in profile, which "
+                              f"no longer affects scoring")
                 else:
-                    proj_score = score.project_scores.get(proj_id, 0)
                     reason = f"High relevance score ({proj_score:.2f})"
                 
                 proj_reasons.append(f"{proj.name}: {reason}")

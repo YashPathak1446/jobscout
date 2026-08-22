@@ -367,6 +367,12 @@ class JobScoutOrchestrator:
         # since it only needs parsed resume data, not scoring.
         gen_parser = ResumeParser(str(self.resume_path), skip_embeddings=True)
 
+        # A profile rule keyed to a component that no longer exists is ignored
+        # silently at scoring time — it looks exactly like a rule that simply
+        # did not match. Say so once per run instead.
+        from tools.profile.validation import warn_unresolvable_ids
+        warn_unresolvable_ids(self.profile, gen_parser, context=self.profile_name)
+
         agent = GenerationAgent(
             self.profile,
             gen_parser,

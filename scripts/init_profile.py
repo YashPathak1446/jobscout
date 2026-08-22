@@ -120,8 +120,24 @@ def main():
     print()
     try:
         from tools.profile import load_profile
-        load_profile(args.name)
+        from tools.profile.validation import find_unresolvable_ids
+
+        loaded = load_profile(args.name)
         print("Profile validates against the schema.")
+
+        # Schema validity is not the same as usability: a rule keyed to a
+        # component that does not exist loads fine and then never fires.
+        # The template used to ship five such IDs.
+        ghosts = find_unresolvable_ids(loaded, ResumeParser(str(resume_path),
+                                                            skip_embeddings=True))
+        if ghosts:
+            print()
+            print(f"WARNING: {len(ghosts)} rule(s) reference components that "
+                  f"do not exist:")
+            for problem in ghosts:
+                print(f"    {problem}")
+        else:
+            print("Every profile rule resolves to a real component.")
     except Exception as exc:
         print(f"WARNING: profile does not validate yet: {exc}")
         print("Fill the fields above and re-check.")

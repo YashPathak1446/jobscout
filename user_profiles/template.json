@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "created": "YYYY-MM-DD",
   "description": "Template profile - copy and customize for each user",
-  
   "personal_info": {
     "name": "Your Name",
     "email": "your.email@example.com",
@@ -19,7 +18,6 @@
     "us_citizen": true,
     "permanent_resident": false
   },
-  
   "job_preferences": {
     "target_roles": [
       "Software Engineer",
@@ -27,19 +25,41 @@
       "Add your target roles here"
     ],
     "experience_level": "0-2 years",
-    "seniority": ["new grad", "entry level", "junior"],
-    "graduation_eligibility": ["2025", "2026"],
-    "employment_types": ["full-time"],
+    "seniority": [
+      "new grad",
+      "entry level",
+      "junior"
+    ],
+    "graduation_eligibility": [
+      "2025",
+      "2026"
+    ],
+    "employment_types": [
+      "full-time"
+    ],
     "exclude_keywords": [
-      "senior", "staff", "principal",
-      "5+ years", "PhD required"
+      "senior",
+      "staff",
+      "principal",
+      "5+ years",
+      "PhD required"
     ],
     "locations": {
-      "countries": ["United States"],
+      "countries": [
+        "United States"
+      ],
       "exclude_countries": [],
-      "states_priority": ["California", "New York"],
-      "states_acceptable": ["Texas", "Washington"],
-      "cities": ["Remote"],
+      "states_priority": [
+        "California",
+        "New York"
+      ],
+      "states_acceptable": [
+        "Texas",
+        "Washington"
+      ],
+      "cities": [
+        "Remote"
+      ],
       "remote_ok": true,
       "willing_to_relocate": true
     },
@@ -50,7 +70,6 @@
     },
     "job_recency_hours": 168
   },
-  
   "resume_preferences": {
     "master_resume_path": "data/master_resumes/YOUR_NAME.tex",
     "experiences": {
@@ -58,22 +77,17 @@
       "typical_count": 2,
       "min_count": 2,
       "selection_strategy": "jd_dependent",
-      "always_include": ["exp_company1", "exp_company2"],
+      "always_include": [],
       "priority_order": "auto",
-      "conditional_inclusion": {
-        "exp_healthcare_company": {
-          "include_if_jd_contains": ["healthcare", "medical"],
-          "max_bullets": 2,
-          "description": "Only for healthcare JDs"
-        }
-      },
+      "conditional_inclusion": {},
       "rarely_include": {},
       "never_include": [],
       "bullets_per_experience": {
         "top_priority": 4,
         "secondary": 3,
         "conditional": 2
-      }
+      },
+      "comments": "Keyed by component IDs from your parsed resume, so these start empty. Run scripts/init_profile.py to see your real IDs, then fill these in. An ID that does not match a parsed component is ignored silently \u2014 scripts/init_profile.py and the orchestrator both warn about those."
     },
     "projects": {
       "max_count": 4,
@@ -81,12 +95,14 @@
       "min_count": 2,
       "selection_strategy": "jd_dependent",
       "always_include": [],
-      "high_priority": ["proj_best_project", "proj_second_best"],
+      "high_priority": [],
       "conditional_inclusion": {},
       "bullets_per_project": {
         "high_priority": 3,
         "secondary": 2
-      }
+      },
+      "never_include": [],
+      "comments": "Keyed by component IDs from your parsed resume, so these start empty. Run scripts/init_profile.py to see your real IDs, then fill these in. An ID that does not match a parsed component is ignored silently \u2014 scripts/init_profile.py and the orchestrator both warn about those."
     },
     "formatting": {
       "max_bullet_chars_experiences": 280,
@@ -99,9 +115,12 @@
       "template": "jakes_resume"
     }
   },
-  
   "agent_preferences": {
-    "discovery_sources": ["github_newgrad", "serper", "adzuna"],
+    "discovery_sources": [
+      "github_newgrad",
+      "serper",
+      "adzuna"
+    ],
     "scoring_threshold": 50,
     "max_jobs_to_discover": 30,
     "checkpoint_after_scoring": true,
@@ -109,7 +128,6 @@
     "retry_on_validation_fail": true,
     "max_retries": 2
   },
-  
   "notes": {
     "how_to_use": "1. Copy this file. 2. Rename to firstname_lastname.json. 3. Fill in all fields. 4. Place your resume.tex in data/master_resumes/. 5. Run: python main.py --profile firstname_lastname"
   }

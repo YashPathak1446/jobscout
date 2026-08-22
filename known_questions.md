@@ -69,7 +69,19 @@ altered baseline is **detectable rather than silent**, plus
 `scripts/baseline.py` to write, verify and archive one. `verify` exits
 non-zero, so it can gate a measurement run. See `baselines/README.md`.
 
-## 1. Fix the template ghost rule, and check for its whole class
+## 1. Fix the template ghost rule, and check for its whole class — DONE (2026-08-21)
+
+**Done — see R17.** It was five ghost IDs in the template, not one, and two
+of them sat in `always_include`, the +0.30 term. `find_unresolvable_ids()`
+now checks every ID-keyed field through the parser's own resolution, called
+from the orchestrator and from `init_profile.py`. A correction came with it:
+Q14's claim that `exp_outlier` and `exp_tutor` never fired was wrong — they
+resolve by prefix matching. And `rarely_include` turned out to be dead code
+entirely, which is now Q16.
+
+The original entry follows.
+
+### Original
 
 `user_profiles/template.json` ships a `conditional_inclusion` rule keyed to
 `exp_healthcare_company` — a component that exists in nobody's resume. Since
@@ -704,6 +716,46 @@ saying so.
 
 ---
 
+## Q16. `rarely_include` is computed and thrown away
+
+**Status:** Open. Found 2026-08-21 while building R17's validation.
+
+`get_experience_selection_rules()` computes `result['rarely']` on every call,
+matching triggers against the JD exactly as it does for `conditional`. Nothing
+reads it. The only consumers anywhere are two `print` statements in
+`profile_loader.py`'s summary printer — scoring never sees it.
+
+So `rarely_include` is a profile feature that does nothing. The live profile
+populates it with two entries (`exp_outlier`, `exp_tutor`), both of which
+resolve correctly to real components, and both of which have no effect
+whatsoever.
+
+**Why it matters now rather than as trivia:** the roadmap is heading toward a
+UI. Building a form field for a setting that has no effect is worse than not
+building it, and a user who sets it would reasonably expect something to
+happen.
+
+**The options:**
+- **Wire it up.** Presumably a negative counterpart to `conditional` — a
+  penalty when the rule does *not* fire, or a hard demotion when it does. The
+  intended semantics were never written down, which is part of why it was
+  never finished.
+- **Delete it.** `migration_plan.md` lists it under DERIVED debt ("needs
+  derivation from importance map"), which suggests the intent was for low
+  importance to express the same idea. If `component_importance` already
+  covers "rarely show this", the field is redundant and should go rather than
+  be resurrected.
+
+**Leaning delete**, because R15 now derives importance automatically and
+`low` already means what `rarely_include` was reaching for. But that is a
+product decision about what the profile should express, not a bug to fix
+quietly, so it stays open.
+
+**Note:** `projects.high_priority` is a near-relative — still read, but only
+for explanation text, never for scoring. See R17.
+
+---
+
 # Resolved questions
 
 ## R1. Should we use a synthetic john_doe profile for the public repo?
@@ -1317,6 +1369,51 @@ single biggest onboarding blocker for personal data. It does not touch the
 harder one: `conditional_inclusion` is still hand-authored, and R14 showed
 the mechanism needed fixing before the vocabulary could be automated at all.
 That remains Q14 item 5.
+
+---
+
+## R17. Profile rules that reference components which do not exist
+
+**Decision:** Done (August 2026). Validated and warned about, not corrected
+case by case.
+
+Several profile fields are keyed by component ID — `always_include`,
+`never_include`, `high_priority`, and the `conditional_inclusion` /
+`rarely_include` maps. An ID matching no parsed component is not an error
+anywhere: the lookup misses, the rule never applies, and nothing says so. A
+stale rule is indistinguishable from a rule that simply did not match a JD.
+
+**`user_profiles/template.json` shipped five of them:** `exp_company1`,
+`exp_company2`, `exp_healthcare_company`, `proj_best_project`,
+`proj_second_best`. Since `init_profile.py` copies the template wholesale,
+**every bootstrapped profile inherited all five.** Two were in
+`always_include`, which is worth +0.30 — the largest single term in the
+composite score. Cleared; those collections now start empty, because a
+component ID cannot be known before a resume is parsed.
+
+**The check.** `find_unresolvable_ids()` resolves every ID-keyed field
+through the parser's own `get_experience_by_id` / `get_project_by_id`, so it
+agrees exactly with what the scorer would resolve. Called once per run from
+the orchestrator and again by `init_profile.py` against its own output.
+Schema validity was never the issue — a ghost rule loads fine.
+
+**Correction to Q14.** That entry claimed `exp_outlier` and `exp_tutor` in
+the live profile "do not resolve" and "have never fired". **That was wrong.**
+Both resolve through the parser's prefix matching, to `exp_outlier_ai` and
+`exp_tutor_com`. The original finding came from comparing ID sets exactly,
+which is not how the code resolves them. Running the new check against the
+live profile reports zero problems — which is the correct answer, and a
+useful confirmation that the validator models real behaviour rather than a
+stricter fiction.
+
+**Found while checking: `high_priority` no longer affects scoring**, having
+been deliberately superseded by the composite scorer (see the comment in
+`resume_parser.select_components`). But `analysis_agent` still reported
+`"High priority (profile)"` as the *reason* a project was selected. The
+project was selected by score; the flag contributed nothing. The reasoning
+text now states the real cause and mentions the flag separately, since a run
+summary that misattributes causation is worse than one that says less —
+especially once it is shown in a UI.
 
 ---
 

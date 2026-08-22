@@ -22,7 +22,12 @@ from .profile_loader import (
 )
 from .derivation import (
     derive_component_importance,
+    derive_personal_info,
     merge_importance,
+)
+from .validation import (
+    find_unresolvable_ids,
+    warn_unresolvable_ids,
 )
 
 __all__ = [
@@ -42,5 +47,9 @@ __all__ = [
     'ProfileLoadError',
     # Derivation
     'derive_component_importance',
+    'derive_personal_info',
     'merge_importance',
+    # Validation
+    'find_unresolvable_ids',
+    'warn_unresolvable_ids',
 ]
