@@ -99,14 +99,35 @@ when one does not. A rule that cannot fire should never be silent.
 *Why first:* it is in the onboarding path, so it affects every future user,
 and it is cheap. Bugs that scale with users outrank bugs that affect one.
 
-## 2. The verification run
+## 2. The verification run — DONE (2026-08-22)
 
-R14 and R15 both moved component selection (8/20 and 4/20 JDs) and **neither
-has been checked by reading a generated resume.** Replay the frozen baseline,
-read three or four PDFs, confirm the choices look defensible to a human.
+Replayed the frozen baseline through current code (20 JDs analysed, top 3
+generated), then read the PDFs.
 
-*Why here:* two unverified changes is recoverable; four is archaeology. This
-costs one run.
+**The instrument is validated end to end.** The live run changed exactly
+**8/20** selections — the same eight JDs, with the same swaps, that the
+offline reconstruction predicted. Analytical measurement and real behaviour
+agree completely, which is what makes the rest of the roadmap's
+measure-first approach trustworthy.
+
+**Output is sound.** Three resumes, all one page, none demoted to
+needs_review, all with PDFs.
+
+**The swaps hold up.** Samsara dropping a UX-redesign project from a backend
+resume is the clear win R14 was aimed at. The Palantir case looked
+questionable on a skim — the incoming RunKeeper project's bullet reads
+frontend-flavoured — but the numbers say otherwise: it won on embedding
+(0.597 vs 0.576) *and* keyword (0.25 vs 0.13) with **zero** trigger hits,
+while Spotify's single incidental `typescript` match no longer carries it.
+That is precisely the behaviour R14 was built for.
+
+**One marginal case.** Ramp (Mobile Engineer, Android) swapped
+`spotify_music_browser` for `search_engine` on a **0.017** margin, decided by
+the keyword term against the embedding's preference. The mobile project is
+correctly retained with a full 3-hit bonus. Defensible, but a coin flip.
+
+**Two findings the metrics could not have surfaced** — see the Q3 addition
+below and Q17.
 
 ## 3. Fix the `java` / `javascript` substring bug
 
@@ -350,6 +371,21 @@ Remaining options for filling it:
 
 Deferred until live-run data across more resumes shows how often headroom
 actually appears.
+
+**The allocation shape, not just the total (found 2026-08-22).** Reading
+real output surfaced something the headroom measurements missed. Both
+verified resumes allocate **3/2/1 bullets across experiences and 2/2/2/1
+across projects** — the last item in each section always gets one. And both
+pages have **zero headroom**, so this is not wasted space; it is how the
+budget is divided.
+
+The effect is a one-line tail. Uber's fourth project (Diagnosify) and
+Palantir's (RunKeeper Tweet Analyzer) each contribute a single bullet at the
+bottom of the page, reading as filler rather than evidence. The open question
+is whether a fourth project earning one line beats a third project earning
+two, or a fuller experience section. That is a different question from "is
+there headroom" and probably a more valuable one, since it applies even when
+the page is full.
 
 **Open sub-questions:**
 - Should `SUBSTANTIVE_MIN = 60` be raised for experiences? Some compressed
@@ -753,6 +789,45 @@ quietly, so it stays open.
 
 **Note:** `projects.high_priority` is a near-relative — still read, but only
 for explanation text, never for scoring. See R17.
+
+---
+
+## Q17. Embeddings reward vocabulary overlap, not role type
+
+**Status:** Open. Surfaced 2026-08-22 by the item-2 verification run.
+
+On the Uber *Software Engineer I* resume, the third experience slot went to
+**tutor.com** — a tutoring role — beating **AI Ensured**, an AI Engineer
+internship, by **0.033**. The entire margin is embedding similarity (0.656 vs
+0.623); keyword, conditional and importance terms are identical for both.
+
+The cause is visible in the bullet. tutor.com reads *"tutoring in Python and
+Java, resolving code bugs, teaching data structures, algorithms, and
+object-oriented programming"* — dense with exactly the vocabulary a
+software-engineering JD uses. The embedding correctly reports high textual
+similarity. It has no way to encode that one is engineering work and the
+other is teaching *about* engineering.
+
+This is not caused by R14 or R15 (experience selection was unchanged in all
+20 JDs) and it is not obviously wrong — tutor.com is current and ongoing,
+AI Ensured was a three-month stint, and a human might well choose the same.
+The problem is that it should be a *choice* rather than an artifact of a
+0.033 distance.
+
+**Options:**
+- **Let importance decide it.** Both are `low` in the hand-tuned profile and
+  would both be `medium` under R15's derived tiers, so importance currently
+  breaks no ties. Giving tutoring an explicit `low` would settle it — but
+  that is hand-tuning, the thing Step 7 exists to remove.
+- **Derive a role-type signal** from the title (Intern / Engineer / Tutor /
+  Teaching Assistant) and weight it. Generalises across users, and is the
+  kind of thing an onboarding UI could confirm rather than ask.
+- **Accept it.** A near-tie between two weak third-choice experiences is a
+  low-stakes outcome, and the resume is not wrong.
+
+**Worth noting for the app:** this is the sort of decision a user would want
+to override, which argues for surfacing "why was this chosen" and an
+include/exclude toggle in the UI rather than solving it purely in scoring.
 
 ---
 
