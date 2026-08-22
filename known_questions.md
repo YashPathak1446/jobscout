@@ -25,6 +25,122 @@ When we explicitly decide *not* to do something, put it in **Out of scope**.
 
 ---
 
+# Roadmap — what is left, in order
+
+Reconciled 2026-08-21 against `migration_plan.md`'s debt list and the Active
+questions below. Ordering is a recommendation, not a contract; the reasoning
+matters more than the sequence, so change the order if the reasoning stops
+holding.
+
+## 0. Verification debt — do this before adding anything
+
+**A live run, reading the actual resumes.** R14 and R15 both moved component
+selection (8/20 and 4/20 JDs on the frozen baseline) and **neither has been
+checked by looking at a generated resume.** Both were validated against the
+baseline and spot checks only. Adding a third selection-affecting change on
+top means three unverified changes interacting, and untangling that later
+costs more than the run costs now.
+
+Concretely: replay `baselines/2026-08-21-pre-step7/enriched_jobs.json`, read
+three or four PDFs, and confirm the component choices look defensible to a
+human. Cheap, and it either buys confidence or catches something early.
+
+## 1. Step 5 — derive `conditional_inclusion` (Q14 item 5)
+
+The last DERIVED field still hand-authored, and the real multi-user blocker:
+everything else about onboarding is now automatic.
+
+**R14 unblocked this, and it is worth being precise about why.** An earlier
+reading of the data — auto-extracted keywords overlapping the hand-written
+triggers by only 3 terms out of 104 — was taken as proof that
+`migration_plan.md`'s tech-stack algorithm could not work. That conclusion
+was wrong, or rather it was right only under the *old* scoring rule. When any
+single match granted the full +0.20, deriving triggers like `angular` and
+`typescript` would have fired every trigger on every JD and destroyed the
+term's ability to discriminate. Under hit-count scoring, a JD naming Angular
+*and* TypeScript *and* Node gives that project three hits and the full bonus,
+which is correct, while a passing mention gives 0.07, which is also correct.
+
+So implement `migration_plan.md`'s algorithm as written, and measure it
+against the baseline the same way R14 and R15 were measured. The metric is
+no longer "does it match the hand-written list" — it is "does selection hold
+up under the scaled rule".
+
+## 2. Derive `rarely_include` from the importance map
+
+Small, same area, and it clears a live bug: the `rarely_include` keys
+`exp_outlier` and `exp_tutor` do not resolve to real component IDs
+(`exp_outlier_ai`, `exp_tutor_com`), so those rules have never fired. Fixing
+the aliases *starts* them firing, which is a scoring change to measure rather
+than a typo to slip in.
+
+## 3. INTERNAL cleanup — five fields that should be code constants
+
+`experiences.{max,min,typical}_count`, `projects.{max,min,typical}_count`,
+`formatting.*_chars_*`, `agent_preferences.discovery_sources`,
+`agent_preferences.scoring_threshold`.
+
+No measurement needed and no behaviour change if done faithfully — they are
+constants living in a user-facing file. Every one removed is one less thing
+in a new user's profile. Good work to slot between larger items.
+
+## 4. Q12 — give the tests a home
+
+The `pdf_builder` self-check (11 assertions, runs with or without LaTeX) is
+still in a scratch directory because the repo has no `tests/`. It already
+caught one real bug. Everything above changes scoring, which is exactly when
+a regression net earns its keep.
+
+## 5. The `java` / `javascript` substring bug
+
+`_extract_keywords` matches by substring above three characters, so every
+JavaScript mention also credits Java. Small and clearly wrong, but the fix —
+word boundaries for all keywords — moves scoring broadly, so it needs the
+same baseline measurement as anything else here.
+
+## 6. Q9 — migrate off `gemini-embedding-001`
+
+Externally time-pressured rather than urgent: the model is past its listed
+shutdown date and still serving. R11 already made the cache model-aware, so
+the dangerous part is handled. What remains is re-embedding and re-validating
+`scoring_threshold`. Do it on our schedule, not on the day it 404s.
+
+## 7. Q10 — clearance-gated employers
+
+Needs investigation before implementation: it is not yet known whether the
+IDT job stated its restriction and the filter missed the phrasing, or whether
+the JD never said so at all. Those need different fixes, and the second one
+cannot be solved with JD keywords.
+
+## 8. Q3 — fill page headroom
+
+Measurable now, but the sample is five resumes. Wants live-run data on how
+often headroom actually appears before spending LLM output on bullets that
+may be trimmed.
+
+## Phase 3 and beyond — blocked on decisions, not effort
+
+- **Q15 tenancy decision.** Multi-tenant or single-tenant-per-instance? That
+  choice decides whether the single-user assumptions in the caches and output
+  paths are blockers or non-issues. Not recorded anywhere yet, and it should
+  be, because it changes what Phase 3 even means.
+- **Q15 plumbing.** The embedding cache is one file for one resume,
+  `job_cache.json` likewise, and output directories are keyed on date alone
+  so run metadata collides. Cheap to thread a `user_id` through
+  opportunistically; expensive as a migration later.
+- **Q8b.** `pdflatex` is a local binary; a hosted app needs it containerised.
+- **USER-INPUT fields.** Six profile fields need a UI before they stop being
+  hand-edited JSON. Nothing to build until there is a UI.
+- **Q2.** PDF and DOCX resume input. Large, and the architectural choice
+  (convert-to-LaTeX vs bullet-keyword extraction) is still open.
+
+## Not scheduled
+
+**Q6** — long master bullets. Working but fragile; no failure observed
+recently. Revisit if compression starts dropping metrics again.
+
+---
+
 # Active questions
 
 ## Q1. How does the profile generalize when there are different users?

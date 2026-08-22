@@ -255,11 +255,13 @@ When changing the system, every profile-touching change has to answer:
 If a change adds a new profile field that's USER-INPUT, that's debt. Track
 it in this doc until the UI catches up.
 
-### Current debt (as of 2026-05-07)
+### Current debt (updated 2026-08-21)
 
 These fields are USER-INPUT but currently hand-edited in JSON:
 
-- [ ] `component_importance.{experiences,projects}` — needs UI form
+- [~] `component_importance.{experiences,projects}` — **now derived from
+      resume order (R15)**, so the UI form became an override rather than a
+      requirement. Top-2 high, next-4 medium; explicit profile values win.
 - [ ] `experiences.always_include` / `never_include` — needs UI toggle
 - [ ] `projects.always_include` / `never_include` — needs UI toggle
 - [ ] `job_preferences.exclude_keywords` — needs UI checkboxes
@@ -269,9 +271,15 @@ These fields are USER-INPUT but currently hand-edited in JSON:
 These fields are DERIVED but currently hand-edited:
 
 - [ ] `experiences.conditional_inclusion` — needs auto-generation from bullets
-- [ ] `projects.conditional_inclusion` — needs auto-generation from tech stack
-- [ ] `experiences.rarely_include` — needs derivation from importance map
-- [ ] `personal_info.{name,email,phone,linkedin,github,graduation_date}` — needs resume header parser
+- [ ] `projects.conditional_inclusion` — needs auto-generation from tech stack.
+      **Viable now:** the algorithm below was unsafe under all-or-nothing
+      trigger scoring and became workable once R14 switched to hit counts.
+- [ ] `experiences.rarely_include` — needs derivation from importance map.
+      Note the current keys `exp_outlier` and `exp_tutor` do not resolve to
+      real component IDs, so these rules have never fired.
+- [x] `personal_info.{name,email,phone,linkedin,github,graduation_date}` —
+      **done (R16)**, plus school, degree and graduation term. Derived at
+      profile-creation time by `scripts/init_profile.py`.
 
 These fields are INTERNAL but exposed in profile (cleanup opportunity):
 
@@ -284,6 +292,23 @@ These fields are INTERNAL but exposed in profile (cleanup opportunity):
 ---
 
 ## Privacy and dev-vs-public profiles
+
+**Superseded 2026-08-21. The section below describes an arrangement that was
+considered and rejected; it is kept for the reasoning, not as instructions.**
+
+What is actually true:
+- The real profile is `user_profiles/<name>.json` and the real resume
+  `data/master_resumes/<name>.tex`. Both gitignored.
+- `user_profiles/template.json` is the committed starting point, and
+  `scripts/init_profile.py` fills it from a resume.
+- **No synthetic example profile exists, by decision (R1).** The maintenance
+  cost was judged higher than the benefit for a single-contributor repo.
+- The git history purge this section anticipated has happened: personal data
+  and generated artefacts were removed from all history with `git
+  filter-repo`, and the phone number and email that were hardcoded in
+  pre-v3 source were redacted (R12 covers the related tracking bug).
+
+The original plan follows.
 
 The dev profile (real name, real resume, real preferences) lives at:
 - `user_profiles/john_doe.json` (gitignored)
