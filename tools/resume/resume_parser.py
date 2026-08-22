@@ -87,6 +87,20 @@ class ResumeParser:
                 keyword_source_text(comp), vocabulary=self.tech_vocabulary
             )
 
+        # Importance defaults from resume order — people lead with their
+        # strongest work. These are defaults only; anything the profile
+        # states explicitly wins (see tools/profile/derivation.py).
+        from tools.profile.derivation import derive_component_importance
+
+        self.derived_importance = {
+            "experiences": derive_component_importance(
+                [e.id for e in self.parsed_resume.experiences]
+            ),
+            "projects": derive_component_importance(
+                [p.id for p in self.parsed_resume.projects]
+            ),
+        }
+
         logger.info(f"✅ Parsed: {len(self.parsed_resume.experiences)} experiences, "
                    f"{len(self.parsed_resume.projects)} projects, "
                    f"{len(self.tech_vocabulary)} keyword vocabulary")
@@ -283,9 +297,18 @@ class ResumeParser:
         exp_rules = profile.get_experience_selection_rules(jd_text)
         proj_rules = profile.get_project_selection_rules(jd_text)
 
+        # Profile tiers layered over the resume-order defaults, so a profile
+        # that omits a component gets a considered tier instead of an
+        # implicit 'medium'.
+        from tools.profile.derivation import merge_importance
+
         importance_cfg = profile.resume_preferences.component_importance
-        exp_importance = dict(importance_cfg.experiences)
-        proj_importance = dict(importance_cfg.projects)
+        exp_importance = merge_importance(
+            importance_cfg.experiences, self.derived_importance["experiences"]
+        )
+        proj_importance = merge_importance(
+            importance_cfg.projects, self.derived_importance["projects"]
+        )
 
         jd_lower = jd_text.lower()
         jd_keywords = _extract_jd_keywords(jd_lower, self.tech_vocabulary)

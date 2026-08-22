@@ -457,9 +457,20 @@ class GenerationAgent:
         ]
 
         # Get importance tiers from profile (resolve aliases defensively)
+        # Same merge as Analysis uses: resume-order defaults underneath, the
+        # profile's explicit tiers on top. Budget allocation and component
+        # selection must agree on importance or they pull in opposite
+        # directions.
+        from tools.profile.derivation import merge_importance
+
         imp = self.profile.resume_preferences.component_importance
-        exp_importance = self._resolve_importance_map(imp.experiences, "exp")
-        proj_importance = self._resolve_importance_map(imp.projects, "proj")
+        derived = getattr(self.resume_parser, "derived_importance", {})
+        exp_importance = self._resolve_importance_map(
+            merge_importance(imp.experiences, derived.get("experiences", {})), "exp"
+        )
+        proj_importance = self._resolve_importance_map(
+            merge_importance(imp.projects, derived.get("projects", {})), "proj"
+        )
 
         # --- Dynamic project count decision ---
         # If using all selected projects would force the lowest-importance

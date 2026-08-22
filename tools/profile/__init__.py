@@ -20,6 +20,10 @@ from .profile_loader import (
     print_profile_summary,
     ProfileLoadError,
 )
+from .derivation import (
+    derive_component_importance,
+    merge_importance,
+)
 
 __all__ = [
     # Schema
@@ -36,4 +40,7 @@ __all__ = [
     'validate_profile_file',
     'print_profile_summary',
     'ProfileLoadError',
+    # Derivation
+    'derive_component_importance',
+    'merge_importance',
 ]

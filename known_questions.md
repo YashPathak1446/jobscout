@@ -45,8 +45,10 @@ The detailed taxonomy is in `migration_plan.md`. The implementation is
 gated on Phase 1 (Step 7 in the master plan).
 
 **Open sub-questions:**
-- Should `component_importance` default to "high → medium → low" based on
-  resume order? (Most people put their strongest project first.)
+- ~~Should `component_importance` default to "high → medium → low" based on
+  resume order?~~ **Answered yes, August 2026 — see R15.** The hunch held:
+  importance decreases monotonically with position, 17 of 18 components. The
+  boundaries (top-2 high, next-4 medium) were picked by measurement.
 - Should `target_roles` be a multi-select (curated list, easier to filter)
   or free-form (more flexible)?
 - For users with multiple resumes (different role types), how do we handle
@@ -421,7 +423,8 @@ was taken with it.
 1. ~~Close the reconstruction gap.~~ Done — see above.
 2. ~~Apply the firing-rule change and measure it.~~ Done — see R14.
    Shipped `scaled`; 8/20 selections changed, matching simulation.
-3. `component_importance` derived from resume order (high -> medium -> low).
+3. ~~`component_importance` derived from resume order.~~ Done — see R15.
+   top-2 high / next-4 medium, as a default the profile overrides.
 4. Personal info derived from the resume header.
 5. Trigger vocabulary derivation — only now genuinely unblocked, since R14
    settled what kind of vocabulary is useful: terms specific enough that a
@@ -1017,6 +1020,53 @@ into a backend resume; Ramp keeps its mobile project.
 recorded baseline exactly — 20/20 selections and 360/360 keyword terms. An
 earlier version reproduced only 16/20 and would not have resolved an effect
 this size reliably. See Q14.
+
+---
+
+## R15. Should `component_importance` be derived from resume order?
+
+**Decision:** Yes. Done (August 2026). Derived as a default; explicit profile
+tiers still win.
+
+Q1 posed this as a hunch — "most people put their strongest project first".
+It tested well. Against this project's hand-tuned profile, importance is
+**monotonically decreasing with resume position**, with exactly one exception
+in 18 components (`proj_ml_based_antibiotic_resistance_predictio`, marked
+medium while sitting among the lows at position 9).
+
+**The rule was chosen by measurement, not taste.** Candidates were scored on
+two axes: agreement with the hand-tuned tiers, and how much they perturbed
+selection on the frozen 20-JD baseline.
+
+| rule | tier agreement | selections changed |
+|---|---|---|
+| **top-2 high, next-4 medium** | **14/18** | **4/20** |
+| top-2 high, next-2 medium | 13/18 | 15/20 |
+| top-2 high, next-6 medium | 12/18 | 6/20 |
+| top-1 high, next-3 medium | 11/18 | 13/20 |
+| top-3 high, next-3 medium | 13/18 | 16/20 |
+
+Top-2/next-4 wins on both, and the two axes moving together is the reason to
+trust the rule rather than either number alone. All four disagreements are
+the derived rule being *more generous* than the hand-tuning — the weak
+experiences at positions 3–5 get medium where they were marked low, worth
++0.05 each.
+
+**Derived values are defaults.** `merge_importance()` layers explicit profile
+tiers on top, so this profile — which states all 18 — is completely
+unaffected. Verified: the baseline still reproduces 20/20. The 4/20 figure is
+therefore not a change to this user; it is the distance between *derived* and
+*hand-tuned* for a user who wrote nothing. Read that way it is the useful
+number: **derivation lands within 4/20 selections of a hand-tuned profile.**
+
+**Both consumers share the merge.** Component selection (Analysis) and bullet
+budget allocation (Generation) each read importance independently and would
+otherwise be free to disagree about a component's tier while allocating
+against it.
+
+**Home for the rest of Step 7:** `tools/profile/derivation.py`. Items 4 and 5
+(header parsing, trigger vocabulary) belong there too, under the same
+contract — derived is a default, stated wins.
 
 ---
 
