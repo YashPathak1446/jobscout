@@ -120,6 +120,18 @@ Generated resumes appear in `outputs/<date>/`.
 
 ---
 
+## Tests
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
+Stdlib `unittest` rather than pytest, deliberately: `requirements.txt` is the
+install list for anyone running the app, and a test framework does not belong
+there. The suite needs no LaTeX — `pdf_builder`'s tests stand in a stub
+`pdflatex` so the failure paths (timeout, compile error, missing engine) are
+reachable, and contributors without TeX can still run everything.
+
 ## Project layout
 
 ```
@@ -145,6 +157,12 @@ jobscout/
 ├── outputs/                # Generated resumes (gitignored)
 ├── cache/                  # Embedding/job caches (gitignored)
 ├── README.md
+├── scripts/                # Diagnostics and setup
+│   ├── init_profile.py     # Bootstrap a profile from a resume
+│   ├── inspect_resume.py   # Bullet counts, page count, headroom
+│   ├── baseline.py         # Freeze/verify measurement baselines
+│   └── check_models.py     # Probe which Gemini models are live
+├── tests/                  # Stdlib unittest, no extra dependency
 ├── known_questions.md      # Open architectural questions
 ├── migration_plan.md       # Multi-user migration roadmap
 └── requirements.txt

@@ -160,7 +160,15 @@ comma-split so `_extract_keywords` never enters the path. The second makes
 this optional for item 5 — but the keyword score term is still wrong on its
 own merits, so it wants fixing either way, with the usual measurement.
 
-## 4. Give the tests a home (Q12)
+## 4. Give the tests a home (Q12) — DONE (2026-08-22)
+
+**Done — see R19.** `tests/`, stdlib unittest, 58 tests covering keyword
+matching, bullet compression and fitting, profile derivation, and PDF
+compilation. No new dependency, and no LaTeX needed to run it.
+
+The original entry follows.
+
+### Original
 
 Minimal, not a suite: move the existing `pdf_builder` self-check into
 `tests/` and add `bullet_compress` and `bullet_fit`, which are pure and
@@ -592,31 +600,6 @@ filtering solves it. It needs employer-level knowledge, not JD-level.
   hold for wrong-*eligibility* jobs, because a clearance-gated role can be a
   genuinely excellent semantic match and score high on merit. Different
   failure class, needs a different mechanism.
-
----
-
-## Q12. Where do tests live?
-
-**Status:** Open. No test suite exists.
-
-The repo has no `tests/` directory and no test dependency in
-`requirements.txt`. The PDF work (R8, R9) produced an 11-assertion
-self-check for `pdf_builder` that runs with or without a LaTeX install by
-standing in a stub pdflatex — but it lives outside the repo, because there
-was no convention to put it in.
-
-That check earned its keep: it caught the wrapped-log page-count bug
-described in R9's follow-up, which had silently disabled the one-page gate
-for most resumes. Worth establishing the convention.
-
-**Open sub-questions:**
-- Plain `unittest` (stdlib, no new dependency) or `pytest` (nicer, one more
-  line in requirements)?
-- What gets covered first? `bullet_compress.py` and `bullet_fit.py` are the
-  obvious candidates — pure, deterministic, and directly responsible for
-  output quality. `job_filter` and `location_matcher` are close behind.
-- Does a test suite that needs pdflatex belong in CI, or should the LaTeX
-  ones stay opt-in?
 
 ---
 
@@ -1561,6 +1544,51 @@ run, where it predicted 8/20 exactly. **A fresh baseline should be recorded
 after item 5**, not before: re-baselining now would invalidate the comparison
 point that R14, R15 and Q7's numbers were all measured against, and item 5
 is going to move scoring again anyway.
+
+---
+
+## R19. Where do tests live?
+
+**Decision:** Done (August 2026). `tests/`, stdlib `unittest`, 58 tests.
+
+**Why unittest and not pytest.** `requirements.txt` is the install list for
+anyone running the app, and a test framework does not belong there — this is
+heading toward something a non-technical user installs locally. A separate
+dev-requirements file is more structure than the ergonomic gain justifies at
+this size. `python -m unittest discover -s tests -t .` needs nothing extra.
+(`pytest>=7.0.0` has sat commented out in requirements.txt for months, which
+is roughly the same conclusion reached passively.)
+
+**What is covered**, chosen for being pure, deterministic, and load-bearing:
+
+- `test_keyword_matching.py` — term-vs-substring matching (R18), skill-list
+  splitting, vocabulary construction. Every false positive R18 found is a
+  named test case, so `scala`/"scalable" and `ai`/"training" cannot come back.
+- `test_bullet_compress.py` — the deterministic half of R6. Individual
+  transforms, compression contracts (deterministic, never empties a bullet,
+  only reports real stage names), zone boundaries, and the documented
+  needs_review path when compression cannot reach a good zone.
+- `test_derivation.py` — importance tiers (R15) and personal-info derivation
+  (R16), including every graduation-parsing case: ongoing study must yield
+  blank rather than the start date, "Expected May 2026" must not lose its
+  month, June must land in Spring.
+- `test_pdf_builder.py` — moved in from a scratch directory, and made
+  cross-platform on the way.
+
+**The stub pdflatex is the reason this suite is worth having.** It fakes each
+outcome, so the paths that matter most — timeout, compile error, missing
+engine, nonzero exit that still produced a PDF — are reachable deliberately
+rather than by luck. It also means contributors with no LaTeX install can run
+everything, which matters for a project about to be distributed.
+
+That suite already earned its keep once: it caught the wrapped-log page-count
+bug that had silently disabled the one-page gate for most resumes. That case
+is now a named regression test.
+
+**Not covered, deliberately:** anything requiring API calls, and
+`select_components` end to end. The latter is better served by the frozen
+baseline, which measures real selection against recorded output — a unit test
+asserting a particular component wins would just restate the scoring formula.
 
 ---
 
