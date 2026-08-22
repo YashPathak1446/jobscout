@@ -40,8 +40,12 @@ env/
 # Outputs (run-generated, not source)
 outputs/
 
-# Frozen before/after comparison sets for scoring changes (run-generated)
-/baselines/
+# Frozen before/after comparison sets for scoring changes.
+# Contents stay out (resume content, employer names); the manifest and README
+# are committed so a lost baseline is detectable rather than silent.
+/baselines/*
+!/baselines/README.md
+!/baselines/*.manifest.json
 
 # Cache (run-generated, not source)
 # Leading slash matters: a bare "cache/" matches at ANY depth, which silently

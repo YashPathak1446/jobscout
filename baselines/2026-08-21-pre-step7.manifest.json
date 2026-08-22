@@ -1,0 +1,29 @@
+{
+  "baseline": "2026-08-21-pre-step7",
+  "recorded": "2026-08-21",
+  "note": "Frozen measurement set. Contents are gitignored; this manifest is committed so a lost or altered baseline is detectable.",
+  "files": {
+    "analysis_results.json": {
+      "sha256": "facaddecca5fadfd4adcfe5e962fffe7fe8e0bf9623cc438e24c297e2f51ec18",
+      "bytes": 271681,
+      "records": 20
+    },
+    "enriched_jobs.json": {
+      "sha256": "e3480cafd1e6e0b93fb7fa05e60c4093b951bb72ac3ea9745a64b0398efd3117",
+      "bytes": 105828,
+      "records": 20
+    },
+    "Yash_Pathak__Software_Engineer_New.tex": {
+      "sha256": "21611b00605ddc7a753d5503f6e968db2ac5d3246969d248bd1ab9d1d2646c39",
+      "bytes": 9525
+    },
+    "Yash_Pathak_Palantir_Technologies_Software_Engineer_New.tex": {
+      "sha256": "ec7689a1d9f30b1665dcc8c06252ddb8fa93cbda64d03644c3a8886ad85f2898",
+      "bytes": 9369
+    },
+    "Yash_Pathak_Uber_Software_Engineer_I.tex": {
+      "sha256": "2c666413543459679074cd9905fdafefe356cef7c2e07f4cce680657587978da",
+      "bytes": 9131
+    }
+  }
+}

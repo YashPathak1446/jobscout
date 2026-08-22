@@ -27,117 +27,188 @@ When we explicitly decide *not* to do something, put it in **Out of scope**.
 
 # Roadmap — what is left, in order
 
-Reconciled 2026-08-21 against `migration_plan.md`'s debt list and the Active
-questions below. Ordering is a recommendation, not a contract; the reasoning
-matters more than the sequence, so change the order if the reasoning stops
-holding.
+Rewritten 2026-08-21 after deciding the product shape: **a local app where
+each user brings their own Gemini API key.** That decision reorders
+everything below, so it is recorded first.
 
-## 0. Verification debt — do this before adding anything
+## The decision, and why
 
-**A live run, reading the actual resumes.** R14 and R15 both moved component
-selection (8/20 and 4/20 JDs on the frozen baseline) and **neither has been
-checked by looking at a generated resume.** Both were validated against the
-baseline and spot checks only. Adding a third selection-affecting change on
-top means three unverified changes interacting, and untangling that later
-costs more than the run costs now.
+Free-tier Gemini quota is per key, not per user. A hosted app routes every
+user's generation through one key; twenty active users would exhaust the
+daily cap before noon, and the LLM cache cannot help because every user's
+prompts contain their own resume. R10 solved dev-time quota burn and does
+nothing for concurrent strangers. Against a zero-spend constraint, that rules
+out hosting on our key.
 
-Concretely: replay `baselines/2026-08-21-pre-step7/enriched_jobs.json`, read
-three or four PDFs, and confirm the component choices look defensible to a
-human. Cheap, and it either buys confidence or catches something early.
+The tempting middle option — a hosted app where users paste their key — is
+the worst choice available. It keeps every multi-tenant namespacing problem
+from Q15 *and* adds custody of other people's API credentials, which is a
+security posture a solo maintainer should not want.
 
-## 1. Step 5 — derive `conditional_inclusion` (Q14 item 5)
+Local-first dissolves three problems at once:
+- **Q15 items 1–3 evaporate.** One user per instance means the single-file
+  embedding cache, the global job cache and the date-only output paths stop
+  colliding. No `user_id` threading needed.
+- **Q8b evaporates.** pdflatex is on the user's machine.
+- **Key custody evaporates.** The key lives in their `.env`, never ours.
 
-The last DERIVED field still hand-authored, and the real multi-user blocker:
-everything else about onboarding is now automatic.
+This also answers Q15's tenancy question: **single-tenant per instance.** A
+hosted paid tier later becomes an addition rather than a rewrite — the
+pipeline is identical, only the key's origin changes.
 
-**R14 unblocked this, and it is worth being precise about why.** An earlier
-reading of the data — auto-extracted keywords overlapping the hand-written
-triggers by only 3 terms out of 104 — was taken as proof that
-`migration_plan.md`'s tech-stack algorithm could not work. That conclusion
-was wrong, or rather it was right only under the *old* scoring rule. When any
-single match granted the full +0.20, deriving triggers like `angular` and
-`typescript` would have fired every trigger on every JD and destroyed the
-term's ability to discriminate. Under hit-count scoring, a JD naming Angular
-*and* TypeScript *and* Node gives that project three hits and the full bonus,
-which is correct, while a passing mention gives 0.07, which is also correct.
+## 0. Baseline durability — DONE (2026-08-21)
 
-So implement `migration_plan.md`'s algorithm as written, and measure it
-against the baseline the same way R14 and R15 were measured. The metric is
-no longer "does it match the hand-written list" — it is "does selection hold
-up under the scaled rule".
+Every scoring claim in this doc rests on
+`baselines/2026-08-21-pre-step7/`, which is gitignored and existed on one
+machine. That is R12's lesson repeating: something load-bearing, invisible
+from inside the repo.
 
-## 2. Derive `rarely_include` from the importance map
+Content still stays out of git — it holds employer names and whole resumes.
+What is committed is a manifest of checksums and record counts, so a lost or
+altered baseline is **detectable rather than silent**, plus
+`scripts/baseline.py` to write, verify and archive one. `verify` exits
+non-zero, so it can gate a measurement run. See `baselines/README.md`.
 
-Small, same area, and it clears a live bug: the `rarely_include` keys
-`exp_outlier` and `exp_tutor` do not resolve to real component IDs
-(`exp_outlier_ai`, `exp_tutor_com`), so those rules have never fired. Fixing
-the aliases *starts* them firing, which is a scoring change to measure rather
-than a typo to slip in.
+## 1. Fix the template ghost rule, and check for its whole class
 
-## 3. INTERNAL cleanup — five fields that should be code constants
+`user_profiles/template.json` ships a `conditional_inclusion` rule keyed to
+`exp_healthcare_company` — a component that exists in nobody's resume. Since
+`init_profile.py` copies the template wholesale, **every bootstrapped profile
+inherits a dead rule.**
 
-`experiences.{max,min,typical}_count`, `projects.{max,min,typical}_count`,
-`formatting.*_chars_*`, `agent_preferences.discovery_sources`,
-`agent_preferences.scoring_threshold`.
+This is the third instance of one bug: a rule keyed to a component ID that
+does not resolve, silently never firing. The others are `exp_outlier` and
+`exp_tutor` in the live profile (see Q14). Three occurrences means the fix is
+not another one-time correction — **add a validation that every
+`conditional_inclusion`, `rarely_include`, `always_include` and
+`never_include` key resolves to a real parsed component**, and warn loudly
+when one does not. A rule that cannot fire should never be silent.
 
-No measurement needed and no behaviour change if done faithfully — they are
-constants living in a user-facing file. Every one removed is one less thing
-in a new user's profile. Good work to slot between larger items.
+*Why first:* it is in the onboarding path, so it affects every future user,
+and it is cheap. Bugs that scale with users outrank bugs that affect one.
 
-## 4. Q12 — give the tests a home
+## 2. The verification run
 
-The `pdf_builder` self-check (11 assertions, runs with or without LaTeX) is
-still in a scratch directory because the repo has no `tests/`. It already
-caught one real bug. Everything above changes scoring, which is exactly when
-a regression net earns its keep.
+R14 and R15 both moved component selection (8/20 and 4/20 JDs) and **neither
+has been checked by reading a generated resume.** Replay the frozen baseline,
+read three or four PDFs, confirm the choices look defensible to a human.
 
-## 5. The `java` / `javascript` substring bug
+*Why here:* two unverified changes is recoverable; four is archaeology. This
+costs one run.
+
+## 3. Fix the `java` / `javascript` substring bug
 
 `_extract_keywords` matches by substring above three characters, so every
-JavaScript mention also credits Java. Small and clearly wrong, but the fix —
-word boundaries for all keywords — moves scoring broadly, so it needs the
-same baseline measurement as anything else here.
+JavaScript mention also credits Java.
 
-## 6. Q9 — migrate off `gemini-embedding-001`
+*Why before item 5, and why the earlier reasoning for that was wrong.* It was
+argued that trigger derivation would be "built on a broken matcher". That is
+not true: triggers are matched by `_trigger_matches`, which applies word
+boundaries — `\bjava\b` does not match "javascript". Verified directly.
 
-Externally time-pressured rather than urgent: the model is past its listed
-shutdown date and still serving. R11 already made the cache model-aware, so
-the dangerous part is handled. What remains is re-embedding and re-validating
-`scoring_threshold`. Do it on our schedule, not on the day it 404s.
+The real risk is narrower and worse. If derivation *harvests* candidate
+triggers through `_extract_keywords`, a JavaScript project acquires `java` in
+its trigger list, and that trigger then matches Java JDs with perfect
+word-boundary correctness. Nothing downstream looks wrong. The bug would
+corrupt the derived vocabulary, not the matching.
 
-## 7. Q10 — clearance-gated employers
+Two ways out: fix the bug first, or harvest from the tech stack by
+comma-split so `_extract_keywords` never enters the path. The second makes
+this optional for item 5 — but the keyword score term is still wrong on its
+own merits, so it wants fixing either way, with the usual measurement.
 
-Needs investigation before implementation: it is not yet known whether the
-IDT job stated its restriction and the filter missed the phrasing, or whether
-the JD never said so at all. Those need different fixes, and the second one
-cannot be solved with JD keywords.
+## 4. Give the tests a home (Q12)
 
-## 8. Q3 — fill page headroom
+Minimal, not a suite: move the existing `pdf_builder` self-check into
+`tests/` and add `bullet_compress` and `bullet_fit`, which are pure and
+deterministic.
 
-Measurable now, but the sample is five resumes. Wants live-run data on how
-often headroom actually appears before spending LLM output on bullets that
-may be trimmed.
+*Why above the scoring changes rather than below:* the previous version of
+this roadmap said "everything above changes scoring, which is exactly when a
+regression net earns its keep" while scheduling tests underneath three
+scoring changes. That argument does not survive its own placement.
 
-## Phase 3 and beyond — blocked on decisions, not effort
+## 5. Derive `conditional_inclusion` — the product blocker
 
-- **Q15 tenancy decision.** Multi-tenant or single-tenant-per-instance? That
-  choice decides whether the single-user assumptions in the caches and output
-  paths are blockers or non-issues. Not recorded anywhere yet, and it should
-  be, because it changes what Phase 3 even means.
-- **Q15 plumbing.** The embedding cache is one file for one resume,
-  `job_cache.json` likewise, and output directories are keyed on date alone
-  so run metadata collides. Cheap to thread a `user_id` through
-  opportunistically; expensive as a migration later.
-- **Q8b.** `pdflatex` is a local binary; a hosted app needs it containerised.
-- **USER-INPUT fields.** Six profile fields need a UI before they stop being
-  hand-edited JSON. Nothing to build until there is a UI.
-- **Q2.** PDF and DOCX resume input. Large, and the architectural choice
-  (convert-to-LaTeX vs bullet-keyword extraction) is still open.
+The last DERIVED field still hand-authored, and the only item here that
+stands between the current state and something usable by someone else.
+
+R14 measured that removing conditionals changes **12/20** selections. A
+bootstrapped user gets an empty conditional map, so they receive meaningfully
+worse component selection than the hand-tuned profile does, with no way to
+fix it short of writing JSON they would never write. **Shipping a UI before
+this means shipping a product that works well for exactly one person.**
+
+Implement `migration_plan.md`'s algorithm as written and measure it. R14
+unblocked it: under all-or-nothing scoring, derived triggers like `angular`
+would have fired on every JD and destroyed the term's ability to
+discriminate. Under hit-count scoring, three matching stack terms earn the
+full bonus and a passing mention earns 0.07 — which is the behaviour wanted.
+
+## 6. Make the API key injectable
+
+`os.getenv("GOOGLE_API_KEY")` is read at five sites, including inside
+`_call_gemini_json` and the embedding scorer.
+
+*Why before the UI:* fine for a CLI, wrong the moment a UI collects the key
+from a user. Threading it through as a parameter is small now and invasive
+once a UI exists — the same argument as R11's cache guard.
+
+## 7. Decide the pdflatex distribution story — before designing screens
+
+Asking a non-technical user to install MiKTeX is probably fatal to adoption.
+The options are bundling a TeX distribution, falling back to `.tex`-only
+downloads, or an Overleaf handoff.
+
+*Why ahead of the UI rather than after:* this is not a fallback to bolt onto
+a finished results screen. If a meaningful share of users have no LaTeX, the
+download UX is `.tex` plus a handoff — **a different screen**, not a disabled
+button. Deciding after item 8 means redesigning it.
+
+Note `find_pdflatex()` already exists (R8) and detects this reliably.
+
+## 8. The UI
+
+Three screens for an MVP, not the six `migration_plan.md` sketches: resume
+upload (`init_profile.py` does the work), key entry plus the fields
+derivation deliberately skips (location, visa status), and job preferences.
+The importance editor can wait, since R15 derives defaults.
+
+Then run, stream progress, show scored jobs, offer downloads. Mostly a
+wrapper over the existing orchestrator.
+
+**Surface failures.** Quota exhaustion, missing key, absent LaTeX all
+currently log and degrade — invisible in a browser tab. This is where
+`classify_api_error`'s four buckets earn their keep.
+
+**A `doctor` command is worth more than an install script.** Checks Python
+version, dependencies, key present and valid, pdflatex present, profile
+validates, resume exists. `check_models.py` is already half of one and
+`find_pdflatex()` is the other half. An installer's logic goes stale every OS
+release; a doctor's does not. It also gives item 7's detection a home.
+
+## Deferred — not blocking a working product
+
+- **Derive `rarely_include`** from the importance map. Small; folds naturally
+  into item 1's validation work.
+- **INTERNAL cleanup** — five profile fields that should be code constants.
+  Every one removed is one less thing in a new user's profile.
+- **Q9** — `gemini-embedding-001` is past its shutdown date and still
+  serving. R11 made the cache model-aware, so the dangerous part is handled.
+- **Q10** — clearance-gated employers. Needs investigation before
+  implementation; it is not yet known whether the JD stated the restriction.
+- **Q3** — page headroom. Measurable, but wants live-run data on how often
+  headroom appears before spending LLM output on bullets that may be trimmed.
+- **Q2** — PDF and DOCX resume input. Large, and the architectural choice is
+  still open.
+- **USER-INPUT fields** — six that need a UI before they stop being
+  hand-edited JSON. Item 8 covers three of them.
 
 ## Not scheduled
 
-**Q6** — long master bullets. Working but fragile; no failure observed
-recently. Revisit if compression starts dropping metrics again.
+**Q6** — long master bullets. Working but fragile, no recent failure.
+Building a metric-preservation checker before seeing a failure on
+gemini-3.5-flash is the speculative work this doc otherwise avoids.
 
 ---
 
