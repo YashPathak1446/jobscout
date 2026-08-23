@@ -62,6 +62,9 @@ data/master_resumes/*.tex
 !data/master_resumes/.gitkeep
 
 # User profiles - personal data
+# The durable job store: personal, unbounded, rebuildable by discovery.
+data/jobs.db
+
 user_profiles/*.json
 !user_profiles/*.example.json
 !user_profiles/template.json

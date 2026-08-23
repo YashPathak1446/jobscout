@@ -401,7 +401,12 @@ Gemini. Weaker models will fail validation more often and surface as
 `needs_review`. Each backend needs measuring against the baseline before it is
 trusted.
 
-## 12. A durable job store
+## 12. A durable job store — DONE (2026-08-23)
+
+**Done — see R35.** SQLite, keyed on apply URL, never expires, and user status
+survives re-discovery. The original entry follows.
+
+### Original
 
 **Implied by R33's job-board decision, and the largest consequence of it.**
 Everything today is per-run: a `state.json` per date. A board needs jobs that
@@ -2722,6 +2727,63 @@ and is not yet used.
 **What this does not solve:** the job cache dedups by URL with a 7-day
 expiry, so a second run over the same boards returns almost nothing. That is
 correct for a run log and wrong for the job board R33 chose — see item 12.
+
+---
+
+## R35. Jobs now outlive the run that found them
+
+**Decision:** (August 2026) `tools/jobs/job_store.py` — every job ever
+discovered, keyed on apply URL, in SQLite at `data/jobs.db`.
+
+**The pressure was R34.** Five ATS boards reach roughly 17,000 roles.
+`job_cache` decided which of them the pipeline saw, and it forgets a URL after
+seven days by design — so most of that discovery was being thrown away, and a
+second run over the same boards returned almost nothing. That behaviour is
+correct for a dedup tracker and wrong for the board R33 chose. A tracker is
+built to forget; a board must never lose anything. Opposite intents, so a
+separate file rather than a retention flag on the old one.
+
+**SQLite rather than another JSON file.** Everything else here is JSON and
+that is usually right, but this is the only artefact that grows without bound
+*and* gets asked questions — R33's board filters by role, score, date and
+status. Re-parsing a multi-megabyte document on every run to answer those is
+the wrong shape, and `sqlite3` is standard library, so it costs no dependency.
+
+**A job's status belongs to the user.** Re-discovering a posting someone
+marked `applied` must never reset it, and every write path here touches only
+what the pipeline legitimately owns. Discovery moves `last_seen`; analysis
+writes `score`; generation attaches resume paths; status is the user's alone.
+There is a test for each of those, because the failure would be silent and
+infuriating.
+
+One subtlety worth naming: an empty re-discovery must not wipe a description
+that arrived last time. ATS listings vary in whether they inline the JD, so a
+posting can be found twice with a description only once.
+
+**The store records what survives profile filtering, not everything found.**
+The first version recorded all discovered jobs, and the board immediately
+filled with manager and senior roles the profile explicitly rejects — Bosch
+alone posts thousands of jobs with nothing to do with software. Filtering
+first cut a real run from 200 stored rows to 23 relevant ones.
+
+**Skipping is no longer forgetting.** The pipeline still only *works* on jobs
+it has not scored, so a second run does not pay to analyse and generate the
+same postings. The difference is what happens to the rest: they stay. Verified
+on a live run — 23 jobs stored, 6 scored, 1 resume attached, **17 left
+unscored and waiting for the next run**. Under the old behaviour those 17 were
+gone within a week.
+
+**Mock mode does not write to the store**, because `discover_jobs` returns
+early for it. That is deliberate: fake jobs have no business on a real board.
+It does mean the integration is only exercised by real runs and by
+`tests/test_job_store.py`, not by the mock pipeline test.
+
+**What this sets up:** the board in item 14 reads this rather than a run's
+`state.json`, and `status` is what the UI writes. The Streamlit "previous runs"
+view still reads run files and is now the older of two paths — worth
+collapsing when React lands, not before.
+
+22 new tests.
 
 ---
 

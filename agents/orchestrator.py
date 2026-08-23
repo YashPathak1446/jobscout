@@ -511,6 +511,8 @@ class JobScoutOrchestrator:
         
         self.state['analysis_results'] = results
         logger.info(f"✅ Analyzed {len(results)} jobs passing threshold")
+
+        self._store_scores(results)
         
         # Save analysis results
         analysis_path = self.output_path / "analysis_results.json"
@@ -606,6 +608,8 @@ class JobScoutOrchestrator:
 
         self.state['generation_results'] = results
 
+        self._store_resumes(results)
+
         valid = sum(1 for r in results if r.get('status') == 'valid')
         review = sum(1 for r in results if r.get('status') == 'needs_review')
         failed = sum(1 for r in results if r.get('status') == 'failed')
@@ -672,6 +676,54 @@ class JobScoutOrchestrator:
         response = input("Continue to generation? (y/n): ").strip().lower()
         return response == 'y'
     
+    # =====================================================================
+    # JOB STORE
+    # =====================================================================
+
+    def _store_scores(self, results) -> None:
+        """
+        Write scores back to the durable store.
+
+        Analysis is the only stage that forms an opinion about a job, and
+        without this the board has nothing to rank by. Failing here must not
+        cost the run — the scores are already in `state` and on disk.
+        """
+        self._update_store(
+            lambda store: [
+                store.set_score(r["job"]["apply_url"], r["score"]["overall"])
+                for r in results or []
+                if r.get("job", {}).get("apply_url")
+            ],
+            "scores",
+        )
+
+    def _store_resumes(self, results) -> None:
+        """Point each stored job at the resume written for it."""
+        self._update_store(
+            lambda store: [
+                store.attach_resume(
+                    r["job"]["apply_url"],
+                    tex_path=r.get("latex_path"),
+                    pdf_path=r.get("pdf_path"),
+                )
+                for r in results or []
+                if r.get("job", {}).get("apply_url")
+            ],
+            "resume paths",
+        )
+
+    def _update_store(self, work, what: str) -> None:
+        try:
+            from tools.jobs.job_store import JobStore
+
+            store = JobStore()
+            try:
+                work(store)
+            finally:
+                store.close()
+        except Exception as exc:
+            logger.warning(f"Could not write {what} to the job store: {exc}")
+
     # =====================================================================
     # STATE & REPORTING
     # =====================================================================

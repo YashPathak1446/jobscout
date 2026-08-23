@@ -36,6 +36,7 @@ from tools.search import (
     build_serper_query,
 )
 from tools.cache.job_cache import JobCache
+from tools.jobs.job_store import JobStore
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -123,14 +124,32 @@ class DiscoveryAgent:
             else:
                 logger.warning(f"⚠️  Unknown source: {source}")
         
-        # Filter out previously seen jobs (cross-run deduplication)
-        new_jobs = job_cache.filter_new_jobs(self.all_jobs)
-        skipped = len(self.all_jobs) - len(new_jobs)
-        if skipped:
-            logger.info(f"   Skipped {skipped} previously seen jobs")
+        # Profile filtering first, so the store holds jobs this user could
+        # actually apply to. Recording everything discovered would fill the
+        # board with roles the profile explicitly rejects — Bosch alone posts
+        # thousands, most of them nothing to do with software.
+        filtered_jobs = self._filter_by_profile(self.all_jobs)
 
-        # Final profile filtering and ranking
-        filtered_jobs = self._filter_by_profile(new_jobs)
+        # What survives is recorded permanently. The job cache's dedup used to
+        # make this decision and it forgets after seven days, which was fine
+        # when a run log was the only output and wrong now that five ATS
+        # boards reach ~17,000 roles and a board is meant to accumulate.
+        store = JobStore()
+        recorded = store.record(filtered_jobs, run_date=datetime.now().strftime("%Y-%m-%d"))
+        logger.info(f"   Job store: {recorded['added']} new, "
+                    f"{recorded['updated']} already known")
+
+        # The pipeline still only *works* on jobs it has not scored, so a
+        # second run does not pay to analyse and generate the same postings.
+        # The difference from before is that skipping is no longer forgetting:
+        # a job seen today is still on the board next month.
+        unprocessed = store.unprocessed_urls()
+        new_jobs = [job for job in filtered_jobs if job.apply_url in unprocessed]
+        skipped = len(filtered_jobs) - len(new_jobs)
+        if skipped:
+            logger.info(f"   Skipped {skipped} already-scored jobs (kept in the store)")
+
+        filtered_jobs = new_jobs
         
         # Any job from any source whose apply URL lands on a known ATS
         # reveals that company's slug, and from then on its entire board
@@ -140,7 +159,11 @@ class DiscoveryAgent:
         except Exception as e:
             logger.debug(f"Slug harvest skipped: {e}")
 
-        # Persist updated seen URLs
+        store.close()
+
+        # Persist the JD cache. The seen-URL half of this file is no longer
+        # what decides which jobs get processed — the store is — but the
+        # scraped-JD half still saves Enrichment a lot of work.
         job_cache.save()
 
         logger.info(f"✅ Discovery complete: {len(filtered_jobs)} jobs after filtering")
