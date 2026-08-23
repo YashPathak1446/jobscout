@@ -1,0 +1,29 @@
+{
+  "baseline": "2026-08-23-post-r27",
+  "recorded": "2026-08-23",
+  "note": "Frozen measurement set. Contents are gitignored; this manifest is committed so a lost or altered baseline is detectable.",
+  "files": {
+    "analysis_results.json": {
+      "sha256": "359f25f94338fd8e95d02100bfa50a0e0313711859cda51db53abaf966b59b84",
+      "bytes": 265794,
+      "records": 20
+    },
+    "enriched_jobs.json": {
+      "sha256": "3b36fe52ec17f4afb2730f8b9cfe95e9be6542db1d84b848fe4f178526c9b4c0",
+      "bytes": 95729,
+      "records": 20
+    },
+    "Yash_Pathak_Anduril_Industries_2027_Early_Career.tex": {
+      "sha256": "041a1208d6556fcf9a0d5a60c3396286d22815d8eb2c0e6f769d15c9b2191c5c",
+      "bytes": 9489
+    },
+    "Yash_Pathak_Tyler_Technologies_Software_Engineer_Enterprise.tex": {
+      "sha256": "0507c514351f010d623d4d334d1e45c2d2a61c946405e63155b004fff9018d7d",
+      "bytes": 8904
+    },
+    "Yash_Pathak_Uber_Software_Engineer_I.tex": {
+      "sha256": "1076275b19fe775e3a232a0ad5a9b1d3eb73995d022ec7c26111b556796aec51",
+      "bytes": 9470
+    }
+  }
+}

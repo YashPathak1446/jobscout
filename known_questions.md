@@ -2295,6 +2295,80 @@ in `__all__` without importing it, so `from tools.cache import *` raised
 
 ---
 
+## R29. The pipeline crashed after succeeding, printing a party emoji
+
+**Decision:** (August 2026) `_console_print()` in the orchestrator: `print()`
+that drops an unencodable character rather than the run.
+
+`main()` reconfigures stdout to UTF-8, with a comment saying it does so "rather
+than crashing the pipeline". That covers the CLI and nothing else. Called as a
+library — from `app.py`, from a test, from a notebook — the orchestrator
+inherits the host's encoding, which on Windows is cp1252.
+
+The failure shape is the worst available. Discovery, enrichment, analysis and
+generation all succeed. The resumes are on disk. The API quota is spent. Then
+`_print_final_report()` raises `UnicodeEncodeError` on the completion banner
+and `run()` propagates it to the caller, who sees a failed run and a stack
+trace pointing at an emoji.
+
+Found by writing `test_pipeline_integration`, which runs the orchestrator the
+way the UI does. It was the first thing that test caught, before it had
+asserted anything.
+
+A library must not mutate its host's stdout, so the encoding is handled per
+call rather than by moving `reconfigure` down. 47 console prints in the report
+and checkpoint paths now route through it.
+
+## R30. The UI could silently destroy a hand-tuned profile, and did
+
+**Decision:** (August 2026) The first screen refuses to overwrite an existing
+profile without an explicit, separate confirmation.
+
+`app.py` called `create_profile(resume_path, name, force=True)` —
+unconditionally. `create_profile` raises `FileExistsError` for exactly this
+case and the UI bypassed it. Worse, the profile-name field is pre-filled from
+`session_state.profile_name`, so selecting an existing profile and then
+uploading any resume put that profile's own name in the field. Upload, click
+**Build my profile**, and a hand-tuned profile is gone with no prompt and no
+undo.
+
+**This is not hypothetical.** `user_profiles/yash_pathak.json` was rebuilt on
+2026-08-22 at 17:56, during UI testing. The evidence is unambiguous: derived
+trigger descriptions ("Auto-derived from tech stack and bullet keywords"),
+`always_include` and `high_priority` emptied, importance tiers matching R15's
+derived pattern rather than the tuned ones, `exclude_keywords` down from 12 to
+the template's 5, and `scoring_threshold: null` — a field the template only
+lost at 17:25 that same day in R24. Every hand-authored JD trigger was
+replaced: `radiology`, `ehr`, `clinical nlp`, `ionic`/`android`/`mobile
+development`, `ospf`/`bgp`/`isis` — the domain vocabulary R21 established that
+derivation structurally cannot reach.
+
+**Measured cost, replayed over the fresh 20-JD baseline:** project selection
+differs on **11 of 20** JDs. Experience selection is unchanged as a set,
+though ordering moves — on the Anduril posting `tutor_com` outranks
+`sorenson_communications` by 0.02, decided by a single derived trigger hit
+worth 0.07, which is the sort of thing the hand-authored `rarely_include` rule
+for tutoring existed to prevent.
+
+**There is no backup.** Profiles are gitignored, so there is no git history,
+and `state.json` records `profile` as the *name* only, not the contents. A
+reconstruction from this session's record is at
+`user_profiles/yash_pathak_restored.json`: every trigger list recovered
+verbatim, importance tiers recovered exactly (the comparison run on 08-22
+enumerated every tier that differed from derived, so derived-plus-overrides is
+complete), and rule `description` strings mostly lost and marked as such.
+
+**Two things this argues for beyond the guard:**
+
+- Profiles are the only artefact in this project that is both hand-tuned and
+  unbacked. Everything else is either derived, in git, or reproducible.
+  `init_profile.py` writing a timestamped copy before overwriting would have
+  made this a non-event.
+- A destructive default in a UI is worse than the same default in a CLI. The
+  CLI has always required `--force`; the UI passed it for the user.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

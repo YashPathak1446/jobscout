@@ -107,11 +107,32 @@ def screen_resume():
         help="Used for the profile file and generated resume filenames.",
     )
 
-    if st.button("Build my profile", type="primary", disabled=not (uploaded and name)):
+    # Overwriting is never implicit. Building a profile discards every rule the
+    # owner tuned by hand — the JD trigger lists especially, which are the
+    # difference between good component selection and generic selection — and
+    # nothing else on disk records them. `create_profile` raises
+    # FileExistsError precisely so this screen can ask first.
+    clash = name and name in existing
+    if clash:
+        st.warning(
+            f"**{name}** already exists. Rebuilding replaces it completely, "
+            "including any rules you tuned by hand. This cannot be undone.",
+            icon="⚠️",
+        )
+    confirmed = st.checkbox(f"Yes, replace '{name}'") if clash else False
+
+    build_disabled = not (uploaded and name) or (clash and not confirmed)
+
+    if st.button("Build my profile", type="primary", disabled=build_disabled):
         with st.spinner("Reading your resume..."):
             resume_path = save_resume(uploaded.getvalue(), uploaded.name)
             try:
-                summary = create_profile(resume_path, name, force=True)
+                summary = create_profile(resume_path, name, force=confirmed)
+            except FileExistsError:
+                # Only reachable if the profile appeared between render and
+                # click. Refusing is still the right answer.
+                st.error(f"A profile named '{name}' already exists.")
+                return
             except Exception as exc:                       # surfaced, not swallowed
                 st.error(f"Could not build a profile from that resume: {exc}")
                 return

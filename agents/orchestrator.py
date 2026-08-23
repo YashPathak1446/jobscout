@@ -42,6 +42,33 @@ from agents import DiscoveryAgent, EnrichmentAgent, AnalysisAgent, GenerationAge
 logger = logging.getLogger(__name__)
 
 
+def _console_print(*args, **kwargs) -> None:
+    """
+    print(), but a console that cannot encode a character loses the character
+    rather than the run.
+
+    `main()` reconfigures stdout to UTF-8 for the CLI, which covers the CLI
+    and nothing else. Called as a library — from the Streamlit app, a test, a
+    notebook — the orchestrator inherits whatever encoding the host has, and
+    on Windows that is cp1252. The failure that exposed this is the worst
+    shape available: discovery, enrichment, analysis and generation all
+    succeed, the resumes are on disk, the API quota is spent, and then the run
+    raises UnicodeEncodeError printing a party emoji in the completion banner.
+
+    A library must not mutate the host's stdout, so the encoding is handled
+    per call instead.
+    """
+    try:
+        print(*args, **kwargs)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        cleaned = [
+            str(a).encode(encoding, errors="replace").decode(encoding)
+            for a in args
+        ]
+        print(*cleaned, **kwargs)
+
+
 def pdflatex_available() -> bool:
     """
     Is a LaTeX engine installed? R20's results screen branches on this.
@@ -536,52 +563,52 @@ class JobScoutOrchestrator:
 
     def _checkpoint_review_jobs(self, jobs: List, stage: str):
         """Pause for human review of discovered/enriched jobs. True to continue."""
-        print("\n" + "=" * 80)
-        print(f"🔍 CHECKPOINT: Review {stage.upper()} results")
-        print("=" * 80)
+        _console_print("\n" + "=" * 80)
+        _console_print(f"🔍 CHECKPOINT: Review {stage.upper()} results")
+        _console_print("=" * 80)
         
-        print(f"\nFound {len(jobs)} jobs:\n")
+        _console_print(f"\nFound {len(jobs)} jobs:\n")
         
         for i, job in enumerate(jobs[:10], 1):
             if hasattr(job, 'title'):
-                print(f"{i}. [{job.source}] {job.title} @ {job.company}")
-                print(f"   Location: {job.location}")
+                _console_print(f"{i}. [{job.source}] {job.title} @ {job.company}")
+                _console_print(f"   Location: {job.location}")
                 if job.salary_min:
-                    print(f"   Salary: ${job.salary_min:,.0f} - ${job.salary_max:,.0f}")
+                    _console_print(f"   Salary: ${job.salary_min:,.0f} - ${job.salary_max:,.0f}")
             else:
-                print(f"{i}. [{job.get('source', 'unknown')}] {job['title']} @ {job['company']}")
-                print(f"   Location: {job['location']}")
+                _console_print(f"{i}. [{job.get('source', 'unknown')}] {job['title']} @ {job['company']}")
+                _console_print(f"   Location: {job['location']}")
                 if 'salary_min' in job and job['salary_min']:
-                    print(f"   Salary: ${job['salary_min']:,.0f} - ${job['salary_max']:,.0f}")
-            print()
+                    _console_print(f"   Salary: ${job['salary_min']:,.0f} - ${job['salary_max']:,.0f}")
+            _console_print()
         
         if len(jobs) > 10:
-            print(f"... and {len(jobs) - 10} more\n")
+            _console_print(f"... and {len(jobs) - 10} more\n")
         
         response = input("Continue to next stage? (y/n): ").strip().lower()
         return response == 'y'
     
     def _checkpoint_review_analysis(self, results: List[Dict]):
         """Pause for human review of analysis results. True to continue."""
-        print("\n" + "=" * 80)
-        print("📊 CHECKPOINT: Review ANALYSIS results")
-        print("=" * 80)
+        _console_print("\n" + "=" * 80)
+        _console_print("📊 CHECKPOINT: Review ANALYSIS results")
+        _console_print("=" * 80)
         
-        print(f"\n{len(results)} jobs passed threshold:\n")
+        _console_print(f"\n{len(results)} jobs passed threshold:\n")
         
         for i, result in enumerate(results[:5], 1):
             job = result['job']
             score = result['score']
             selected = result['selected_components']
             
-            print(f"{i}. [{score['overall']:.1f}%] {job['title']} @ {job['company']}")
-            print(f"   Location: {job['location']}")
-            print(f"   Selected: {len(selected['experiences'])} exp, {len(selected['projects'])} proj")
-            print(f"   Top exp: {', '.join(selected['experiences'][:2])}")
-            print()
+            _console_print(f"{i}. [{score['overall']:.1f}%] {job['title']} @ {job['company']}")
+            _console_print(f"   Location: {job['location']}")
+            _console_print(f"   Selected: {len(selected['experiences'])} exp, {len(selected['projects'])} proj")
+            _console_print(f"   Top exp: {', '.join(selected['experiences'][:2])}")
+            _console_print()
         
         if len(results) > 5:
-            print(f"... and {len(results) - 5} more\n")
+            _console_print(f"... and {len(results) - 5} more\n")
         
         response = input("Continue to generation? (y/n): ").strip().lower()
         return response == 'y'
@@ -706,46 +733,46 @@ class JobScoutOrchestrator:
     
     def _print_final_report(self):
         """Print final report to console."""
-        print("\n\n")
-        print("=" * 80)
-        print("🎉 PIPELINE COMPLETE!")
-        print("=" * 80)
-        print()
-        print(f"Profile: {self.profile.personal_info.name}")
-        print(f"Output directory: {self.output_path}")
-        print()
-        print("📊 Results:")
-        print(f"  Jobs discovered: {len(self.state['discovered_jobs'])}")
-        print(f"  Jobs enriched: {len(self.state['enriched_jobs'])}")
-        print(f"  Jobs analyzed: {len(self.state['analysis_results'])}")
+        _console_print("\n\n")
+        _console_print("=" * 80)
+        _console_print("🎉 PIPELINE COMPLETE!")
+        _console_print("=" * 80)
+        _console_print()
+        _console_print(f"Profile: {self.profile.personal_info.name}")
+        _console_print(f"Output directory: {self.output_path}")
+        _console_print()
+        _console_print("📊 Results:")
+        _console_print(f"  Jobs discovered: {len(self.state['discovered_jobs'])}")
+        _console_print(f"  Jobs enriched: {len(self.state['enriched_jobs'])}")
+        _console_print(f"  Jobs analyzed: {len(self.state['analysis_results'])}")
         
         gen = self.state['generation_results']
         valid = sum(1 for r in gen if r.get('status') == 'valid')
         review = sum(1 for r in gen if r.get('status') == 'needs_review')
         failed = sum(1 for r in gen if r.get('status') == 'failed')
-        print(f"  Resumes: {valid} valid, {review} needs review, {failed} failed")
-        print()
+        _console_print(f"  Resumes: {valid} valid, {review} needs review, {failed} failed")
+        _console_print()
         
-        print("📁 Output files:")
-        print(f"  Summary:  {self.output_path / 'summary.md'}")
-        print(f"  Analysis: {self.output_path / 'analysis_results.json'}")
-        print(f"  Resumes:  {self.output_path / '*.tex'}")
-        print()
+        _console_print("📁 Output files:")
+        _console_print(f"  Summary:  {self.output_path / 'summary.md'}")
+        _console_print(f"  Analysis: {self.output_path / 'analysis_results.json'}")
+        _console_print(f"  Resumes:  {self.output_path / '*.tex'}")
+        _console_print()
         
         if gen:
-            print("📄 Generated resumes:")
+            _console_print("📄 Generated resumes:")
             for result in gen[:10]:
                 job = result['job']
                 status = result.get('status', 'unknown')
                 icon = "✅" if status == "valid" else ("⚠️" if status == "needs_review" else "❌")
-                print(f"  {icon} {job['company']} - {job['title']}")
+                _console_print(f"  {icon} {job['company']} - {job['title']}")
             
             if len(gen) > 10:
-                print(f"  ... and {len(gen) - 10} more")
+                _console_print(f"  ... and {len(gen) - 10} more")
         
-        print()
-        print("=" * 80)
-        print()
+        _console_print()
+        _console_print("=" * 80)
+        _console_print()
 
 
 def main():

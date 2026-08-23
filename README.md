@@ -150,6 +150,29 @@ there. The suite needs no LaTeX — `pdf_builder`'s tests stand in a stub
 `pdflatex` so the failure paths (timeout, compile error, missing engine) are
 reachable, and contributors without TeX can still run everything.
 
+Two of them are not unit tests and are worth knowing about: `test_ui_contract`
+parses `app.py` and fails if the UI imports anything from `tools/`, which is
+the condition the Streamlit decision rests on; and `test_pipeline_integration`
+runs the whole orchestrator in mock mode through the same callbacks the UI
+uses, so a checkpoint that would hang the app is caught here rather than in
+front of a user.
+
+## Caching
+
+Three caches, all under `.cache/` or `cache/` and all gitignored:
+
+| Cache | Keyed on | Saves |
+|---|---|---|
+| Resume embeddings | Resume file hash + model | ~19 calls per run |
+| Text embeddings | Model + task type + exact text | ~20 calls per baseline replay |
+| LLM responses | Prompt hash | A full generation per repeated job |
+
+The text embedding cache matters more than it sounds. Every scoring decision
+in `known_questions.md` was measured by replaying a frozen set of job
+descriptions, and before this existed each replay re-embedded all of them —
+so the instrument you are meant to reach for before every change was also
+what exhausted the daily free-tier quota.
+
 ## Project layout
 
 ```
