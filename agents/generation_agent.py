@@ -50,6 +50,24 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
+# A master bullet is written to be complete, not to fit a line: this resume's
+# run to about 500 characters where the model path rewrites them to 140-280.
+# So a verbatim bullet occupies roughly twice the space, and using the model
+# path's bullet count verbatim overflows onto a second page — measured, 13
+# bullets rendering to 2 pages and seven of them unable to compress.
+#
+# The one-page rule is the invariant and bullet count is the only lever left
+# when the text cannot be rewritten, so the no-model rung takes fewer bullets
+# and keeps them whole. Chosen by rendering, not by taste.
+VERBATIM_BULLET_SCALE = 0.5
+
+
+def _scaled(count: int, scale: float) -> int:
+    """At least one bullet, however hard the budget is squeezed."""
+    import math
+    return max(1, int(math.floor(count * scale)))
+
+
 class GenerationAgent:
     """
     Resume Generation Agent - Tailors resumes for each job.
@@ -115,9 +133,11 @@ class GenerationAgent:
         # the real path, _call_gemini_json raises, and _gemini_tailor's bare
         # except silently degrades to mock — producing needs_review files with
         # no visible cause.
-        if not mock_mode and not resolve_api_key(api_key):
-            logger.warning("⚠️  No Gemini API key supplied or set, will use mock mode")
-            self.mock_mode = True
+        # Which rung of the ladder this run is on. Previously a missing Gemini
+        # key meant "mock mode", which wrote placeholder text — a silent
+        # downgrade to something nobody wants. Now the absence of a key picks
+        # the best backend that *is* available, and says so.
+        self.llm_backend = self._resolve_backend(api_key) if not mock_mode else "mock"
 
         logger.info("✅ Ready to generate resumes")
     
@@ -176,14 +196,22 @@ class GenerationAgent:
 
             try:
                 # Compute bullet budgets (used for real Gemini and final validation)
-                bullet_budgets = None
-                budgeted_components = selected  # default: use all selected
-                if not self.mock_mode:
-                    bullet_budgets = self._compute_bullet_budgets(analysis)
-                    # Use the filtered component list (after any project drops)
-                    budgeted_components = bullet_budgets.get(
-                        "budgeted_components", selected
-                    )
+                # Computed on every rung. These decide which components appear
+                # and how many bullets each gets, which is selection work, not
+                # rewriting work — a run with no model still needs them, and
+                # skipping them is why keyless runs used to overflow the page
+                # and land in needs_review.
+                bullet_budgets = self._compute_bullet_budgets(analysis)
+                if self.mock_mode or self.llm_backend == "none":
+                    # Fewer bullets, kept whole. Scaling inside the tailor
+                    # alone would leave validation expecting the model path's
+                    # count and reporting every component as short — the
+                    # budget is the contract, so it is what gets scaled.
+                    bullet_budgets = self._scale_budgets(
+                        bullet_budgets, VERBATIM_BULLET_SCALE)
+                budgeted_components = bullet_budgets.get(
+                    "budgeted_components", selected
+                )
 
                 tailored = self._tailor_resume(
                     job=job,
@@ -820,10 +848,11 @@ class GenerationAgent:
         Returns:
             Dict with tailored experiences and projects
         """
-        if self.mock_mode:
-            return self._mock_tailor(job, selected_components)
-        else:
-            return self._gemini_tailor(job, selected_components, bullet_budgets)
+        if self.mock_mode or self.llm_backend == "none":
+            return self._verbatim_tailor(job, selected_components, bullet_budgets)
+        if self.llm_backend in ("openai", "ollama"):
+            return self._chat_tailor(job, selected_components, bullet_budgets)
+        return self._gemini_tailor(job, selected_components, bullet_budgets)
     
     def _build_selected_experience_text(self, selected: Dict) -> str:
         """
@@ -1024,6 +1053,147 @@ Source bullets:
         if proj_count > 0:
             proj_ids = [proj.get('id') or proj.get('name', 'Unknown') for proj in tailored.get('projects', [])]
             logger.debug(f"   📋 Projects: {', '.join(proj_ids)}")
+
+    def _resolve_backend(self, api_key) -> str:
+        """Pick a rung, and say which one out loud (R33)."""
+        from config import LLM_BACKEND, OLLAMA_API_URL, OLLAMA_MODEL, OPENAI_MODEL
+        from tools.generation import llm_backends
+
+        choice = (LLM_BACKEND or "auto").lower()
+        if choice == "auto":
+            choice = llm_backends.detect(
+                gemini_key=resolve_api_key(api_key),
+                openai_key=llm_backends.env_openai_key(),
+                ollama_url=OLLAMA_API_URL,
+            )
+
+        model = {"ollama": OLLAMA_MODEL, "openai": OPENAI_MODEL}.get(choice, "")
+        logger.info(f"✍️  Bullets: {llm_backends.describe(choice, model)}")
+        if choice == "none":
+            logger.info("   Add a Gemini key, or run Ollama, to have bullets "
+                        "rewritten for each job.")
+        return choice
+
+    def _scale_budgets(self, budgets: Dict, scale: float) -> Dict:
+        """
+        Fewer bullets, for a rung that cannot shorten them.
+
+        Returns a copy: the caller's dict is also what validation reads, and
+        mutating it in place would make the two disagree in a way that is
+        tedious to trace.
+        """
+        scaled = dict(budgets)
+        for section in ("experiences", "projects"):
+            scaled[section] = {
+                cid: _scaled(count, scale)
+                for cid, count in (budgets.get(section) or {}).items()
+            }
+        totals = {
+            "experiences": sum(scaled["experiences"].values()),
+            "projects": sum(scaled["projects"].values()),
+        }
+        totals["overall"] = totals["experiences"] + totals["projects"]
+        scaled["totals"] = totals
+        return scaled
+
+    def _verbatim_tailor(self, job: Dict, selected: Dict,
+                         bullet_budgets: Dict = None) -> Dict:
+        """
+        A resume with no model involved: your own bullets, correctly chosen.
+
+        This is the floor of the ladder and it is genuinely useful, which is
+        why it is no longer called "mock". Component selection, the project
+        drop and the bullet budget are all deterministic and all still happen
+        — only the rewriting is missing. What comes out is a real resume
+        targeted at the job, written in the user's own words.
+
+        The bullets are trimmed to the budget and run through the same
+        deterministic fitter the model path uses (R6), so the result fits a
+        page instead of overflowing it.
+        """
+        logger.info("   Using your bullets as written (no model)")
+
+        budgets = (bullet_budgets or {})
+        exp_budget = budgets.get("experiences", {})
+        proj_budget = budgets.get("projects", {})
+
+        tailored = {"experiences": [], "projects": []}
+
+        for exp_id in selected.get("experiences", []):
+            exp = self.resume_parser.get_experience_by_id(exp_id)
+            if not exp:
+                continue
+            keep = exp_budget.get(exp.id, len(exp.bullets))
+            tailored["experiences"].append({
+                "id": exp.id, "title": exp.title, "company": exp.company,
+                "dates": exp.dates, "location": exp.location,
+                "bullets": list(exp.bullets)[:keep],
+            })
+
+        for proj_id in selected.get("projects", []):
+            proj = self.resume_parser.get_project_by_id(proj_id)
+            if not proj:
+                continue
+            keep = proj_budget.get(proj.id, len(proj.bullets))
+            tailored["projects"].append({
+                "id": proj.id, "name": proj.name, "url": proj.url,
+                "tech": proj.tech, "dates": proj.dates,
+                "bullets": list(proj.bullets)[:keep],
+            })
+
+        return self._apply_bullet_fitting(tailored)
+
+    def _chat_tailor(self, job: Dict, selected: Dict,
+                     bullet_budgets: Dict = None) -> Dict:
+        """
+        Rewrite through any OpenAI-compatible endpoint, Ollama included.
+
+        Reuses the Gemini prompt verbatim. It was tuned against Gemini and a
+        smaller model will follow it less exactly — that is the known cost of
+        this rung, and the validation and repair loop downstream is what
+        catches the difference.
+
+        A failure here falls back to the verbatim rung rather than aborting.
+        A resume in the user's own words beats no resume.
+        """
+        from config import (OLLAMA_BASE_URL, OLLAMA_MODEL,
+                            OPENAI_BASE_URL, OPENAI_MODEL)
+        from tools.generation import llm_backends
+
+        if self.llm_backend == "ollama":
+            base_url, model, key = OLLAMA_BASE_URL, OLLAMA_MODEL, None
+        else:
+            base_url, model = OPENAI_BASE_URL, OPENAI_MODEL
+            key = llm_backends.env_openai_key()
+
+        # The same prompt the Gemini path uses. Tuned against Gemini, which is
+        # this rung's known cost: a smaller model follows it less exactly, and
+        # the validation loop downstream is what catches the difference.
+        prompt = build_generic_tailoring_prompt(
+            parsed_resume=self.resume_parser.parsed_resume,
+            jd_text=job["full_jd"],
+            selected_exp_text=self._build_selected_experience_text(selected),
+            selected_proj_text=self._build_selected_project_text(selected),
+            num_experiences=len(selected.get("experiences", [])),
+            num_projects=len(selected.get("projects", [])),
+            bullet_budgets=bullet_budgets,
+        )
+
+        cached = self.llm_cache.get(prompt)
+        if cached is not None:
+            self.last_model_used = "cache"
+            return self._apply_bullet_fitting(cached)
+
+        try:
+            parsed = llm_backends.call_chat_json(prompt, base_url, model, key)
+        except Exception as exc:
+            logger.warning(f"   {self.llm_backend} rewriting failed ({exc}); "
+                           "falling back to your bullets as written")
+            return self._verbatim_tailor(job, selected, bullet_budgets)
+
+        self.last_model_used = model
+        self.llm_cache.set(prompt, parsed, model)
+        return self._apply_bullet_fitting(parsed)
 
     def _mock_tailor(self, job: Dict, selected: Dict) -> Dict:
         """

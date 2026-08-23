@@ -33,6 +33,25 @@ GENERATION_MODELS = [
     "gemini-flash-lite-latest",
 ]
 
+# Where bullet rewriting happens: "auto", "gemini", "openai", "ollama" or
+# "none". See tools/generation/llm_backends.py for the ladder.
+#
+# "auto" prefers Gemini when a key is resolvable, because every measurement in
+# known_questions.md was taken against it, then a hosted OpenAI-compatible key,
+# then a local Ollama, then "none" — which needs nothing and still produces a
+# correctly targeted resume, just without rewriting.
+LLM_BACKEND = "auto"
+
+# OpenAI-compatible endpoint, used for "openai". Point it anywhere that speaks
+# /chat/completions: Groq, OpenRouter, Together, DeepSeek, LM Studio.
+OPENAI_BASE_URL = "https://api.openai.com/v1"
+OPENAI_MODEL = "gpt-4o-mini"
+
+# Ollama speaks the same shape on a different port.
+OLLAMA_BASE_URL = "http://localhost:11434/v1"
+OLLAMA_API_URL = "http://localhost:11434"
+OLLAMA_MODEL = "llama3.1"
+
 # Analysis embeddings. gemini-embedding-001 is past its listed shutdown date
 # (2026-07-14) but still serving — Google treats listed dates as the earliest
 # possible retirement, not the actual one. gemini-embedding-2 is now GA and is

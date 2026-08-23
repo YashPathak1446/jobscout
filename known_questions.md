@@ -383,7 +383,13 @@ nothing it is bad at. Every input format becomes one importer behind the same
 contract. Extraction will misread some resumes, which is why R33's confirmation
 screen is not optional.
 
-## 11. Provider-agnostic generation, and the free ladder
+## 11. Provider-agnostic generation, and the free ladder — DONE (2026-08-23)
+
+**Done — see R37.** Four rungs, detected and explained. With R36 that makes a
+complete run possible with no key, no account and no network beyond the job
+boards themselves. The original entry follows.
+
+### Original
 
 Both Gemini call sites already take an injected key (R22). Most providers —
 OpenAI, Groq, OpenRouter, Together, DeepSeek, Ollama, LM Studio — speak an
@@ -2861,6 +2867,72 @@ user's real bullets. That is not the no-LLM mode worth having: selecting the
 right components and emitting the master bullets verbatim would be. Item 11.
 
 11 new tests.
+
+---
+
+## R37. A ladder for bullet rewriting, and a floor that always works
+
+**Decision:** (August 2026) `tools/generation/llm_backends.py` plus
+`config.LLM_BACKEND` (`auto` / `gemini` / `openai` / `ollama` / `none`).
+
+    none    nothing needed          selection only, your own bullets
+    ollama  install + ~4GB + RAM    free, local, private
+    openai  a key                   any OpenAI-compatible provider
+    gemini  a key                   what every measurement here used
+
+**One adapter covers most of the world.** OpenAI, Groq, OpenRouter, Together,
+DeepSeek, LM Studio and Ollama all speak `/chat/completions`, so `openai` and
+`ollama` are the same code with a different base URL. Sent with `urllib`
+rather than the `openai` package — it is one POST, and a dependency to send it
+would cost everyone who installs this.
+
+**The floor is the interesting rung.** `none` was already half-built and
+called "mock": `_mock_tailor` returns the user's original bullets. What made
+it useless was that mock mode skipped budget computation entirely, so every
+bullet was emitted at full length and the result overflowed onto a second page
+and failed validation. Budgets are selection work, not rewriting work — which
+component appears and how many bullets it gets is decided without a model.
+They are now computed on every rung, and the deterministic fitter (R6) runs on
+the output.
+
+**A master bullet is written to be complete, not to fit a line.** This
+resume's run to about 500 characters where the model path rewrites them to
+140-280, so a verbatim bullet takes roughly twice the space. Measured: the
+model path's bullet count, used verbatim, rendered to 2 pages with 7 bullets
+unable to compress. The one-page rule is the invariant and bullet count is the
+only lever left when the text cannot be rewritten, so this rung takes half the
+bullets and keeps them whole. That produces one page.
+
+**Then a bug worth recording, because the fix is a principle.** Scaling inside
+the tailor left validation still reading the *unscaled* budget, so every
+component was reported as short — "1 bullet(s) but budget requires exactly 3".
+The budget is the contract between tailoring and validation; scaling the
+output without scaling the contract makes the two disagree. The scale is now
+applied to the budget itself, before either sees it.
+
+**What this rung honestly produces.** A one-page PDF, correct components
+chosen for the job, the user's own words — and `needs_review`, because some
+bullets exceed the template's length zones (344 characters against a 316
+maximum). That is not a defect to hide: deterministic compression cannot
+rewrite prose, and the status is telling the truth. A user with no key gets a
+real, targeted resume and a note that a few bullets run long.
+
+**Failures fall down the ladder rather than aborting.** A chat backend that
+errors falls back to verbatim, because a resume in the user's own words beats
+no resume.
+
+**Untested against a real Ollama.** None is running on this machine, so the
+adapter is exercised by unit tests and by its shared code path with the
+hosted providers, not end to end. The parsing tests cover the failure that
+actually bites — smaller models fence their JSON far more often than Gemini
+does, and an unwrapped fence is the commonest reason a local reply fails to
+parse.
+
+**`auto` still prefers Gemini**, for R36's reason: every measurement in this
+document was taken against it, and quietly preferring another backend would
+invalidate all of them.
+
+14 new tests.
 
 ---
 
