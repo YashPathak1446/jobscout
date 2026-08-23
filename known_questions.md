@@ -815,7 +815,13 @@ saying so.
 
 ---
 
-## Q16. `rarely_include` is computed and thrown away
+## Q16. `rarely_include` is computed and thrown away — RESOLVED (R31)
+
+**Deleted, not wired up — see R31.** The doc's own leaning was right.
+
+The original entry follows.
+
+### Original
 
 **Status:** Open. Found 2026-08-21 while building R17's validation.
 
@@ -2366,6 +2372,41 @@ complete), and rule `description` strings mostly lost and marked as such.
   made this a non-event.
 - A destructive default in a UI is worse than the same default in a CLI. The
   CLI has always required `--force`; the UI passed it for the user.
+
+---
+
+## R31. `rarely_include` deleted rather than finished
+
+**Decision:** (August 2026) Removed from the schema, from
+`get_experience_selection_rules()`, from the loader's summary output, from
+`validation.py`'s ID-keyed field list, and from the profiles on disk.
+
+Q16 found it computed on every call and read by nothing: `result['rarely']`
+was populated by matching triggers against the JD exactly as `conditional`
+is, then consumed only by two `print` statements. Scoring never saw it. The
+live profile carried two rules — `exp_outlier` and `exp_tutor` — which
+resolved to real components and did nothing.
+
+**Deleted rather than wired up, for two reasons.** `component_importance`
+already expresses "rarely show this", and since R15 it is derived
+automatically, so the feature was redundant before it was dead. And the
+intended semantics were never written down — a penalty when the rule fires? a
+penalty when it does not? — which is most of why it was never finished.
+Inventing them now would be adding a scoring term on a guess, which is the
+opposite of how every other term here was settled.
+
+**The trigger was the UI.** A form field for a setting that does nothing is
+worse than no field, and the next block of work is exactly that editor. This
+had to go before the screen was built, not after.
+
+**No migration needed.** Pydantic ignores unknown fields, so a profile still
+carrying `rarely_include` loads fine and simply drops it. The key was stripped
+from the profiles on disk anyway, so it cannot read as a live setting.
+
+**One casualty worth naming:** the tutoring rule restored an hour earlier in
+R30 — "only show tutor.com for education-focused roles" — is gone with it. It
+never fired, so nothing changes behaviourally. What actually keeps tutor.com
+down is its `low` importance tier, which the same restore brought back.
 
 ---
 

@@ -27,8 +27,9 @@ Location: jobscout_v3/scripts/init_profile.py
 
 import argparse
 import json
+import shutil
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -126,12 +127,25 @@ def create_profile(resume_path, name: str, force: bool = False) -> dict:
     if out_path.exists() and not force:
         raise FileExistsError(f"A profile named '{name}' already exists.")
 
+    # A profile is the only artefact here that is both hand-tuned and unbacked:
+    # everything else is derived, in git, or reproducible. Profiles are
+    # gitignored, and `state.json` records only the profile's *name*, so an
+    # overwrite is unrecoverable. One was lost this way (R30) — a dozen
+    # hand-authored JD trigger lists, worth 11 of 20 project selections.
+    backup = None
+    if out_path.exists():
+        backup = out_path.with_name(
+            f"{name}.{datetime.now().strftime('%Y%m%dT%H%M%S')}.bak.json"
+        )
+        shutil.copy2(out_path, backup)
+
     profile, derived_info, resume = build_profile(resume_path, name)
     out_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
 
     rp = profile["resume_preferences"]
     return {
         "profile_path": out_path,
+        "backup_path": backup,
         "derived": derived_info,
         "needs_you": {
             section: [f for f in fields if f not in derived_info]

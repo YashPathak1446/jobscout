@@ -110,7 +110,7 @@ system can't infer.
 | `always_include` | USER-INPUT | UI: each experience gets a "Always show this" toggle |
 | `priority_order` | INTERNAL | Always "auto" with composite scoring |
 | `conditional_inclusion` | DERIVED | **Auto-generated from each experience's tech stack and bullet keywords** |
-| `rarely_include` | DERIVED | Inferred from low-importance experiences |
+| `rarely_include` | REMOVED | Deleted (R31). `component_importance` says this already |
 | `never_include` | USER-INPUT | UI: each experience gets a "Never show this" toggle |
 | `bullets_per_experience` | INTERNAL | Computed by `_allocate_with_importance()` |
 | `comments` | INTERNAL | Drop in production |
@@ -281,7 +281,9 @@ These fields are DERIVED but currently hand-edited:
       "oauth 2.0" plus "oauth" double-scores one technology).
       **Caveat:** shipping it did not measurably close the gap to a hand-tuned
       profile — see R21 for what the measurement could and could not show.
-- [ ] `experiences.rarely_include` — needs derivation from importance map.
+- [x] `experiences.rarely_include` — **removed (R31)** rather than derived. It
+      was computed on every call and read by nothing; `component_importance`
+      expresses the same idea and R15 derives it.
       Note the current keys `exp_outlier` and `exp_tutor` do not resolve to
       real component IDs, so these rules have never fired.
 - [x] `personal_info.{name,email,phone,linkedin,github,graduation_date}` —

@@ -2,8 +2,7 @@
 Profile validation against a parsed resume.
 
 Several profile fields are keyed by component ID — `always_include`,
-`never_include`, `high_priority`, and the `conditional_inclusion` /
-`rarely_include` maps. An ID that does not match a parsed component is not an
+`never_include`, `high_priority`, and the `conditional_inclusion` maps. An ID that does not match a parsed component is not an
 error anywhere: the lookup simply misses, the rule never applies, and nothing
 says so.
 
@@ -37,7 +36,6 @@ _ID_FIELDS = [
     ("experiences", "always_include", False),
     ("experiences", "never_include", False),
     ("experiences", "conditional_inclusion", True),
-    ("experiences", "rarely_include", True),
     ("projects", "always_include", False),
     ("projects", "never_include", False),
     ("projects", "high_priority", False),

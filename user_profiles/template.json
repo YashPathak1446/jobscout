@@ -80,7 +80,6 @@
       "always_include": [],
       "priority_order": "auto",
       "conditional_inclusion": {},
-      "rarely_include": {},
       "never_include": [],
       "bullets_per_experience": {
         "top_priority": 4,

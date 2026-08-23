@@ -76,7 +76,6 @@ class ExperiencePreferences(BaseModel):
     always_include: List[str] = Field(default_factory=list)
     priority_order: str = "auto"
     conditional_inclusion: Dict[str, ConditionalInclusion] = Field(default_factory=dict)
-    rarely_include: Dict[str, ConditionalInclusion] = Field(default_factory=dict)
     never_include: List[str] = Field(default_factory=list)
     bullets_per_experience: Dict[str, int] = Field(default_factory=dict)
     comments: Optional[str] = None
@@ -337,7 +336,8 @@ class UserProfile(BaseModel):
             jd_text: Job description text
 
         Returns:
-            Dict with 'always', 'conditional', 'rarely' lists
+            Dict with 'always' and 'conditional' lists, plus per-component
+            hit counts
         """
         jd_normalized = self._normalize_jd_for_matching(jd_text)
 
@@ -345,7 +345,6 @@ class UserProfile(BaseModel):
             'always': self.resume_preferences.experiences.always_include.copy(),
             'conditional': [],
             'conditional_hits': {},
-            'rarely': []
         }
 
         # Check conditional inclusion rules. The number of distinct triggers
@@ -360,11 +359,6 @@ class UserProfile(BaseModel):
             if hits:
                 result['conditional'].append(exp_id)
                 result['conditional_hits'][exp_id] = hits
-
-        # Check rarely include rules
-        for exp_id, rule in self.resume_preferences.experiences.rarely_include.items():
-            if any(self._trigger_matches(kw, jd_normalized) for kw in rule.include_if_jd_contains):
-                result['rarely'].append(exp_id)
 
         return result
 

@@ -222,14 +222,12 @@ if __name__ == "__main__":
         print(f"\nHealthcare JD → Experiences to include:")
         print(f"  Always: {rules['always']}")
         print(f"  Conditional: {rules['conditional']}")
-        print(f"  Rarely: {rules['rarely']}")
         
         test_jd_backend = "Backend engineer position requiring Python and AWS experience"
         rules = profile.get_experience_selection_rules(test_jd_backend)
         print(f"\nBackend JD → Experiences to include:")
         print(f"  Always: {rules['always']}")
         print(f"  Conditional: {rules['conditional']}")
-        print(f"  Rarely: {rules['rarely']}")
         
     except ProfileLoadError as e:
         print(f"❌ Error: {e}")
