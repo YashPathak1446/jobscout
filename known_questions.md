@@ -860,7 +860,17 @@ include/exclude toggle in the UI rather than solving it purely in scoring.
 
 ---
 
-## Q18. Generation drops the project that scoring worked hardest to include
+## Q18. Generation drops the project that scoring worked hardest to include — RESOLVED (R23)
+
+**Fixed same day — see R23.** The drop now ranks on the composite selection
+already published. Measured on the frozen 20: 4/20 final project sets change,
+and the number of projects dropped across the run falls from 6 to 2 — every
+change is a drop that should not have happened. See Q20 for the half of this
+that is not fixed.
+
+The original entry follows.
+
+### Original
 
 Found while running the R21 comparison (2026-08-22). Ramp, "Mobile Engineer,
 Android", against the hand-tuned profile:
@@ -894,6 +904,30 @@ into the set — and the more certain this stage is to throw it out.
 computed rather than re-deriving a weaker one — but the composite is not
 currently carried into the generation payload, so it needs threading. Measure
 against the baseline before and after; this changes selection output.
+
+## Q20. A rescued project arrives with one bullet
+
+R23 stopped generation discarding the JD-relevant project. It did not give it
+room. On the Ramp Android role the mobile project now survives — and renders
+with **one bullet**, because `_allocate_with_importance()` hard-caps
+`low`-importance components at `_LOW_MAX_BULLETS` regardless of how they
+scored.
+
+That allocation ranks on `importance_weight + embedding_similarity` — the same
+wrong number R23 removed from the drop decision, still in place one function
+below. It was left alone deliberately: changing inclusion and depth in one
+commit makes the measurement uninterpretable, and the importance weight (0/1/2)
+dominates the embedding term (~0.6) there in a way it did not in the drop.
+
+Two questions, and they are not the same:
+
+1. Should allocation rank on the composite too? Probably, for R23's reasons.
+2. Should a `low`-importance component still be capped at one bullet when the
+   JD specifically called for it? The cap encodes "this is not central to your
+   story", which is a statement about the *user*, not about the job. A trigger
+   firing three times is the system saying this particular employer disagrees.
+
+Worth measuring together, and after a fresh baseline rather than before.
 
 ## Q19. Template defaults are stricter than the only tuned profile
 
@@ -1885,6 +1919,64 @@ asserts an explicit key reaches it *while a different key sits in the
 environment*. That is the actual failure this work exists to prevent, and it
 would pass trivially if the plumbing silently fell back to the environment
 somewhere in the middle.
+
+---
+
+## R23. The depth drop ranked on the wrong number
+
+**Decision:** (August 2026) Fixed. `_decide_project_count()` ranks candidates
+on the composite score selection already computed and publishes in
+`score_breakdown`, instead of re-deriving `importance_weight +
+embedding_similarity`.
+
+**The failure, exactly.** Ramp, "Mobile Engineer, Android", hand-tuned profile:
+
+```
+sleeptracker  emb=0.58 kw=0.13 cond=0.20 imp=0.00 alw=0.00  ->  0.91
+   Dropped lowest-priority project for depth: sleeptracker
+```
+
+Full 0.20 conditional bonus — the 3-hit maximum, from `mobile app`, `android`
+and `mobile development` — and the highest composite of any project. Dropped,
+for an embedding of 0.58 and a `low` tier. The resume sent to an Android role
+contained no mobile work.
+
+**Why it was structural rather than unlucky.** The whole point of R14's
+per-hit triggers is to promote a component that is *specifically* relevant
+without being *semantically close* — that is the gap embeddings cannot cover.
+Such a component has, by construction, a low embedding score. So the stronger
+the trigger evidence that got a project selected, the more certainly this
+stage ranked it last. The two mechanisms were pulling against each other, and
+the later one won silently.
+
+**The fix needed no plumbing**, contrary to the first read. `select_components`
+already returns `score_breakdown` with every term and a `final`, and
+`_canonicalize_selected_components` copies it through, so the composite was
+sitting in `analysis_results.json` — in the frozen baseline's copy too —
+unread. The composite already contains the importance term, so it is used
+alone; adding `_IMPORTANCE_WEIGHTS` back would count importance twice.
+`proj_scores` stays as a per-component fallback.
+
+**Measured on the frozen 20.** 4/20 final project sets change. Projects
+dropped across the run falls from **6 to 2**, and all four changes are a drop
+that should not have happened — `sleeptracker` three times, `ubereats_ux_redesign`
+once.
+
+Note what that means: the depth optimisation now fires a third as often. That
+is the honest cost of the fix and it is not obviously bad — it was firing
+mostly on projects the old ranking had mis-ordered — but "we made a feature
+mostly stop happening" deserves saying out loud rather than being buried in a
+win.
+
+**What this does not fix: see Q20.** The rescued project renders with one
+bullet, because bullet allocation still ranks on the same wrong number and
+hard-caps `low` importance at one. Inclusion is fixed; depth is not.
+
+**Found by running the R21 comparison, not by looking for it.** Worth noting
+for how future work gets scheduled: the bug had been live through every
+scoring change since R14, invisible to all of them, because every measurement
+so far compared *selections* and this stage runs after selection. Reading a
+PDF found it in one afternoon.
 
 ---
 

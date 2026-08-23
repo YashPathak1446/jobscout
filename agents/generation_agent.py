@@ -449,6 +449,17 @@ class GenerationAgent:
         exp_scores = score_data.get("experience_scores", {})
         proj_scores = score_data.get("project_scores", {})
 
+        # The composite the selector actually ranked on: embedding + keyword +
+        # conditional + importance + always. `project_scores` above is raw
+        # embedding similarity alone, which is why it must not be used to
+        # decide what to *drop* — see Q18. Selection already published this.
+        breakdown = selected.get("score_breakdown") or {}
+        composite_scores = {
+            cid: entry.get("final", 0.0)
+            for cid, entry in breakdown.items()
+            if isinstance(entry, dict)
+        }
+
         # Resolve selected IDs to canonical parser IDs
         selected_exp_ids = [
             self._resolve_to_canonical_exp(eid)
@@ -480,7 +491,8 @@ class GenerationAgent:
         # project to 1 bullet while a higher-importance project could use it,
         # drop the weakest project and give remaining ones more depth.
         selected_proj_ids = self._decide_project_count(
-            selected_proj_ids, proj_scores, proj_importance
+            selected_proj_ids, proj_scores, proj_importance,
+            proj_composite=composite_scores,
         )
 
         num_exp = len(selected_exp_ids)
@@ -586,6 +598,7 @@ class GenerationAgent:
         proj_ids: List[str],
         proj_scores: Dict[str, float],
         proj_importance: Dict[str, str],
+        proj_composite: Dict[str, float] = None,
     ) -> List[str]:
         """
         Decide whether to use fewer projects for more depth.
@@ -597,17 +610,32 @@ class GenerationAgent:
         This gives the user depth on strong projects rather than
         spreading thin across 4 shallow ones.
 
+        **Rank on the composite, not on the embedding (Q18).** This used to
+        score `importance_weight + embedding_similarity`, which is not the
+        number selection ranked on and cannot see why a project was chosen. A
+        project picked for strong JD-specific evidence — the case R14's
+        per-hit triggers exist to create — is exactly the one that scores
+        badly on embedding alone, so the stage reliably discarded the most
+        relevant project. On a Ramp Android role the mobile project earned the
+        full 0.20 conditional bonus and the highest composite of any project,
+        0.91, and was dropped for embedding 0.58 and a `low` tier.
+
+        The composite already contains the importance term, so it is used on
+        its own; adding `_IMPORTANCE_WEIGHTS` back would count importance
+        twice. `proj_scores` remains the fallback for an analysis payload
+        written before selection published a breakdown.
+
         Returns the (possibly shorter) list of project IDs to use.
         """
         if len(proj_ids) < 4:
             return proj_ids  # Nothing to drop
 
-        # Rank projects by allocation priority (importance + score)
         def priority(pid):
+            if proj_composite and pid in proj_composite:
+                return proj_composite[pid]
             imp_tier = proj_importance.get(pid, "medium")
             imp_weight = self._IMPORTANCE_WEIGHTS.get(imp_tier, 1.0)
-            score = proj_scores.get(pid, 0.0)
-            return imp_weight + score
+            return imp_weight + proj_scores.get(pid, 0.0)
 
         ranked = sorted(proj_ids, key=priority, reverse=True)
         weakest = ranked[-1]
