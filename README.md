@@ -102,6 +102,24 @@ python -m agents.orchestrator --profile <your_name> --max-jobs 5
 
 Generated resumes appear in `outputs/<date>/`.
 
+### 6. Or use the app
+
+```bash
+streamlit run app.py
+```
+
+Four screens: upload your resume, add your API key and the two things a resume
+cannot state (where you live, and what you are allowed to work as), pick what
+you are looking for, then run. Progress streams while it works, and each
+result offers a download.
+
+If you already have a profile, the first screen lets you pick it and skip
+straight to running.
+
+PDFs need a LaTeX engine — MiKTeX on Windows, TeX Live elsewhere. Without one
+you still get the `.tex` files, and the app says so rather than showing you a
+dead button.
+
 ---
 
 ## Useful flags

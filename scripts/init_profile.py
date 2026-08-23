@@ -91,6 +91,89 @@ def build_profile(resume_path: Path, name: str) -> dict:
     return profile, derived_info, resume
 
 
+RESUME_DIR = ROOT / "data" / "master_resumes"
+
+
+def save_resume(file_bytes: bytes, filename: str) -> Path:
+    """
+    Put an uploaded .tex where master resumes live, and return its path.
+
+    The UI should not decide where resumes belong — that is a fact about this
+    project's layout, and keeping it here is what lets `app.py` stay a view
+    layer (R25).
+    """
+    RESUME_DIR.mkdir(parents=True, exist_ok=True)
+    target = RESUME_DIR / Path(filename).name
+    target.write_bytes(file_bytes)
+    return target
+
+
+def create_profile(resume_path, name: str, force: bool = False) -> dict:
+    """
+    Build, validate and write a profile in one call.
+
+    `main()` below does the same thing with printing in between; a UI needs
+    the outcome as data. Returns what a caller needs to report:
+
+        {profile_path, derived, needs_you, counts}
+
+    Raises FileExistsError when a profile of that name exists and `force` is
+    not set, so the caller can offer to overwrite rather than silently clobber.
+    """
+    resume_path = Path(resume_path)
+    out_path = ROOT / "user_profiles" / f"{name}.json"
+
+    if out_path.exists() and not force:
+        raise FileExistsError(f"A profile named '{name}' already exists.")
+
+    profile, derived_info, resume = build_profile(resume_path, name)
+    out_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+
+    rp = profile["resume_preferences"]
+    return {
+        "profile_path": out_path,
+        "derived": derived_info,
+        "needs_you": {
+            section: [f for f in fields if f not in derived_info]
+            for section, fields in NEEDS_HUMAN.items()
+        },
+        "counts": {
+            "experiences": len(resume.experiences),
+            "projects": len(resume.projects),
+            "trigger_rules": (len(rp["experiences"]["conditional_inclusion"])
+                              + len(rp["projects"]["conditional_inclusion"])),
+        },
+    }
+
+
+def update_profile_fields(name: str, updates: dict) -> Path:
+    """
+    Merge answers into an existing profile and write it back.
+
+    `updates` is nested by section, e.g.
+    ``{"personal_info": {"location": "Irvine, CA"}}``. Only the keys given are
+    touched, so a form that collects three fields cannot wipe the other
+    thirty.
+
+    Kept here rather than in the UI so that knowing a profile is JSON on disk,
+    and where, stays out of the view layer (R25).
+    """
+    path = ROOT / "user_profiles" / f"{name}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"No profile named '{name}'.")
+
+    profile = json.loads(path.read_text(encoding="utf-8"))
+
+    for section, fields in (updates or {}).items():
+        if isinstance(fields, dict):
+            profile.setdefault(section, {}).update(fields)
+        else:
+            profile[section] = fields
+
+    path.write_text(json.dumps(profile, indent=2) + chr(10), encoding="utf-8")
+    return path
+
+
 def main():
     ap = argparse.ArgumentParser(description="Bootstrap a profile from a resume.")
     ap.add_argument("--resume", required=True, help="Path to the master .tex resume")

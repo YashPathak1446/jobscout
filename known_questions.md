@@ -254,14 +254,37 @@ button. Deciding after item 8 means redesigning it.
 
 Note `find_pdflatex()` already exists (R8) and detects this reliably.
 
-## 8. The UI — in progress
+## 8. The UI — first version shipped (2026-08-22)
 
 **Stack decided (R25): Streamlit, kept as a pure view layer.** The
-prerequisite refactor is done (R26): the orchestrator now reports progress and
-resolves checkpoints through callbacks, so a UI can render a multi-minute run
-and answer a checkpoint without touching stdin.
+prerequisite refactor landed first (R26): the orchestrator reports progress
+and resolves checkpoints through callbacks, so a UI can render a multi-minute
+run and answer a checkpoint without touching stdin.
 
-Remaining: the screens themselves.
+`app.py` now exists — four screens (resume, about you, preferences, run), live
+progress, and downloads that branch on whether a LaTeX engine is installed per
+R20. It imports only `agents.orchestrator` and `scripts.init_profile`, and
+nothing from `tools/`; two facades (`pdflatex_available`, `available_profiles`)
+and three profile helpers (`save_resume`, `create_profile`,
+`update_profile_fields`) exist so that the view layer never has to know that a
+profile is JSON on disk, or where resumes live.
+
+**Verified**: all four screens render, navigation works forwards and
+backwards, live progress streams from the orchestrator callback, and the
+results screen renders downloads from a saved run. **Not yet verified end to
+end against a live API run** — the day's free-tier Gemini quota was spent on
+the R21/R23/R27 measurements, so the one path still unexercised is a real
+generation run driven from the UI rather than the CLI.
+
+Known gaps, none blocking:
+
+- Results live in `session_state`, so closing the tab loses the download
+  links even though the files are still in `outputs/`. A "previous runs"
+  screen would fix it.
+- Checkpoints are auto-answered `True`. The profile toggle
+  `checkpoint_after_scoring` therefore has no effect in the UI; exposing
+  "review jobs before generating" as a real screen is a later change.
+- No importance editor, deliberately — R15 derives defaults.
 
 The original entry follows.
 

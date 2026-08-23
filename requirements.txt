@@ -17,8 +17,8 @@ python-docx>=1.0.0
 # Data validation
 pydantic>=2.0.0
 
-# Optional: UI
-# streamlit>=1.30.0
+# UI (app.py) — the local Streamlit front end, R25
+streamlit>=1.30.0
 
 # Optional: Development
 # pytest>=7.0.0

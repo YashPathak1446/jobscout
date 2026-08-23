@@ -42,6 +42,24 @@ from agents import DiscoveryAgent, EnrichmentAgent, AnalysisAgent, GenerationAge
 logger = logging.getLogger(__name__)
 
 
+def pdflatex_available() -> bool:
+    """
+    Is a LaTeX engine installed? R20's results screen branches on this.
+
+    A facade so the UI does not import from `tools/` (R25). Cheap enough to
+    call per render — `find_pdflatex` checks PATH then a handful of known
+    install directories.
+    """
+    from tools.generation.pdf_builder import find_pdflatex
+    return find_pdflatex() is not None
+
+
+def available_profiles() -> list:
+    """Names of profiles that exist. Facade, for the same reason as above."""
+    from tools.profile import list_available_profiles
+    return list_available_profiles()
+
+
 class _CheckpointStop(Exception):
     """Raised when a checkpoint declines to continue. Caught inside run()."""
 
