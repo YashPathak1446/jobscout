@@ -860,6 +860,62 @@ include/exclude toggle in the UI rather than solving it purely in scoring.
 
 ---
 
+## Q18. Generation drops the project that scoring worked hardest to include
+
+Found while running the R21 comparison (2026-08-22). Ramp, "Mobile Engineer,
+Android", against the hand-tuned profile:
+
+```
+sleeptracker  emb=0.58 kw=0.13 cond=0.20 imp=0.00 alw=0.00  ->  0.91
+   Dropped lowest-priority project for depth: sleeptracker_mobile_sleep_logging_app
+```
+
+The mobile project earned the **full 0.20 conditional bonus** — the exact
+3-hit maximum R14 was built to produce, from `mobile app`, `android` and
+`mobile development` — giving it **0.91, the highest composite of any
+project**. Generation then dropped it, and the resume sent to an Android role
+contains no mobile work at all.
+
+**Cause.** `_drop_weakest_project_for_depth()` ranks by
+`importance_weight + proj_scores[pid]`, and `proj_scores` is
+`EmbeddingScore.project_scores` — *raw embedding similarity only*. The keyword
+and conditional terms that selection used are not in that number. Sleeptracker
+embeds at 0.58 and is tier `low`, so it ranks last on a scale that cannot see
+why it was chosen. The drop then fires because the weakest is `low` and
+something else is `high`.
+
+**Why this matters more than one bad resume.** It silently defeats R14 for
+precisely the case R14 exists to serve: a component that is not semantically
+close to the JD but is *specifically* relevant to it. The stronger the
+trigger evidence, the more likely selection promotes a low-embedding project
+into the set — and the more certain this stage is to throw it out.
+
+**The fix is probably one line** — rank on the composite the selector already
+computed rather than re-deriving a weaker one — but the composite is not
+currently carried into the generation payload, so it needs threading. Measure
+against the baseline before and after; this changes selection output.
+
+## Q19. Template defaults are stricter than the only tuned profile
+
+Also from the R21 comparison. `user_profiles/template.json` ships
+`scoring_threshold: 50`; the live profile uses `40`. Ramp scored **48.4**, so
+a bootstrapped user loses that job at the funnel before any tailoring happens,
+while the tuned user gets a resume for it.
+
+`overall_score` is embedding-derived and profile-independent, so this is
+purely the threshold, not a scoring difference. Two things follow:
+
+- The template ships a number nobody validated, and the one profile that has
+  ever been tuned in anger disagrees with it by 10 points. `migration_plan.md`
+  calls `scoring_threshold` INTERNAL — "default 50, internal calibration" —
+  which is only defensible if the default is calibrated against something.
+- The template also ships `max_jobs_to_generate: null` where the plan
+  specifies a default of 30.
+
+Worth checking the other INTERNAL defaults the same way: a bootstrapped
+profile is the product, and every unvalidated constant in it is a decision
+made on nobody's behalf.
+
 # Resolved questions
 
 ## R1. Should we use a synthetic john_doe profile for the public repo?
