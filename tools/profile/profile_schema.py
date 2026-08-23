@@ -156,7 +156,14 @@ class AgentPreferences(BaseModel):
     """Agent behavior preferences."""
     discovery_sources: List[str]
     discovery_source_priority: Optional[Dict[str, int]] = None
-    scoring_threshold: int = 50
+    # 40, not 50. Measured over the frozen 20-JD baseline, overall scores span
+    # 44.8-57.7 with a median of 53.0 — a 13-point band, because embedding a
+    # new-grad SWE resume against a new-grad SWE posting is always fairly
+    # similar. A threshold of 50 sits inside that cluster and cut 5 of 20 jobs
+    # whose scores differ from survivors by about a point, which is noise. See
+    # R24: volume is controlled by ranking (max_jobs_to_generate), and this is
+    # a floor against genuine mismatches, not a quality bar.
+    scoring_threshold: int = 40
     max_jobs_to_discover: int = 10
     max_jobs_to_enrich: int = 10
     max_jobs_to_generate: int = 10

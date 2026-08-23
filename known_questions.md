@@ -929,7 +929,18 @@ Two questions, and they are not the same:
 
 Worth measuring together, and after a fresh baseline rather than before.
 
-## Q19. Template defaults are stricter than the only tuned profile
+## Q19. Template defaults are stricter than the only tuned profile — RESOLVED (R24)
+
+**Fixed — see R24.** `scoring_threshold` defaults to 40 in the schema and is
+gone from the template, so the constant lives in code as
+`migration_plan.md` says INTERNAL fields should. **One claim in the original
+entry below was wrong**: `max_jobs_to_generate` is not shipped as `null`, it
+is simply absent, and the schema default of 10 covers it. There was no funnel
+hazard.
+
+The original entry follows.
+
+### Original
 
 Also from the R21 comparison. `user_profiles/template.json` ships
 `scoring_threshold: 50`; the live profile uses `40`. Ramp scored **48.4**, so
@@ -1977,6 +1988,55 @@ for how future work gets scheduled: the bug had been live through every
 scoring change since R14, invisible to all of them, because every measurement
 so far compared *selections* and this stage runs after selection. Reading a
 PDF found it in one afternoon.
+
+---
+
+## R24. The scoring threshold was a quality bar that could not grade
+
+**Decision:** (August 2026) `scoring_threshold` defaults to **40**, set in
+`AgentPreferences` rather than in `user_profiles/template.json`, which no
+longer carries the field.
+
+**What the numbers actually look like.** Over the frozen 20-JD baseline:
+
+```
+range 44.8 - 57.7    median 53.0
+
+threshold 40 -> 20/20 pass      threshold 50 -> 15/20 pass
+threshold 45 -> 19/20 pass      threshold 55 ->  4/20 pass
+```
+
+Every score lands in a 13-point band. That is not a defect in the scorer — it
+is what embedding a new-grad SWE resume against new-grad SWE postings
+produces, because they genuinely are all fairly similar. The consequence is
+that a threshold at 50 does not separate good matches from bad ones, it slices
+through the middle of a dense cluster: the jobs it cut scored 48.3-49.3
+against survivors at 50.4-51.1, a difference of about one point. Ramp, at
+48.4, was dropped this way while being a job the tuned profile happily wrote a
+resume for.
+
+**So the threshold is a floor, not a grader, and 40 is the honest setting.**
+Worth stating plainly rather than dressing up: against this distribution a
+threshold of 40 is close to inert. That is the correct outcome given the
+evidence, not a calibration. What actually controls output volume is ranking —
+`max_jobs_to_generate` takes the top K by score, which degrades gracefully
+when scores are clustered in a way a hard cut does not. A threshold earns its
+keep only against genuine mismatches, and nothing in the observed range was
+one.
+
+**Why the constant moved into code.** `migration_plan.md` lists
+`scoring_threshold` under INTERNAL and flags it as a cleanup opportunity —
+"should be code constants". It was shipping in the template as a number nobody
+had validated, which is the worst of both: exposed enough to look like a
+setting, unexamined enough to be wrong. The tuned profile still overrides it
+explicitly, and that keeps working.
+
+**A correction carried over from Q19.** That entry also claimed the template
+shipped `max_jobs_to_generate: null` against the plan's stated default. It
+does not — the key is absent, and `AgentPreferences.max_jobs_to_generate = 10`
+supplies it. The comparison that produced the claim used `dict.get()`, which
+cannot tell an absent key from a null one. No hazard existed and nothing
+needed fixing there.
 
 ---
 
