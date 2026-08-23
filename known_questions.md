@@ -254,7 +254,18 @@ button. Deciding after item 8 means redesigning it.
 
 Note `find_pdflatex()` already exists (R8) and detects this reliably.
 
-## 8. The UI
+## 8. The UI — in progress
+
+**Stack decided (R25): Streamlit, kept as a pure view layer.** The
+prerequisite refactor is done (R26): the orchestrator now reports progress and
+resolves checkpoints through callbacks, so a UI can render a multi-minute run
+and answer a checkpoint without touching stdin.
+
+Remaining: the screens themselves.
+
+The original entry follows.
+
+### Original
 
 Three screens for an MVP, not the six `migration_plan.md` sketches: resume
 upload (`init_profile.py` does the work), key entry plus the fields
@@ -2037,6 +2048,101 @@ does not — the key is absent, and `AgentPreferences.max_jobs_to_generate = 10`
 supplies it. The comparison that produced the claim used `dict.get()`, which
 cannot tell an absent key from a null one. No hazard existed and nothing
 needed fixing there.
+
+---
+
+## R25. The UI is Streamlit, kept as a view layer
+
+**Decision:** (August 2026) Streamlit, already pencilled into
+`requirements.txt` under "Optional: UI" and now committed to.
+
+**The deciding fact is not in this repo, which is why it is written here.**
+The hosted tier, if it happens, is planned as **React + FastAPI**. That
+intent exists — it is how JobScout is described outside the project — but it
+appears nowhere in the code, `requirements.txt`, `migration_plan.md` or this
+document. It is nonetheless the fact that settles the choice, so recording it
+is the point of this entry. R12 and roadmap item 0 were both the same shape:
+something load-bearing, invisible from inside the repo.
+
+**Why it settles it.** A hand-written FastAPI + HTML/JS UI looks like the
+disciplined option and is not. Split it in two: the HTTP boundary is
+genuinely reusable under a later React frontend, and the pages are not — they
+get deleted the day React arrives. The pages are where nearly all the work
+sits. So that option pays full price for the half that gets thrown away.
+Streamlit does not pretend to be the eventual frontend, so nothing is lost
+when it is replaced.
+
+A terminal wizard was also considered and rejected in one line: item 8 exists
+to serve someone who will not use a CLI, and a prompt flow is the CLI with
+more ceremony.
+
+**The costs are real and aimed at the wrong things.** Streamlit adds roughly
+50MB and caps layout control. Against a local-first, bring-your-own-key app
+with three screens, nobody is measuring the install size, and R20's results
+screen is a table with download buttons — inside Streamlit's range even if it
+is not pixel-exact.
+
+**The condition that makes this a good call rather than a trap:** Streamlit
+stays a **pure view layer**. It loads a profile, calls the orchestrator, and
+renders what comes back. No filtering, ranking, scoring or path-building in a
+callback or in `session_state`. Enforced structurally by what the app file is
+allowed to import:
+
+```python
+# app.py imports only these
+from agents.orchestrator import JobScoutOrchestrator, StageProgress
+from scripts.init_profile import build_profile
+# nothing from tools/
+```
+
+If business logic leaks into the UI, the eventual React port becomes a rewrite
+instead of a re-skin. This is the same discipline R22 already forced by making
+the API key a parameter, so it is not a second tax.
+
+## R26. Progress and checkpoints had no shape a UI could consume
+
+**Decision:** (August 2026) `run()` takes `on_progress` and `on_checkpoint`.
+Both optional; omitting them preserves CLI behaviour exactly.
+
+**Two problems, and the second was worse than the first.**
+
+The known one: `run()` was a single blocking call returning a `Dict`, with the
+four stages as private sequential methods. Progress existed only as log lines
+— fine in a terminal, unusable from a UI, and a multi-minute pipeline that
+reports nothing is not something to put behind a spinner.
+
+The one found while looking: checkpoints were literal stdin reads.
+
+```
+orchestrator.py:439   response = input("Continue to next stage? (y/n): ")
+orchestrator.py:467   response = input("Continue to generation? (y/n): ")
+```
+
+and `AgentPreferences.checkpoint_after_scoring` defaults to **True**. A
+bootstrapped profile is exactly what the UI produces, so the default path
+would have hung the app on a prompt nobody could answer. Worse, declining
+called `sys.exit(0)` — a library killing its host process.
+
+**The shape.** `StageProgress(stage, done, total, message)` with a `fraction`
+property that returns 0.0 rather than dividing by zero, because discovery
+cannot know its total until it has looked. `_emit()` swallows exceptions from
+the callback: a UI failing to draw a progress bar must not lose a run that has
+already spent API quota. Checkpoints route through `_request_checkpoint()`,
+which asks the callback when there is one and falls back to the terminal
+prompt when there is not; the prompts now **return a decision** instead of
+exiting, and declining raises an internal `_CheckpointStop` that `run()`
+catches, saves state, and returns from.
+
+Item-level ticks come from the two slow stages — `analyze_jobs()` and
+`generate_resumes()` each take an `on_progress` and tick per item. Discovery
+and enrichment report start and finish only, since neither exposes per-item
+structure worth threading.
+
+Verified end to end: 24 ticks over a replay run (analysis 0..20, generation
+0..2), both checkpoint answers honoured without stdin being touched, and the
+CLI producing byte-identical results to before the change. 12 new tests,
+including one that replaces `builtins.input` and asserts it is never called
+when a callback is supplied.
 
 ---
 

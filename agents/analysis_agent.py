@@ -65,7 +65,7 @@ class AnalysisAgent:
         
         logger.info(f"✅ Ready to analyze jobs")
     
-    def analyze_jobs(self, enriched_jobs: List[Dict]) -> List[Dict]:
+    def analyze_jobs(self, enriched_jobs: List[Dict], on_progress=None) -> List[Dict]:
         """
         Analyze enriched jobs - score and select components.
         
@@ -90,6 +90,9 @@ class AnalysisAgent:
         threshold = self.profile.agent_preferences.scoring_threshold
         
         for i, job in enumerate(enriched_jobs, 1):
+            if on_progress:
+                on_progress(i - 1, len(enriched_jobs),
+                            job.get('title', 'Unknown'))
             job_id = job.get('id', f'job_{i}')
             title = job.get('title', 'Unknown')
             company = job.get('company', 'Unknown')
@@ -156,6 +159,9 @@ class AnalysisAgent:
                 logger.error(f"   ❌ Analysis failed: {e}")
                 continue
         
+        if on_progress:
+            on_progress(len(enriched_jobs), len(enriched_jobs), "done")
+
         logger.info(f"✅ Analysis complete: {len(results)} jobs passed threshold")
         
         # Sort by score (highest first)

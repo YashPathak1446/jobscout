@@ -141,7 +141,8 @@ class GenerationAgent:
         pattern = re.compile('|'.join(re.escape(key) for key in replacements.keys()))
         return pattern.sub(lambda match: replacements[match.group()], str(text))
     
-    def generate_resumes(self, analysis_results: List[Dict], output_dir: str = "outputs") -> List[Dict]:
+    def generate_resumes(self, analysis_results: List[Dict], output_dir: str = "outputs",
+                         on_progress=None) -> List[Dict]:
         """
         Generate tailored resumes for analyzed jobs.
 
@@ -163,6 +164,9 @@ class GenerationAgent:
 
         for i, analysis in enumerate(analysis_results, 1):
             job = analysis["job"]
+            if on_progress:
+                on_progress(i - 1, len(analysis_results),
+                            f"{job.get('company', '?')} - {job.get('title', '?')}")
             selected = analysis["selected_components"]
 
             job_title = job["title"]

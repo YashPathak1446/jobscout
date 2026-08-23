@@ -20,9 +20,10 @@ import os
 import sys
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import Callable, List, Dict, Optional
 
 # Load environment variables from .env file
 try:
@@ -39,6 +40,36 @@ from tools.resume import ResumeParser
 from agents import DiscoveryAgent, EnrichmentAgent, AnalysisAgent, GenerationAgent
 
 logger = logging.getLogger(__name__)
+
+
+class _CheckpointStop(Exception):
+    """Raised when a checkpoint declines to continue. Caught inside run()."""
+
+
+@dataclass
+class StageProgress:
+    """
+    One progress tick from the pipeline.
+
+    The pipeline runs for minutes and used to report only by logging, which a
+    terminal shows live and a UI cannot consume at all. Callers now pass
+    `on_progress` and receive these; the CLI prints them and Streamlit renders
+    them, without either side knowing what the other does.
+
+    `total` is 0 for stages that cannot know their size up front (discovery
+    does not know how many jobs exist until it has looked).
+    """
+    stage: str          # discovery | enrichment | analysis | generation | summary
+    done: int
+    total: int
+    message: str = ""
+
+    @property
+    def fraction(self) -> float:
+        """0.0-1.0, or 0.0 when the total is unknown. Safe to feed a progress bar."""
+        if not self.total:
+            return 0.0
+        return min(1.0, self.done / self.total)
 
 
 class JobScoutOrchestrator:
@@ -90,6 +121,8 @@ class JobScoutOrchestrator:
         """
         self.profile_name = profile_name
         self.api_key = api_key
+        self._on_progress = None
+        self._on_checkpoint = None
         self.checkpoint = checkpoint
         self.mock_mode = mock_mode
         self.mock_generation = mock_generation
@@ -127,16 +160,29 @@ class JobScoutOrchestrator:
         
         logger.info(f"📄 Resume: {resume_path}")
     
-    def run(self, max_jobs: int = 20) -> Dict:
+    def run(
+        self,
+        max_jobs: int = 20,
+        on_progress: Optional[Callable[[StageProgress], None]] = None,
+        on_checkpoint: Optional[Callable[[str, list], bool]] = None,
+    ) -> Dict:
         """
         Run the full pipeline.
-        
+
         Args:
             max_jobs: Maximum number of jobs to process
-            
+            on_progress: Called with a StageProgress on every tick. Optional —
+                omitting it keeps the previous logging-only behaviour.
+            on_checkpoint: Called as (stage, items) when a checkpoint is
+                configured; return True to continue, False to stop. Omitting it
+                falls back to the terminal prompt, which is correct for the CLI
+                and would hang any UI, since it reads stdin.
+
         Returns:
             Final state dict with all results
         """
+        self._on_progress = on_progress
+        self._on_checkpoint = on_checkpoint
         logger.info("=" * 80)
         logger.info("🚀 STARTING JOBSCOUT V3 PIPELINE")
         logger.info("=" * 80)
@@ -173,6 +219,11 @@ class JobScoutOrchestrator:
             
             return self.state
             
+        except _CheckpointStop:
+            logger.info("Pipeline stopped at a checkpoint")
+            self._save_state()
+            return self.state
+
         except KeyboardInterrupt:
             logger.warning("\n\n⚠️  Pipeline interrupted by user")
             self._save_state()
@@ -186,6 +237,42 @@ class JobScoutOrchestrator:
             raise
     
     # =====================================================================
+    # PROGRESS AND CHECKPOINTS
+    # =====================================================================
+
+    def _emit(self, stage: str, done: int, total: int, message: str = ""):
+        """
+        Report a progress tick, if anyone is listening.
+
+        A caller's callback is not allowed to take the pipeline down with it:
+        a UI that raises while rendering a progress bar should cost a missing
+        bar, not a lost run that has already spent API quota.
+        """
+        if not self._on_progress:
+            return
+        try:
+            self._on_progress(StageProgress(stage, done, total, message))
+        except Exception as exc:
+            logger.debug(f"progress callback raised, ignoring: {exc}")
+
+    def _request_checkpoint(self, stage: str, items: list) -> bool:
+        """
+        Ask whether to continue past a checkpoint. True means continue.
+
+        With a callback, the decision belongs to the caller — a UI resolves it
+        from a button without anything blocking. Without one, this falls back
+        to the terminal prompt the CLI has always used. That fallback reads
+        stdin, so a UI must pass a callback or disable checkpoints; it cannot
+        simply ignore this.
+        """
+        if self._on_checkpoint:
+            return bool(self._on_checkpoint(stage, items))
+
+        if stage == "analysis":
+            return self._checkpoint_review_analysis(items)
+        return self._checkpoint_review_jobs(items, stage)
+
+    # =====================================================================
     # PIPELINE STAGES
     # =====================================================================
 
@@ -195,14 +282,19 @@ class JobScoutOrchestrator:
         logger.info("🔍 STAGE 1: DISCOVERY")
         logger.info("=" * 80)
         
+        self._emit("discovery", 0, 0, "searching job sources")
+
         agent = DiscoveryAgent(self.profile, mock_mode=self.mock_mode)
         jobs = agent.discover_jobs(max_jobs=max_jobs)
+
+        self._emit("discovery", len(jobs), len(jobs), f"found {len(jobs)} jobs")
         
         self.state['discovered_jobs'] = jobs
         logger.info(f"✅ Discovered {len(jobs)} jobs")
         
         if self.checkpoint and jobs:
-            self._checkpoint_review_jobs(jobs, "discovery")
+            if not self._request_checkpoint("discovery", jobs):
+                raise _CheckpointStop()
         
         self._save_state()
     
@@ -219,8 +311,12 @@ class JobScoutOrchestrator:
         
         # Enrichment respects mock_mode. When real scraping is
         # implemented, this will use Greenhouse/Lever/Ashby scrapers.
+        self._emit("enrichment", 0, len(jobs), "fetching job descriptions")
+
         agent = EnrichmentAgent(mock_mode=self.mock_mode)
         enriched = agent.enrich_jobs(jobs)
+
+        self._emit("enrichment", len(enriched), len(jobs), f"enriched {len(enriched)} jobs")
         
         self.state['enriched_jobs'] = enriched
         logger.info(f"✅ Enriched {len(enriched)} jobs")
@@ -232,7 +328,8 @@ class JobScoutOrchestrator:
         logger.info(f"💾 Saved to: {enriched_path}")
         
         if self.checkpoint and enriched:
-            self._checkpoint_review_jobs(enriched, "enrichment")
+            if not self._request_checkpoint("enrichment", enriched):
+                raise _CheckpointStop()
         
         self._save_state()
 
@@ -303,7 +400,10 @@ class JobScoutOrchestrator:
             mock_embeddings=self.mock_embeddings,
             api_key=self.api_key,
         )
-        results = agent.analyze_jobs(jobs)
+        results = agent.analyze_jobs(
+            jobs,
+            on_progress=lambda d, n, msg: self._emit("analysis", d, n, msg),
+        )
         
         self.state['analysis_results'] = results
         logger.info(f"✅ Analyzed {len(results)} jobs passing threshold")
@@ -315,7 +415,8 @@ class JobScoutOrchestrator:
         logger.info(f"💾 Saved to: {analysis_path}")
         
         if self.checkpoint and results:
-            self._checkpoint_review_analysis(results)
+            if not self._request_checkpoint("analysis", results):
+                raise _CheckpointStop()
         
         self._save_state()
     
@@ -394,7 +495,10 @@ class JobScoutOrchestrator:
         results = agent.generate_resumes(
             generation_input,
             output_dir=str(self.output_path.parent),
+            on_progress=lambda d, n, msg: self._emit("generation", d, n, msg),
         )
+
+        self._emit("generation", len(results), len(results), f"wrote {len(results)} resumes")
 
         self.state['generation_results'] = results
 
@@ -413,7 +517,7 @@ class JobScoutOrchestrator:
     # =====================================================================
 
     def _checkpoint_review_jobs(self, jobs: List, stage: str):
-        """Pause for human review of discovered/enriched jobs."""
+        """Pause for human review of discovered/enriched jobs. True to continue."""
         print("\n" + "=" * 80)
         print(f"🔍 CHECKPOINT: Review {stage.upper()} results")
         print("=" * 80)
@@ -437,13 +541,10 @@ class JobScoutOrchestrator:
             print(f"... and {len(jobs) - 10} more\n")
         
         response = input("Continue to next stage? (y/n): ").strip().lower()
-        if response != 'y':
-            logger.info("⚠️  Pipeline stopped by user")
-            self._save_state()
-            sys.exit(0)
+        return response == 'y'
     
     def _checkpoint_review_analysis(self, results: List[Dict]):
-        """Pause for human review of analysis results."""
+        """Pause for human review of analysis results. True to continue."""
         print("\n" + "=" * 80)
         print("📊 CHECKPOINT: Review ANALYSIS results")
         print("=" * 80)
@@ -465,10 +566,7 @@ class JobScoutOrchestrator:
             print(f"... and {len(results) - 5} more\n")
         
         response = input("Continue to generation? (y/n): ").strip().lower()
-        if response != 'y':
-            logger.info("⚠️  Pipeline stopped by user")
-            self._save_state()
-            sys.exit(0)
+        return response == 'y'
     
     # =====================================================================
     # STATE & REPORTING
