@@ -477,6 +477,67 @@ Last, because it packages whatever the above settles. Nothing packages this
 today; the audience is people willing to clone a repo and edit a `.env`.
 
 
+## V2. Verification pass after R34-R37 (2026-08-23)
+
+Four items landed in a day — keyless discovery, a job store, local embeddings
+and the rewriting ladder — each tested as it was built and none tested
+*together*. This is the pass that checks the whole thing still works, written
+down because "is it tested" is exactly the question this project keeps losing
+track of.
+
+### Verified
+
+| | Result |
+|---|---|
+| Unit suite | 228 pass, 1 skipped (needs a machine without LaTeX) |
+| Baseline manifest | `verify --all` clean |
+| Full default run (Gemini) | 20 analysed, **3 valid, 0 needs_review**, 3/3 PDFs |
+| PDF read by eye | One page, tailored, correct structure |
+| Keyless run (local + no model) | One page, real content, `needs_review` for bullet length |
+| ATS discovery | Live across all five boards |
+| Job store | Dedup, user-state preservation and backlog all confirmed live |
+| Streamlit UI | All five screens, previous runs and tuning, after every change |
+
+The PDF is worth one specific note: `Outlier AI` renders with a single bullet
+as a `low` tier, which is R27's allocation behaving as designed rather than
+by accident.
+
+### Not verified, and why
+
+- **The Ollama rung.** Nothing is running on this machine. It shares its code
+  path with the hosted providers, so it is covered indirectly, but nobody has
+  watched a local model actually write a bullet. Its most likely failure —
+  fenced JSON — has a unit test.
+- **The `openai` rung against a real provider.** Same code, same caveat.
+- **Replay mode does not reach the job store.** `--input` skips Discovery, so
+  those jobs were never recorded, and the later `set_score` updates zero rows.
+  Benign, and silent, which is the part worth remembering: a replay run looks
+  identical while writing nothing to the board.
+- **The job store is invisible in the UI.** Deliberate — the board is item 14
+  — but it does mean the store is exercised only by the pipeline and its
+  tests, and there are now two paths to "past results": run files in the
+  Streamlit view and the store underneath.
+
+### Untested in a different sense: unjudged quality
+
+These are not gaps in coverage. The code runs; nobody has said whether the
+output is *good*.
+
+- **R21** — derived triggers plus the tuning editor versus hand-authored
+  rules. Still nobody's judgement.
+- **R36** — local embeddings spread scores across 88.7 points where Gemini
+  spans 13.9, and agree with it on only 7 of 20 project selections. Wider is
+  not automatically better and no one has read those resumes.
+- **R37's floor** — a one-page resume in the user's own words, marked
+  `needs_review` because some bullets exceed the length zones. Whether that is
+  an acceptable product or a bad first impression is a judgement, not a test.
+
+All three want the item-2 treatment: generate, read the PDFs, decide. That is
+the one instrument this project has that no test replaces, and it has not been
+run since R23.
+
+---
+
 # Active questions
 
 ## Q1. How does the profile generalize when there are different users?
