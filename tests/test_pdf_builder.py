@@ -178,3 +178,41 @@ class TestCompilePdf(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestVerbatimLatexIsNotDoubleEscaped(unittest.TestCase):
+    """
+    The no-model rung emits the user's own bullets, which are already LaTeX.
+
+    Escaping them turns a math span into visible backslash-and-dollar markup
+    in the rendered PDF. Both paths compiled and both produced one page — the
+    difference was only visible by reading the output, which is why this test
+    exists (V3).
+    """
+
+    def setUp(self):
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from agents.generation_agent import GenerationAgent
+
+        self.agent = GenerationAgent.__new__(GenerationAgent)
+
+    def test_model_prose_is_escaped(self):
+        escaped = self.agent._escape_latex("100% & rising")
+        self.assertNotIn("100% ", escaped)
+        self.assertIn(r"\%", escaped)
+
+    def test_the_users_own_latex_is_left_alone(self):
+        original = r"reduced latency to $\sim 503$ms"
+        self.assertEqual(
+            self.agent._escape_latex(original, already_latex=True), original)
+
+    def test_escaping_a_math_span_would_have_mangled_it(self):
+        """Pins the bug itself, so it cannot come back quietly."""
+        mangled = self.agent._escape_latex(r"$\sim 503$ms")
+        self.assertIn("textbackslash", mangled)
+
+    def test_empty_input_is_safe_on_both_paths(self):
+        self.assertEqual(self.agent._escape_latex("", already_latex=True), "")
+        self.assertEqual(self.agent._escape_latex(None, already_latex=True), "")

@@ -142,7 +142,24 @@ class GenerationAgent:
         logger.info("✅ Ready to generate resumes")
     
     
-    def _escape_latex(self, text: str) -> str:
+    def _escape_latex(self, text: str, already_latex: bool = False) -> str:
+        """
+        Escape LaTeX metacharacters — unless the text is already LaTeX.
+
+        `already_latex` exists for the no-model rung. Model output is prose
+        and must be escaped; the user's own master bullets are valid LaTeX
+        already, and escaping them turns a math span such as ~503ms into
+        visible backslash-and-dollar markup in the rendered PDF.
+
+        Found by reading a PDF, not by any test: both paths compiled, both
+        produced one page, and only one of them was readable.
+        """
+        if already_latex:
+            return text or ""
+
+        return self._escape_latex_impl(text)
+
+    def _escape_latex_impl(self, text: str) -> str:
         """Escape special LaTeX characters using a single-pass regex."""
         if not text:
             return ""
@@ -1128,6 +1145,8 @@ Source bullets:
                 "id": exp.id, "title": exp.title, "company": exp.company,
                 "dates": exp.dates, "location": exp.location,
                 "bullets": list(exp.bullets)[:keep],
+                # Straight from the user's .tex, so already valid LaTeX.
+                "_already_latex": True,
             })
 
         for proj_id in selected.get("projects", []):
@@ -1139,6 +1158,7 @@ Source bullets:
                 "id": proj.id, "name": proj.name, "url": proj.url,
                 "tech": proj.tech, "dates": proj.dates,
                 "bullets": list(proj.bullets)[:keep],
+                "_already_latex": True,
             })
 
         return self._apply_bullet_fitting(tailored)
@@ -1403,6 +1423,7 @@ Source bullets:
     """
 
         for exp in tailored.get('experiences', []):
+            verbatim = bool(exp.get('_already_latex'))
             title = self._escape_latex(exp.get('title', 'Unknown Title'))
             company = self._escape_latex(exp.get('company', 'Unknown Company'))
             dates = self._escape_latex(exp.get('dates', 'Dates'))
@@ -1416,7 +1437,7 @@ Source bullets:
             """
 
             for bullet in bullets:
-                escaped_bullet = self._escape_latex(bullet)
+                escaped_bullet = self._escape_latex(bullet, already_latex=verbatim)
                 latex_content += f"        \\resumeItem{{{escaped_bullet}}}\n"
 
             latex_content += "      \\resumeItemListEnd\n\n"
@@ -1434,6 +1455,7 @@ Source bullets:
     """
 
         for proj in tailored.get('projects', []):
+            verbatim = bool(proj.get('_already_latex'))
             name = self._escape_latex(proj.get('name', 'Unknown Project'))
             tech = self._escape_latex(proj.get('tech', ''))
             dates = self._escape_latex(proj.get('dates', ''))
@@ -1454,7 +1476,7 @@ Source bullets:
     """
 
             for bullet in bullets:
-                escaped_bullet = self._escape_latex(bullet)
+                escaped_bullet = self._escape_latex(bullet, already_latex=verbatim)
                 latex_content += f"        \\resumeItem{{{escaped_bullet}}}\n"
 
             latex_content += "      \\resumeItemListEnd\n\n"

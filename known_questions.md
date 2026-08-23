@@ -538,6 +538,80 @@ run since R23.
 
 ---
 
+## V3. The qualitative pass, and what only reading found (2026-08-23)
+
+Three questions had been left open as *unjudged rather than untested* — R21's
+derived triggers, R36's local embeddings, R37's no-model floor. This is the
+item-2 treatment for all three: generate the same JD four ways, read the PDFs,
+decide.
+
+**The JD was chosen, not sampled.** Selections were computed across the frozen
+20 under each configuration first, and Motorola Solutions, *Embedded Software
+Engineer - Modern C++, Linux*, was picked because all three configurations
+disagreed on it. A JD where everything agrees proves nothing.
+
+| | Projects chosen | Status |
+|---|---|---|
+| A reference (Gemini + hand triggers) | jobscout, e-commerce, **computer_networking** | valid |
+| B local embeddings | e-commerce, jobscout, diagnosify, search_engine | valid |
+| C no model | jobscout, e-commerce, **computer_networking** | needs_review |
+| D derived triggers | jobscout, e-commerce, **computer_networking**, spotify | valid |
+
+### R36 — local embeddings are a fallback, not an upgrade
+
+Answered, and against local. For an embedded C++/Linux role the obviously
+relevant project is Computer Networking — Docker, ContainerLab, WSL/Linux,
+EdgeShark, OSPF/ISIS/BGP, packet inspection. **A, C and D all select it. B
+drops it**, substituting Diagnosify, a healthcare NLP web app, and Search
+Engine, a Python crawler. Reading the PDF turned up a second swap the
+component IDs had not shown: B also replaces Outlier AI with tutor.com, so an
+embedded systems resume leads with "Tutored 100+ students in Python and Java".
+
+So R36's headline — local spreads scores over 88.7 points where Gemini spans
+13.9 — is **not** better discrimination. Wider is just wider. `auto` already
+prefers Gemini when a key exists and should keep doing so; local is what makes
+a keyless run possible, and it costs real quality. That is a fair trade to
+offer and a bad one to make silently, which is why R37's backend line prints.
+
+### R21 — derived triggers held up
+
+D selected Computer Networking for this JD, same as the hand-authored profile,
+and added Spotify as a fourth. On the case that discriminates, derivation
+reached the right answer without anyone writing a rule. One JD is not a
+verdict, but it is the first evidence in R21's favour rather than against.
+
+### R37 — the floor works, and reading it found a bug no test could
+
+C selected correctly and rendered one page. It also rendered this:
+
+    in $\sim 503$$ms - collapsing ... from $\sim 10$ minutes
+
+**Raw LaTeX leaking into the PDF as visible markup.** The master bullets
+contain math spans, `_escape_latex` escaped them into
+`\$\textbackslash{}sim 503\$ms`, and the result compiled cleanly and looked
+broken. The model path never hits it because rewriting produces plain prose,
+so the escaper is right for model output and wrong for the user's own text.
+
+Fixed: `_escape_latex(text, already_latex=True)` for verbatim content, which
+the no-model tailor marks. Four regression tests, one of which pins the
+mangling itself so it cannot return quietly.
+
+**This is the finding that justifies the whole exercise.** Both paths
+compiled. Both produced exactly one page. Both passed 228 tests. The only
+difference was that one of them was readable, and nothing except looking at it
+would ever have said so.
+
+### Left open
+
+C is still `needs_review` on bullet length — 344 characters against a 316
+maximum — which is honest, since deterministic compression cannot rewrite
+prose. Whether that is an acceptable free-tier product is a judgement, not a
+bug. Worth noting the fixed page now has visible whitespace, so
+`VERBATIM_BULLET_SCALE = 0.5` is probably too aggressive once the markup
+stopped inflating the rendered length; a later measurement should revisit it.
+
+---
+
 # Active questions
 
 ## Q1. How does the profile generalize when there are different users?
