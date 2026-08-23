@@ -127,6 +127,57 @@ def call_chat_json(prompt: str, base_url: str, model: str, api_key: str = None) 
     return json.loads(_strip_code_fence(text))
 
 
+def complete_json(prompt: str, gemini_key: str = None) -> dict:
+    """
+    Ask whichever backend is available for a JSON answer.
+
+    A standalone entry point, unlike the generation agent's tailoring path,
+    because resume import needs the same ladder without needing a profile or
+    a parsed resume to exist yet — at import time neither does.
+
+    Returns None when no backend can answer, which callers treat as "fall back
+    to heuristics" rather than as an error. The `none` rung is a legitimate
+    state, not a failure.
+    """
+    from config import (LLM_BACKEND, OLLAMA_API_URL, OLLAMA_BASE_URL,
+                        OLLAMA_MODEL, OPENAI_BASE_URL, OPENAI_MODEL,
+                        resolve_api_key)
+
+    choice = (LLM_BACKEND or "auto").lower()
+    key = resolve_api_key(gemini_key)
+
+    if choice == "auto":
+        choice = detect(gemini_key=key, openai_key=env_openai_key(),
+                        ollama_url=OLLAMA_API_URL)
+
+    if choice == "none":
+        return None
+
+    if choice == "gemini":
+        from google import genai
+        from config import GENERATION_MODELS
+
+        client = genai.Client(api_key=key)
+        last_error = None
+        for model in GENERATION_MODELS:
+            try:
+                response = client.models.generate_content(model=model, contents=prompt)
+                return json.loads(_strip_code_fence(response.text.strip()))
+            except Exception as exc:      # quota, retirement, bad JSON
+                last_error = exc
+        logger.warning(f"Every Gemini model failed: {last_error}")
+        return None
+
+    base_url = OLLAMA_BASE_URL if choice == "ollama" else OPENAI_BASE_URL
+    model = OLLAMA_MODEL if choice == "ollama" else OPENAI_MODEL
+    api_key = None if choice == "ollama" else env_openai_key()
+    try:
+        return call_chat_json(prompt, base_url, model, api_key)
+    except Exception as exc:
+        logger.warning(f"{choice} completion failed: {exc}")
+        return None
+
+
 def _strip_code_fence(text: str) -> str:
     """
     Unwrap ```json fences.

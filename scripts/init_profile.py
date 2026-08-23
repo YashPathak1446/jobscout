@@ -97,15 +97,55 @@ RESUME_DIR = ROOT / "data" / "master_resumes"
 
 def save_resume(file_bytes: bytes, filename: str) -> Path:
     """
-    Put an uploaded .tex where master resumes live, and return its path.
+    Put an uploaded resume where master resumes live, and return its `.tex`.
 
-    The UI should not decide where resumes belong — that is a fact about this
-    project's layout, and keeping it here is what lets `app.py` stay a view
-    layer (R25).
+    Accepts `.tex`, `.pdf` and `.docx`. Anything that is not already LaTeX is
+    read into a structured schema and rendered into the project's template —
+    the pipeline downstream only ever sees `.tex`, and the user keeps a real
+    file they can edit rather than a hidden intermediate format.
+
+    Extraction is imperfect by nature, which is why R33 requires every
+    extracted field to be confirmed before it is used.
+
+    The UI should not decide where resumes belong, or how a PDF becomes a
+    resume — both are facts about this project, and keeping them here is what
+    lets `app.py` stay a view layer (R25).
     """
     RESUME_DIR.mkdir(parents=True, exist_ok=True)
-    target = RESUME_DIR / Path(filename).name
-    target.write_bytes(file_bytes)
+    source = RESUME_DIR / Path(filename).name
+    source.write_bytes(file_bytes)
+
+    if source.suffix.lower() == ".tex":
+        return source
+
+    return import_to_tex(source)
+
+
+def import_to_tex(source, destination=None) -> Path:
+    """
+    Convert a PDF or DOCX resume into a `.tex` the pipeline can read.
+
+    Returns the path written. Raises if nothing usable came out, rather than
+    writing an empty resume that fails confusingly three stages later.
+    """
+    from tools.generation import llm_backends
+    from tools.resume import resume_import, tex_renderer
+
+    source = Path(source)
+    text = resume_import.extract_text(source)
+
+    if tex_renderer.looks_like_latex(text):
+        return source
+
+    schema = resume_import.to_schema(text, agent=llm_backends.complete_json)
+    if not (schema.get("experiences") or schema.get("projects")):
+        raise ValueError(
+            f"Could not read any experience or projects out of {source.name}. "
+            "A text-based PDF works best; a scanned image will not."
+        )
+
+    target = Path(destination) if destination else source.with_suffix(".tex")
+    tex_renderer.write(schema, target)
     return target
 
 

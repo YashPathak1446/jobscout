@@ -84,9 +84,9 @@ def _goto(step: int):
 def screen_resume():
     st.subheader("1. Your resume")
     st.caption(
-        "Upload your master LaTeX resume. Everything the resume already states "
-        "is read from it — name, contact links, education, and which of your "
-        "projects suit which jobs."
+        "Upload your resume as PDF, Word or LaTeX. Everything it already "
+        "states is read from it — name, contact links, education, and which "
+        "of your projects suit which jobs."
     )
 
     # A returning user has already done this. Making them re-upload a resume
@@ -104,7 +104,11 @@ def screen_resume():
                 st.rerun()
         st.caption("Or upload a resume below to start fresh.")
 
-    uploaded = st.file_uploader("Master resume (.tex)", type=["tex"])
+    uploaded = st.file_uploader(
+        "Your resume", type=["tex", "pdf", "docx"],
+        help="PDF and Word files are read into a LaTeX resume you can keep "
+             "and edit. Text-based PDFs work; a scanned image will not.",
+    )
     name = st.text_input(
         "Profile name",
         value=st.session_state.profile_name or "",

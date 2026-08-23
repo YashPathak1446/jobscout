@@ -356,7 +356,13 @@ comparable to the cached Gemini ones — so this needs its own frozen baseline
 before and after, and R28's cache entries become model-scoped in practice as
 well as in name.
 
-## 10. PDF and DOCX resumes (Q2)
+## 10. PDF and DOCX resumes (Q2) — DONE (2026-08-23)
+
+**Done — see R38 for the renderer and R39 for extraction.** A PDF or Word
+resume now becomes a `.tex` the pipeline reads unchanged, and the user keeps
+the `.tex`. The original entry follows.
+
+### Original
 
 **Widest reach gain available.** Requiring a LaTeX master resume excludes
 almost everyone; a user with a Word CV cannot use JobScout at all today.
@@ -3150,6 +3156,69 @@ them measured the pipeline against itself, with the same truncated input on
 both sides.
 
 13 new tests.
+
+---
+
+## R39. Reading a PDF resume, and two things only a real file showed
+
+**Decision:** (August 2026) `tools/resume/resume_import.py`. A PDF or DOCX
+becomes text, the text becomes a schema, and R38's renderer turns that into a
+`.tex`. `save_resume` accepts all three formats, so the UI's upload path needs
+no knowledge of any of it.
+
+**The model fills a schema and never writes markup.** The worst an extraction
+mistake can do is put the right words in the wrong field — recoverable, and
+visible on R33's confirmation screen. Asked for LaTeX instead, the same
+mistake produces a document that will not compile.
+
+**Extraction rides R37's ladder.** `llm_backends.complete_json()` is a
+standalone entry point rather than a method on the generation agent, because
+at import time there is no profile and no parsed resume for that agent to
+exist around. A user on the `none` rung falls through to heuristics.
+
+**Tested against a PDF whose right answer was already known** — one this
+pipeline generated, so the correct parse existed to compare against. That is
+what surfaced both problems, and neither was a model failure.
+
+### A PDF renders link text, not link targets
+
+The header shows "GitHub" over a hyperlink, so extraction yields the word
+`GitHub` and the model dutifully reported `"github": "GitHub"`. The URL is not
+in the text layer at all — it is in the page annotations. Those are now read
+and appended, and the prompt is explicit that visible link text is never a URL.
+Recovered correctly on the next run.
+
+### PDF kerning splits words, and "copy verbatim" makes it worse
+
+Extraction produced `E-Commerce W ebApp` and `F rontend & Mobile`. The model
+had been told to copy text exactly, so it faithfully copied the damage. The
+instruction now carves out an exception for stray intra-word spaces, which is
+the one repair a model should make and a regex should not attempt.
+
+Both are worth noting as a pattern: an instruction as reasonable as "do not
+alter the wording" produces wrong output when the input is already corrupt,
+and no amount of prompt care substitutes for running it on a real file.
+
+**The heuristic floor is honest about being a floor.** Contact details are
+found by pattern because they have shapes. Everything structural — which
+bullet belongs to which role, where a tech stack ends — is exactly what a
+regex cannot judge, so unsplit text is kept under `_unparsed` for the
+confirmation screen rather than dropped. Arriving with no model gets you a
+screen with something on it, not an error.
+
+**Verified end to end**: a PDF became a `.tex`, the pipeline's own parser read
+it back with contact, education, three experiences, four projects and six
+skill categories intact, and `create_profile` bootstrapped a working profile
+with seven derived trigger rules from it.
+
+**Not yet built: the confirmation screen.** R33 requires every extracted field
+to be shown for correction before use, and the import path currently writes
+the `.tex` straight out. Until that screen exists, a misread resume is only
+discoverable by opening the file — which is precisely the failure mode R33
+predicted.
+
+22 new tests, all offline. The model path is checked by hand against a real
+PDF, because mocking a model here would only test the mock.
 
 ---
 
