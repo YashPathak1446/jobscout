@@ -464,6 +464,21 @@ class GenerationAgent:
             if isinstance(entry, dict)
         }
 
+        # How well a component fits *this JD*, with the user's own importance
+        # preference removed: embedding + keyword + conditional + always.
+        # Allocation adds the importance tier back as its own weight, so
+        # leaving the term in would count importance twice (Q20).
+        jd_fit = {
+            cid: entry.get("final", 0.0) - entry.get("importance", 0.0)
+            for cid, entry in breakdown.items()
+            if isinstance(entry, dict)
+        }
+        conditional_scores = {
+            cid: entry.get("conditional", 0.0)
+            for cid, entry in breakdown.items()
+            if isinstance(entry, dict)
+        }
+
         # Resolve selected IDs to canonical parser IDs
         selected_exp_ids = [
             self._resolve_to_canonical_exp(eid)
@@ -514,16 +529,18 @@ class GenerationAgent:
         # Low importance → capped at 1 bullet regardless of budget
         exp_budgets = self._allocate_with_importance(
             component_ids=selected_exp_ids,
-            scores=exp_scores,
-            importance=exp_importance,
+            scores=jd_fit or exp_scores,
+            importance=self._promote_on_evidence(
+                selected_exp_ids, exp_importance, conditional_scores),
             total_budget=total_exp_budget,
             global_max=3,
         )
 
         proj_budgets = self._allocate_with_importance(
             component_ids=selected_proj_ids,
-            scores=proj_scores,
-            importance=proj_importance,
+            scores=jd_fit or proj_scores,
+            importance=self._promote_on_evidence(
+                selected_proj_ids, proj_importance, conditional_scores),
             total_budget=total_proj_budget,
             global_max=2 if num_proj >= 4 else 3,
         )
@@ -567,6 +584,12 @@ class GenerationAgent:
     # ── Importance tier weights ──────────────────────────────────────────────
     _IMPORTANCE_WEIGHTS = {"high": 2.0, "medium": 1.0, "low": 0.0}
     _LOW_MAX_BULLETS = 1  # Low-importance components never exceed this
+
+    # Two independent trigger matches (R14 scores 0.07 each) is the point at
+    # which JD evidence outweighs the user's own "not central to my story"
+    # tier for the purposes of depth. One incidental match must not qualify —
+    # that was exactly R14's complaint about all-or-nothing scoring.
+    _STRONG_CONDITIONAL = 0.14
 
     def _resolve_importance_map(
         self,
@@ -661,6 +684,44 @@ class GenerationAgent:
 
         return proj_ids
 
+    def _promote_on_evidence(
+        self,
+        component_ids: List[str],
+        importance: Dict[str, str],
+        conditional_scores: Dict[str, float],
+    ) -> Dict[str, str]:
+        """
+        Lift a `low` tier to `medium` when this JD argued strongly for it.
+
+        An importance tier is a statement about the *user*: "this is not
+        central to my story". A conditional trigger firing two or more times is
+        the system observing that *this particular employer disagrees*. Those
+        are different claims, and the second is about the job in front of you.
+
+        Without this, eligibility alone changes nothing. A `low` component
+        ranks on `_IMPORTANCE_WEIGHTS['low']` = 0.0 against 1.0 and 2.0, so it
+        sits last and the others absorb every spare bullet before it is
+        reached. Measured: making low components merely eligible moved zero
+        allocations; promoting the tier moved two, both with the full or
+        near-full conditional bonus (Q20).
+
+        Promotion is capped at `medium` deliberately. The evidence says "this
+        matters here", not "this is your strongest work".
+        """
+        promoted = dict(importance)
+
+        for cid in component_ids:
+            if (importance.get(cid, "medium") == "low"
+                    and conditional_scores.get(cid, 0.0) >= self._STRONG_CONDITIONAL):
+                promoted[cid] = "medium"
+                logger.info(
+                    f"   ⬆️  {cid.replace('proj_', '').replace('exp_', '')[:34]} "
+                    f"promoted low→medium for depth (JD evidence "
+                    f"{conditional_scores[cid]:.2f})"
+                )
+
+        return promoted
+
     def _allocate_with_importance(
         self,
         component_ids: List[str],
@@ -670,9 +731,15 @@ class GenerationAgent:
         global_max: int,
     ) -> Dict[str, int]:
         """
-        Allocate bullets using blended importance + JD score priority.
+        Allocate bullets using blended importance + JD fit priority.
 
-        Priority = importance_weight + jd_score
+        `scores` is JD fit — the composite with the importance term removed —
+        not raw embedding similarity, and not the full composite. The tier
+        weight below is the importance signal; including it in `scores` too
+        would count it twice (Q20). Tiers may already have been promoted by
+        `_promote_on_evidence`.
+
+        Priority = importance_weight + jd_fit
           high   = 2.0
           medium = 1.0
           low    = 0.0

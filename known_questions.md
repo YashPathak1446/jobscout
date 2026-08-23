@@ -916,7 +916,17 @@ computed rather than re-deriving a weaker one — but the composite is not
 currently carried into the generation payload, so it needs threading. Measure
 against the baseline before and after; this changes selection output.
 
-## Q20. A rescued project arrives with one bullet
+## Q20. A rescued project arrives with one bullet — RESOLVED (R27)
+
+**Fixed — see R27.** Allocation now ranks on JD fit rather than raw embedding,
+and strong trigger evidence promotes a `low` tier to `medium` for depth.
+Measured: 4/20 allocations change from the ranking fix, 6/20 with promotion.
+**The framing in the original entry was wrong** — the one-bullet cap was not
+the binding constraint, the ordering was; see R27.
+
+The original entry follows.
+
+### Original
 
 R23 stopped generation discarding the JD-relevant project. It did not give it
 room. On the Ramp Android role the mobile project now survives — and renders
@@ -2143,6 +2153,67 @@ Verified end to end: 24 ticks over a replay run (analysis 0..20, generation
 CLI producing byte-identical results to before the change. 12 new tests,
 including one that replaces `builtins.input` and asserts it is never called
 when a callback is supplied.
+
+---
+
+## R27. Bullet allocation had R23's bug, and a wrong diagnosis on top of it
+
+**Decision:** (August 2026) `_allocate_with_importance()` ranks on **JD fit**
+— the composite with the importance term removed — and `_promote_on_evidence()`
+lifts a `low` tier to `medium` when this JD's triggers fired twice or more.
+
+**Half of this is R23 again, one function further down.** Allocation ranked on
+`importance_weight + embedding_similarity`, the same number R23 had just
+removed from the drop decision. JD fit is used rather than the full composite
+because allocation adds the tier weight itself; passing the composite would
+count importance twice. Removing the term exactly (`final - importance`) is
+cleaner than approximating around it.
+
+**The other half was a diagnosis I got wrong, and the measurement caught it.**
+Q20 framed the problem as the `_LOW_MAX_BULLETS = 1` hard cap: a project
+rescued by R23 rendered with one bullet because `low` components are frozen
+there. The obvious fix was to make a trigger-backed `low` component *eligible*
+for extras.
+
+Measured, that changed **nothing** — zero allocations moved. The cap was never
+the binding constraint. A `low` component ranks on
+`_IMPORTANCE_WEIGHTS['low']` = 0.0 against 1.0 and 2.0, so it sits last among
+eligible components and the others absorb every spare bullet before it is
+reached. Eligibility without standing is not eligibility.
+
+What works is promoting the **tier**, which is also the more honest statement
+of the argument. An importance tier is a claim about the *user* — "this is not
+central to my story". A conditional trigger firing two or more times is the
+system observing that *this employer disagrees*. Those are different claims,
+and for one specific job the second one is about the job in front of you.
+
+Two hits is the threshold, not one: R14 exists because a single incidental
+mention used to carry a component. Promotion stops at `medium` — the evidence
+says "this matters here", not "this is your strongest work".
+
+**Measured on the frozen 20**, replayed from a stored analysis run rather than
+re-embedding:
+
+| change | allocations moved |
+|---|---|
+| JD-fit ranking only | 4/20 |
+| ranking + tier promotion | 6/20 |
+
+The two promotions are both well-evidenced: Ramp / `sleeptracker` at cond=0.20
+(the full 3-hit bonus) and Warp / `ubereats_ux_redesign` at cond=0.14, each
+1 → 2 bullets.
+
+**Why this is low risk.** `total_budget` is fixed by component count
+(`proj_budget_table`), and allocation distributes exactly `total_budget -
+len(components)` extras. So promotion redistributes bullets and cannot create
+them — the one-page constraint R9 enforces is untouched. There is a test
+asserting the totals match before and after promotion, because that invariant
+is the whole reason this change is safe.
+
+**The Ramp resume, end to end across R23 and R27:** the mobile project is
+selected (always was), survives generation (R23), and now renders with 2
+bullets instead of 1, with `search_engine` giving one up and the project total
+still 7.
 
 ---
 
