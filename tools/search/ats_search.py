@@ -6,8 +6,8 @@ Every source this project had before was either narrow or keyed.
 and Adzuna generalise to any level but cost a key. That left no way to find,
 say, a mid-level backend role without paying for search.
 
-Greenhouse, Lever and Ashby all serve their customers' job boards as public
-JSON with no authentication. One request to Greenhouse returns Stripe's 578
+Greenhouse, Lever, Ashby, Workable and SmartRecruiters all serve their
+customers' job boards as public JSON with no authentication. One request to Greenhouse returns Stripe's 578
 open roles across every department and level — so seniority stops being a
 property of the *source* and becomes a filter applied afterwards, which is
 what makes non-new-grad discovery possible without a key.
@@ -20,6 +20,12 @@ Two further gains over the existing sources:
   in the pipeline, and ATS-sourced jobs skip it entirely.
 - **It is first-party data.** No markdown tables to parse, no continuation
   glyphs (R13), no redirect shims.
+
+They cover different segments, which is the point of carrying five rather
+than one: Greenhouse and Ashby are where venture-backed startups post,
+SmartRecruiters is where enterprises do — Bosch alone lists nearly five
+thousand roles — and Workable covers small and European employers neither of
+the others reach. Breezy was evaluated and dropped: one live board, three jobs.
 
 The catch is that none of these APIs can enumerate companies — you must know
 the slug. `data/ats_companies.json` seeds it, and `harvest_slugs()` grows it
@@ -52,7 +58,14 @@ SLUG_PATTERNS = {
     "greenhouse": re.compile(r"(?:boards|job-boards)\.greenhouse\.io/([a-z0-9_-]+)", re.I),
     "lever": re.compile(r"jobs\.lever\.co/([a-z0-9_-]+)", re.I),
     "ashby": re.compile(r"jobs\.ashbyhq\.com/([a-z0-9_-]+)", re.I),
+    "workable": re.compile(r"apply\.workable\.com/([a-z0-9_-]+)", re.I),
+    "smartrecruiters": re.compile(r"jobs\.smartrecruiters\.com/([A-Za-z0-9_-]+)", re.I),
 }
+
+# Boards that do not return the job description in their listing call. Their
+# listings come back with an empty `full_jd`, filled in afterwards for the
+# jobs that actually survive filtering — see `_hydrate`.
+NEEDS_HYDRATION = {"smartrecruiters"}
 
 
 def _fetch(url: str):
@@ -155,7 +168,79 @@ def _ashby(slug: str) -> list:
     return listings
 
 
-BOARDS = {"greenhouse": _greenhouse, "lever": _lever, "ashby": _ashby}
+def _workable(slug: str) -> list:
+    payload = _fetch(
+        f"https://apply.workable.com/api/v1/widget/accounts/{slug}?details=true"
+    )
+    if not payload:
+        return []
+
+    company = payload.get("name")
+    listings = []
+    for job in payload.get("jobs", []):
+        # The widget leaves `location` null and splits the parts out instead.
+        where = ", ".join(
+            part for part in (job.get("city"), job.get("state"), job.get("country"))
+            if part
+        )
+        listings.append(_listing(
+            "workable", slug, job.get("shortcode") or job.get("id"),
+            job.get("title"),
+            company,
+            where or ("Remote" if job.get("telecommuting") else None),
+            job.get("url") or job.get("shortlink") or job.get("application_url"),
+            _strip_html(job.get("description", "")),
+        ))
+    return listings
+
+
+def _smartrecruiters(slug: str) -> list:
+    """
+    Enterprise boards. One company here can dwarf a whole startup segment —
+    Bosch alone posts nearly five thousand roles — which is exactly the
+    coverage Greenhouse and Ashby do not give you.
+
+    Unlike the others, the listing call carries no description, so these come
+    back with an empty `full_jd` and are hydrated after filtering. Fetching
+    4,774 descriptions to then discard 4,700 of them would be absurd.
+    """
+    payload = _fetch(
+        f"https://api.smartrecruiters.com/v1/companies/{slug}/postings?limit=100"
+    )
+    if not payload:
+        return []
+
+    listings = []
+    for job in payload.get("content", []):
+        location = job.get("location") or {}
+        where = ", ".join(
+            part for part in (location.get("city"), location.get("region"),
+                              (location.get("country") or "").upper())
+            if part
+        )
+        listing = _listing(
+            "smartrecruiters", slug, job.get("id"),
+            job.get("name"),
+            (job.get("company") or {}).get("name"),
+            where or None,
+            f"https://jobs.smartrecruiters.com/{slug}/{job.get('id')}",
+            "",
+        )
+        # Seniority as a structured field, rather than inferred from a title.
+        level = (job.get("experienceLevel") or {}).get("label")
+        if level:
+            listing.description = level
+        listings.append(listing)
+    return listings
+
+
+BOARDS = {
+    "greenhouse": _greenhouse,
+    "lever": _lever,
+    "ashby": _ashby,
+    "workable": _workable,
+    "smartrecruiters": _smartrecruiters,
+}
 
 
 def _strip_html(html: str) -> str:
@@ -313,4 +398,46 @@ def search_ats(max_results: int = 50, companies=None, boards=None, roles=None) -
         f"across {reached} board(s)"
         + (f", {failed} unreachable" if failed else "")
     )
-    return listings[:max_results]
+
+    final = listings[:max_results]
+    _hydrate(final)
+    return final
+
+
+def _hydrate(listings) -> None:
+    """
+    Fetch descriptions for boards that do not inline them.
+
+    Called only on the listings actually being returned, after role filtering
+    and after the cap. That ordering is the whole reason this is affordable:
+    a SmartRecruiters enterprise board can carry thousands of roles, and
+    fetching every description to then discard almost all of them would cost
+    more than the source is worth.
+
+    A description that will not load leaves `full_jd` empty rather than
+    failing — Enrichment can still scrape it the ordinary way.
+    """
+    for listing in listings:
+        if listing.full_jd:
+            continue
+        board = listing.source.replace("ats_", "")
+        if board not in NEEDS_HYDRATION:
+            continue
+
+        _, slug, job_id = listing.id.split("_", 2)
+        payload = _fetch(
+            f"https://api.smartrecruiters.com/v1/companies/{slug}/postings/{job_id}"
+        )
+        if not payload:
+            continue
+
+        sections = ((payload.get("jobAd") or {}).get("sections") or {})
+        text = "\n\n".join(
+            _strip_html((sections.get(name) or {}).get("text", ""))
+            for name in ("companyDescription", "jobDescription",
+                         "qualifications", "additionalInformation")
+        ).strip()
+        if text:
+            listing.full_jd = text
+            if not listing.description or len(listing.description) < 40:
+                listing.description = text[:300]

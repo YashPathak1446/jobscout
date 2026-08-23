@@ -1,18 +1,20 @@
 {
   "_comment": [
-    "Company slugs for keyless ATS job-board APIs. Greenhouse, Lever and",
-    "Ashby serve public JSON with no auth, but none lets you enumerate",
-    "companies, so the slug has to be known. Hence this file.",
+    "Company slugs for keyless ATS job-board APIs. Greenhouse, Lever, Ashby,",
+    "Workable and SmartRecruiters all serve public JSON with no auth, but none",
+    "lets you enumerate companies, so the slug has to be known. Hence this file.",
     "",
-    "A seed, not a registry. harvest_slugs() in tools/search/ats_search.py",
-    "adds any slug it sees in an apply URL, so the list grows on its own.",
-    "Entries go stale when a company changes ATS; a slug that 404s is",
-    "skipped and logged, never fatal.",
+    "A seed, not a registry. harvest_slugs() in tools/search/ats_search.py adds",
+    "any slug it sees in an apply URL, so the list grows on its own. Entries go",
+    "stale when a company changes ATS; a slug that 404s is skipped and logged,",
+    "never fatal.",
     "",
-    "Every slug below was probed live on 2026-08-23 and returned at least",
-    "one open role. 32 plausible-looking candidates were dropped for",
-    "returning nothing - an unverified list is how you ship a source that",
-    "silently finds less than it should."
+    "Every slug below was probed live and returned at least one open role.",
+    "Candidates that returned nothing were dropped rather than shipped - an",
+    "unverified list is how you get a source that silently finds less than it",
+    "should. Breezy was evaluated and rejected: 1 live board, 3 jobs.",
+    "",
+    "Verified 2026-08-23."
   ],
   "greenhouse": [
     "affirm",
@@ -105,5 +107,17 @@
     "supabase",
     "vanta",
     "warp"
+  ],
+  "workable": [
+    "blueground",
+    "epignosis",
+    "orfium",
+    "skroutz",
+    "spotawheel"
+  ],
+  "smartrecruiters": [
+    "BoschGroup",
+    "Experian",
+    "SmartRecruiters"
   ]
 }

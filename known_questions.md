@@ -2698,6 +2698,27 @@ Graduate").
 Byte-identical for the existing profile, and a senior user now sees senior
 roles. 34 new tests.
 
+**Extended the same day to five boards.** The original claim was "every major
+ATS", and three were shipped. Workable and SmartRecruiters were added after
+probing; **Breezy was evaluated and rejected** — one live board, three jobs,
+not worth the code.
+
+The five are not redundant, they cover different segments. Greenhouse and
+Ashby are where venture-backed startups post. SmartRecruiters is where
+enterprises do, and one company there dwarfs a whole startup segment: Bosch
+lists 4,774 roles against Stripe's 578. Workable covers small and European
+employers neither of the others reach. For "beyond new grad" that matters more
+than raw counts — enterprise ladders are where mid and senior titles live.
+
+**SmartRecruiters needed a different shape.** Its listing call carries no
+description, unlike the other four. Fetching one per posting would mean
+~4,800 requests against Bosch to then discard almost all of them, so
+descriptions are hydrated *after* role filtering and *after* the cap — in
+practice a handful of requests. A description that will not load leaves
+`full_jd` empty and Enrichment scrapes it the ordinary way. It also exposes a
+structured `experienceLevel`, which is better evidence than parsing a title,
+and is not yet used.
+
 **What this does not solve:** the job cache dedups by URL with a 7-day
 expiry, so a second run over the same boards returns almost nothing. That is
 correct for a run log and wrong for the job board R33 chose — see item 12.

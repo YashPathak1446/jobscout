@@ -93,6 +93,15 @@ class TestSlugHarvest(unittest.TestCase):
         self.assertIn("spotify", data["lever"])
         self.assertIn("ramp", data["ashby"])
 
+    def test_learns_workable_and_smartrecruiters_slugs(self):
+        harvest_slugs([
+            "https://apply.workable.com/blueground/j/ABC123/",
+            "https://jobs.smartrecruiters.com/Experian/744000012345",
+        ], path=self.file)
+        data = self._read()
+        self.assertIn("blueground", data["workable"])
+        self.assertIn("experian", data["smartrecruiters"])
+
     def test_a_slug_already_known_is_not_duplicated(self):
         added = harvest_slugs(["https://boards.greenhouse.io/stripe/jobs/1"],
                               path=self.file)
@@ -176,6 +185,66 @@ class TestSearchAts(unittest.TestCase):
 
     def test_no_companies_means_no_listings_and_no_error(self):
         self.assertEqual(search_ats(companies={}, boards=["greenhouse"]), [])
+
+
+class TestHydration(unittest.TestCase):
+    """
+    SmartRecruiters does not inline descriptions. Fetching them for every
+    posting on an enterprise board — Bosch carries nearly 5,000 — to then
+    discard almost all of them would cost more than the source is worth, so
+    hydration runs after filtering and after the cap.
+    """
+
+    def setUp(self):
+        self._real_boards = dict(ats_search.BOARDS)
+        self._real_fetch = ats_search._fetch
+        self.fetched = []
+
+        def board(slug):
+            return [
+                ats_search._listing("smartrecruiters", slug, i,
+                                    f"Software Engineer {i}", "ACME", "Remote",
+                                    "https://x", "")
+                for i in range(10)
+            ]
+
+        def fake_fetch(url):
+            self.fetched.append(url)
+            return {"jobAd": {"sections": {
+                "jobDescription": {"text": "<p>Build things</p>"},
+                "qualifications": {"text": "<p>Know things</p>"},
+            }}}
+
+        ats_search.BOARDS["smartrecruiters"] = board
+        ats_search._fetch = fake_fetch
+
+    def tearDown(self):
+        ats_search.BOARDS.clear()
+        ats_search.BOARDS.update(self._real_boards)
+        ats_search._fetch = self._real_fetch
+
+    def test_only_the_returned_listings_are_hydrated(self):
+        found = search_ats(max_results=3, boards=["smartrecruiters"],
+                           companies={"smartrecruiters": ["acme"]})
+        self.assertEqual(len(found), 3)
+        self.assertEqual(len(self.fetched), 3,
+                         "hydration must run after the cap, not before")
+
+    def test_hydrated_listings_carry_the_description(self):
+        found = search_ats(max_results=1, boards=["smartrecruiters"],
+                           companies={"smartrecruiters": ["acme"]})
+        self.assertIn("Build things", found[0].full_jd)
+        self.assertIn("Know things", found[0].full_jd)
+        self.assertNotIn("<p>", found[0].full_jd)
+
+    def test_boards_that_inline_their_description_are_not_refetched(self):
+        ats_search.BOARDS["greenhouse"] = lambda slug: [
+            ats_search._listing("greenhouse", slug, 1, "Software Engineer",
+                                "ACME", "Remote", "https://x", "already here")
+        ]
+        search_ats(max_results=1, boards=["greenhouse"],
+                   companies={"greenhouse": ["acme"]})
+        self.assertEqual(self.fetched, [])
 
 
 class TestHtmlStripping(unittest.TestCase):
