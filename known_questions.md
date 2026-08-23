@@ -329,6 +329,130 @@ gemini-3.5-flash is the speculative work this doc otherwise avoids.
 
 ---
 
+# Phase 2 roadmap — beyond one user with a LaTeX resume
+
+Added 2026-08-23. Items 0-8 above got the pipeline correct and usable by its
+author. Everything here is about it being usable by somebody else. Ordered by
+what unblocks what, not by appeal.
+
+## 9. Local embeddings
+
+**Why first: everything free depends on it.** Gemini is reached at exactly two
+call sites — `_get_embedding` and `_call_gemini_json` — and embeddings are the
+larger of the two, roughly 20 calls per run against 3 for generation. Moving
+them to `sentence-transformers` on CPU means **discovery, scoring and component
+selection work with no API access at all**, leaving only bullet rewriting
+dependent on a model. It also dissolves Q9, since the retirement date of
+`gemini-embedding-001` stops mattering.
+
+Costs: a heavier dependency, a model download, and vectors that are not
+comparable to the cached Gemini ones — so this needs its own frozen baseline
+before and after, and R28's cache entries become model-scoped in practice as
+well as in name.
+
+## 10. PDF and DOCX resumes (Q2)
+
+**Widest reach gain available.** Requiring a LaTeX master resume excludes
+almost everyone; a user with a Word CV cannot use JobScout at all today.
+
+**The architecture is decided, and it is not either option Q2 sketched.**
+Generation does not merely parse the master `.tex` — it **splices** it
+(`generation_agent.py:1199`): everything before the Experience section and
+everything from Technical Skills onward is reused verbatim, with generated
+sections inserted between. The master `.tex` *is* the output template. So
+parsing a PDF straight into the data model leaves nothing to splice, and
+having an LLM emit LaTeX is fragile in exactly the way that breaks compilation.
+
+Instead: **extract to a schema, render deterministically.**
+
+1. An LLM (or heuristics) reads the PDF/DOCX and fills a *structured schema* —
+   contact, education, experiences, projects, skills. It never emits LaTeX.
+2. A Python renderer populates the known template from that schema, handling
+   escaping.
+3. The result is a valid `.tex` the existing pipeline consumes unchanged, and
+   which the user can keep and edit.
+
+The model does what it is good at, extracting structure from messy text, and
+nothing it is bad at. Every input format becomes one importer behind the same
+contract. Extraction will misread some resumes, which is why R33's confirmation
+screen is not optional.
+
+## 11. Provider-agnostic generation, and the free ladder
+
+Both Gemini call sites already take an injected key (R22). Most providers —
+OpenAI, Groq, OpenRouter, Together, DeepSeek, Ollama, LM Studio — speak an
+OpenAI-compatible API, so **one adapter unlocks all of them**, Ollama included.
+
+The goal is a ladder, not a replacement, because the options are not ordered:
+
+| Path | Needs | Excludes |
+|---|---|---|
+| No-LLM | nothing | nobody, but no bullet rewriting |
+| Ollama | install + 2-5GB + RAM | light machines |
+| BYO key | a free account | people who will not sign up |
+
+Ollama is *more* accessible on account, quota and privacy, and *less* on
+install size and hardware. So: no-LLM always works, Ollama if the machine can,
+a key if preferred. **Decided (R33): detect what is available, pick the best,
+say plainly what was chosen and what it costs.**
+
+The honest risk: prompts and the JSON validation-repair loop are tuned to
+Gemini. Weaker models will fail validation more often and surface as
+`needs_review`. Each backend needs measuring against the baseline before it is
+trusted.
+
+## 12. A durable job store
+
+**Implied by R33's job-board decision, and the largest consequence of it.**
+Everything today is per-run: a `state.json` per date. A board needs jobs that
+outlive runs.
+
+`tools/cache/job_cache.py` is the closest thing and is nearly right — natural
+key on URL, `first_seen`, title, company, plus cached JDs. Two things stop it
+being the store:
+
+- **No user state.** Nothing models applied / rejected / archived, which is
+  most of what a board is *for*.
+- **It expires on purpose.** `DEFAULT_URL_MAX_AGE_HOURS = 24*7` re-shows jobs
+  after a week. A dedup tracker is built to forget; a board must not lose
+  anything. Those are opposite intents living in one file.
+
+So: a store carrying score, status, location, apply URL, generated resume
+paths and which run produced the record — reusing `job_cache`'s dedup logic
+rather than its retention policy.
+
+## 13. Discovery beyond new grad
+
+Smaller than it looks. `build_serper_query(role, seniority, site)` is already
+parameterised and the caller simply passes `"new grad"`; Adzuna is generic
+too. The work is making seniority a profile field with a range, and lifting
+the hard-coded indicator lists in `job_filter.py:78` — which today encode one
+person's eligibility as constants.
+
+What is genuinely lost is that **`github_newgrad` is the only keyless source
+and is inherently new-grad**; those curated repos have no general equivalent.
+Expanding levels therefore leans on key-based sources, which pulls against
+item 11's goal of needing no keys. Keyless general sources worth evaluating:
+Arbeitnow, Remotive (remote only), USAJOBS (US federal). Terms change — verify
+before designing around any of them.
+
+## 14. The React frontend
+
+Cheaper than a rewrite because R25 built for it: `app.py` reaches the pipeline
+only through `agents.orchestrator` and `scripts.init_profile`, and
+`test_ui_contract` fails the build if that changes. Every facade React needs
+already exists.
+
+Deliberately after items 9-13, because each of them changes what the screens
+must show: a confirmation step for extraction, a backend picker, seniority
+controls, and a job list rather than a run log.
+
+## 15. Packaging
+
+Last, because it packages whatever the above settles. Nothing packages this
+today; the audience is people willing to clone a repo and edit a `.env`.
+
+
 # Active questions
 
 ## Q1. How does the profile generalize when there are different users?
@@ -362,6 +486,17 @@ gated on Phase 1 (Step 7 in the master plan).
 ---
 
 ## Q2. How do we handle PDF and DOCX as input formats?
+
+**Status:** Architecture decided 2026-08-23 — see Phase 2 item 10. Neither
+of the three options below: extract to a structured schema, then render
+the known template deterministically. The deciding fact was that
+generation *splices* the master .tex rather than only parsing it, so the
+master file is the output template and cannot simply be replaced by a
+parsed data model. Not yet built.
+
+The original entry follows.
+
+### Original
 
 **Status:** Open. Architectural commitment needed before Phase 2.
 
@@ -2454,6 +2589,39 @@ and sorted, the description survived, and `always_include`, `high_priority`
 and every other component were untouched.
 
 21 new tests.
+
+---
+
+## R33. Four design decisions for the Phase 2 frontend
+
+**Decision:** (August 2026) Taken before any React work, because each one
+changes what gets built underneath it.
+
+**The app is a job board you live in**, not a run log and not a wizard. The
+main view is a persistent list of matched jobs with scores, statuses and
+resumes attached, filterable by role, score, date and status. This is the
+decision with a data consequence: it requires the durable job store in item 12,
+because everything today is per-run.
+
+**Runs are background jobs.** `POST /runs` returns an id; progress streams over
+SSE; closing the tab does not cancel the run. A multi-minute pipeline behind a
+page that must stay open is the wrong shape, and this is also the form a hosted
+tier would need. The orchestrator is already callback-driven (R26), so the
+progress half of this is done.
+
+**Resume import is fully confirmed.** Every extracted field — contact,
+education, each experience and project with its bullets — is shown for
+correction before anything is saved. Extraction from PDF/DOCX will misread some
+resumes, and a silent misparse produces bad resumes until somebody notices. It
+doubles as the moment the user sees what the system understood about them,
+which is a better first impression than a spinner.
+
+**The model backend is detected, then explained.** On first run: is Ollama
+running, is there a key in the environment? Pick the best available, then say
+plainly what was chosen and what it costs in quality, with a settings screen to
+override. Not silent, because quality differs materially between the rungs; not
+a mandatory choice screen, because most people do not yet know enough to
+answer it.
 
 ---
 
