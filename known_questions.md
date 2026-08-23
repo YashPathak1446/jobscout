@@ -335,7 +335,13 @@ Added 2026-08-23. Items 0-8 above got the pipeline correct and usable by its
 author. Everything here is about it being usable by somebody else. Ordered by
 what unblocks what, not by appeal.
 
-## 9. Local embeddings
+## 9. Local embeddings — DONE (2026-08-23)
+
+**Done — see R36.** A full run now completes with no API key: keyless
+discovery (R34), keyless scoring, keyless selection. Only bullet rewriting
+still needs a model, which is item 11. The original entry follows.
+
+### Original
 
 **Why first: everything free depends on it.** Gemini is reached at exactly two
 call sites — `_get_embedding` and `_call_gemini_json` — and embeddings are the
@@ -2784,6 +2790,77 @@ view still reads run files and is now the older of two paths — worth
 collapsing when React lands, not before.
 
 22 new tests.
+
+---
+
+## R36. Scoring without a key
+
+**Decision:** (August 2026) `tools/resume/local_embeddings.py`, selected via
+`config.EMBEDDING_BACKEND` (`auto` / `gemini` / `local`). A pipeline run now
+completes end to end with `GOOGLE_API_KEY` unset.
+
+**model2vec, not sentence-transformers.** The obvious library pulls PyTorch —
+2-3GB on Windows — which is not a thing to ask of someone trying a job-search
+tool, and it would have made item 15's packaging story much worse. model2vec
+uses static distilled embeddings: `tokenizers` plus numpy, no torch, no
+transformers, a ~30MB model. Measured: **0.002s to encode three texts**
+against roughly 2.3s for one Gemini round trip.
+
+The trade is real. Static embeddings have no contextual attention, so they
+capture topic well and syntax not at all. Matching a resume component to a job
+description is closer to a bag-of-concepts comparison than to reading
+comprehension, so it is a fair trade — but it is a trade, and it is not the
+same thing as the model every earlier measurement used.
+
+**The first version scored every job 0.0 and the pipeline found nothing.**
+Component selection worked; `overall_score` did not. The cause was one line:
+
+```python
+overall_pct = max(0, min(100, (overall - 0.3) / 0.6 * 100))
+```
+
+a normalisation calibrated to Gemini, whose cosines for this text sit around
+0.3-0.9. model2vec's run an order of magnitude lower — measured over the
+frozen 20-JD baseline, raw overall ran from about 0.00 to 0.08 — so every job
+fell under the floor. The same shape as R24: a constant tuned for one setup,
+applied to everything.
+
+Calibration is now per backend and measured for each. Worth noting how the
+failure presented: not an error, not a warning, just a pipeline that
+discovered jobs and scored all of them zero.
+
+**An unexpected result, reported without a conclusion.** Over the same 20 JDs:
+
+| backend | min | max | median | spread |
+|---|---|---|---|---|
+| gemini | 43.8 | 57.7 | 53.0 | **13.9** |
+| local | 0.0 | 88.7 | 63.6 | **88.7** |
+
+Q17 and R24 are both about Gemini's scores clustering so tightly that a
+threshold slices a dense band rather than separating good from bad. The local
+backend does not have that problem. **That is not yet a claim that it selects
+better** — a wider spread could equally mean more noise. Selection agrees with
+Gemini on 13/20 experiences and 7/20 projects, and nobody has read the
+resulting resumes. Judging that needs the item-2 style qualitative pass.
+
+**`auto` still prefers Gemini when a key is present**, deliberately. Every
+measurement in this document was taken against it, and switching the default
+would invalidate the baseline silently. Local is the fallback, which is what
+makes a keyless run possible, and `EMBEDDING_BACKEND = "local"` makes it the
+choice.
+
+**Backends are resolved once per process.** A run that embedded the resume
+with one model and the job description with another would produce a similarity
+with no meaning. Both caches key on the model name (R11, R28), so switching
+costs a re-embed rather than a wrong answer, and R28's dimension guard is now
+sized to whichever backend is active — 768 against 256.
+
+**What a keyless run still does not give you.** Generation falls back to its
+mock path without a key, which writes placeholder content rather than the
+user's real bullets. That is not the no-LLM mode worth having: selecting the
+right components and emitting the master bullets verbatim would be. Item 11.
+
+11 new tests.
 
 ---
 

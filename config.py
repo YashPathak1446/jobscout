@@ -40,6 +40,22 @@ GENERATION_MODELS = [
 # invalidating the embedding cache. Tracked as an open question, not urgent.
 EMBEDDING_MODEL = "gemini-embedding-001"
 
+# Where embeddings come from: "auto", "gemini" or "local".
+#
+# "auto" prefers Gemini when a key is resolvable and falls back to the local
+# model otherwise, so the pipeline runs with no key at all rather than failing.
+# Embeddings are the larger of the two API dependencies — ~20 calls a run
+# against ~3 for generation — so this is what makes a keyless run possible.
+#
+# The two are not interchangeable: different dimensions, different meaning.
+# Both caches key on the model name, so switching costs a re-embed, never a
+# wrong answer.
+EMBEDDING_BACKEND = "auto"
+
+# Static distilled embeddings: tokenizers and numpy, no torch. ~30MB, and
+# inference is roughly a thousand times faster than a network round trip.
+LOCAL_EMBEDDING_MODEL = "minishlab/potion-base-8M"
+
 # Prompt-hash response cache. The real fix for dev-session quota burn:
 # re-running the same jobs costs zero API requests.
 LLM_CACHE_ENABLED = True

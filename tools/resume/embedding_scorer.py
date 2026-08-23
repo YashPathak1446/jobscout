@@ -13,7 +13,7 @@ import logging
 import math
 from dataclasses import dataclass
 
-from config import EMBEDDING_MODEL
+from config import EMBEDDING_BACKEND, EMBEDDING_MODEL, LOCAL_EMBEDDING_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,31 @@ class EmbeddingScore:
     project_scores: dict[str, float]    # component_id → similarity
 
 
+# Raw similarity is not comparable between backends, so the map onto 0-100 is
+# per backend. Gemini's cosines for this kind of text sit around 0.3-0.9;
+# model2vec's static embeddings run an order of magnitude lower, because a
+# short component is being compared against a long job description and static
+# vectors dilute across length.
+#
+# Both figures are measured, not assumed. The Gemini pair is the original
+# calibration; the local pair comes from scoring the frozen 20-JD baseline,
+# where raw overall ran from about 0.00 to 0.08. Getting this wrong is not
+# subtle in the way R24's threshold was — the wrong floor sends every job to
+# 0.0 and the pipeline finds nothing at all, which is exactly what the first
+# version of the local backend did.
+CALIBRATION = {
+    "gemini": (0.30, 0.60),
+    "local": (0.00, 0.10),
+}
+
+
+def _normalise(overall: float) -> float:
+    """Map a raw blended similarity onto 0-100 for the active backend."""
+    backend = active_backend()[0]
+    floor, span = CALIBRATION.get(backend, CALIBRATION["gemini"])
+    return round(max(0.0, min(100.0, (overall - floor) / span * 100)), 1)
+
+
 def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
     dot = sum(a * b for a, b in zip(vec_a, vec_b))
@@ -49,6 +74,51 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
 # =========================================================================
 # GEMINI EMBEDDINGS (Real)
 # =========================================================================
+
+_BACKEND = None
+
+
+def active_backend() -> tuple:
+    """
+    Which backend this process embeds with, as (name, model, dimensions).
+
+    Resolved once and reused, so a single run can never mix backends —
+    embedding a resume with one model and a job description with another
+    would produce a similarity score with no meaning.
+
+    "auto" prefers Gemini when a key is resolvable, because it is the backend
+    every measurement in `known_questions.md` was taken against. Without a
+    key it falls back to local rather than failing, which is the whole point.
+    """
+    global _BACKEND
+
+    if _BACKEND is not None:
+        return _BACKEND
+
+    from config import resolve_api_key
+    from tools.resume import local_embeddings
+
+    choice = (EMBEDDING_BACKEND or "auto").lower()
+
+    if choice == "auto":
+        choice = "gemini" if resolve_api_key() else "local"
+
+    if choice == "local":
+        if not local_embeddings.is_available():
+            logger.error(
+                "Local embeddings requested but model2vec is not installed. "
+                "Run: pip install model2vec"
+            )
+            _BACKEND = ("local", LOCAL_EMBEDDING_MODEL, 0)
+        else:
+            dims = local_embeddings.dimensions(LOCAL_EMBEDDING_MODEL)
+            logger.info(f"Embeddings: local, {LOCAL_EMBEDDING_MODEL} ({dims}d), no API key needed")
+            _BACKEND = ("local", LOCAL_EMBEDDING_MODEL, dims)
+    else:
+        _BACKEND = ("gemini", EMBEDDING_MODEL, EMBEDDING_DIMENSIONS)
+
+    return _BACKEND
+
 
 _EMBEDDING_CACHE = None
 
@@ -67,10 +137,14 @@ def _embedding_cache():
         from config import EMBEDDING_CACHE_DIR, EMBEDDING_CACHE_ENABLED
         from tools.cache.text_embedding_cache import TextEmbeddingCache
 
+        _, _, dims = active_backend()
         _EMBEDDING_CACHE = TextEmbeddingCache(
             cache_dir=EMBEDDING_CACHE_DIR,
             enabled=EMBEDDING_CACHE_ENABLED,
-            dimensions=EMBEDDING_DIMENSIONS,
+            # Sized to the *active* backend. Gemini is 768 and the local model
+            # 256, so a fixed number here would reject every entry from
+            # whichever backend it was not written for (R28's guard).
+            dimensions=dims or None,
         )
 
     return _EMBEDDING_CACHE
@@ -94,11 +168,19 @@ def _get_embedding(
     # included. Keying on the untruncated text would give two inputs that
     # truncate identically separate entries for one identical API call.
     payload = text[:8000]
+    backend, model_name, _ = active_backend()
     cache = _embedding_cache()
 
-    cached = cache.get(payload, EMBEDDING_MODEL, task_type)
+    cached = cache.get(payload, model_name, task_type)
     if cached is not None:
         return cached
+
+    if backend == "local":
+        from tools.resume import local_embeddings
+
+        vector = local_embeddings.embed(payload, model_name)
+        cache.set(payload, model_name, task_type, vector)
+        return vector
 
     try:
         from google import genai
@@ -117,7 +199,7 @@ def _get_embedding(
         )
 
         vector = result.embeddings[0].values
-        cache.set(payload, EMBEDDING_MODEL, task_type, vector)
+        cache.set(payload, model_name, task_type, vector)
         return vector
 
     except Exception as e:
@@ -226,10 +308,7 @@ def score_job_with_embeddings(
     # Weight: 40% experiences, 30% projects, 30% skills
     overall = top_exp_avg * 0.4 + top_proj_avg * 0.3 + skills_sim * 0.3
 
-    # Normalize to 0-100 scale
-    # Cosine similarity for embeddings typically ranges 0.3-0.9
-    # Map 0.3-0.9 → 0-100
-    overall_pct = max(0, min(100, (overall - 0.3) / 0.6 * 100))
+    overall_pct = _normalise(overall)
 
     return EmbeddingScore(
         job_id="",
