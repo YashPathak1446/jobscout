@@ -312,8 +312,13 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
 
     # ===== EDUCATION =====
     edu_school = edu_location = edu_degree = edu_dates = edu_courses = ""
+    # Coursework is optional. It used to be required, which meant a resume
+    # without a 'Relevant Coursework' bullet parsed with no education at
+    # all - silently, since every other field still populated. Most resumes
+    # do not carry that line, so this only ever worked for resumes written
+    # against this exact template.
     edu_match = re.search(
-        r"\\resumeSubheading\s*\{([^}]*)\}\{([^}]*)\}\s*\{([^}]*)\}\{([^}]*)\}\s*\\resumeItemListStart\s*\\resumeItem\{\\textbf\{[^}]*\} ([^}]*)\}",
+        r"\\resumeSubheading\s*\{([^}]*)\}\{([^}]*)\}\s*\{([^}]*)\}\{([^}]*)\}(?:\s*\\resumeItemListStart\s*\\resumeItem\{\\textbf\{[^}]*\} ([^}]*)\})?",
         raw
     )
     if edu_match:
@@ -321,7 +326,8 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
         edu_location = _clean_latex(edu_match.group(2))
         edu_degree = _clean_latex(edu_match.group(3))
         edu_dates = _clean_latex(edu_match.group(4))
-        edu_courses = _clean_latex(edu_match.group(5))
+        # group(5) is None when the resume has no coursework line.
+        edu_courses = _clean_latex(edu_match.group(5) or "")
 
     # ===== EXPERIENCES =====
     experiences = []
@@ -351,7 +357,12 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
 
             # Extract bullet items
             bullets = []
-            bullet_matches = re.findall(r"\\resumeItem\{(.*?)\}(?:\s*\\resumeItem|\s*$)", bullets_raw + "\n\\resumeItem", re.DOTALL)
+            # Lookahead, not a consuming group. The consuming form ate the
+            # next bullet's opening token, so every second bullet vanished:
+            # 18 in the master .tex parsed as 10. Silent, and it truncated
+            # what scoring, keyword extraction and every prompt ever saw.
+            # The projects path below always used the lookahead form.
+            bullet_matches = re.findall(r"\\resumeItem\{(.*?)\}(?=\s*\\resumeItem|\s*$)", bullets_raw + "\n\\resumeItem", re.DOTALL)
             for b in bullet_matches:
                 cleaned = _clean_latex(b).strip()
                 if cleaned:

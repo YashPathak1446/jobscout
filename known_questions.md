@@ -3071,6 +3071,88 @@ invalidate all of them.
 
 ---
 
+## R38. Rendering imported resumes, and three parser bugs it uncovered
+
+**Decision:** (August 2026) `tools/resume/tex_renderer.py` turns a structured
+resume into the project's LaTeX template, plus `data/templates/base_preamble.tex`
+as a committed, depersonalised base. This is the rendering half of Phase 2
+item 10; extraction from PDF and DOCX is still to come.
+
+**The model never emits markup.** Generation *splices* the master `.tex`, so a
+resume that never existed as LaTeX has nothing to splice, and the obvious fix
+— asking a model for LaTeX — fails in the worst way available: markup that
+does not compile, with the error thirty lines from the cause. So the model
+fills a schema and this renders it, in code that can be tested without an API.
+
+**The test that mattered was the round trip**: render a schema, parse the
+result with the pipeline's own parser, check nothing was lost. It found three
+bugs, and two of them were not in the new code.
+
+### The parser required a coursework line to see education at all
+
+The education regex demanded a trailing
+`\resumeItemListStart \resumeItem{\textbf{...} ...}`. Without it, no match —
+and the failure was silent, because every other field still populated. It only
+ever worked for resumes written against this exact template with a "Relevant
+Coursework" bullet, which most resumes do not have. Now optional.
+
+### The parser was discarding half the experience bullets
+
+The worst of the three, and it had been live the whole time:
+
+```python
+re.findall(r"\\resumeItem\{(.*?)\}(?:\s*\\resumeItem|\s*$)", ...)
+```
+
+That group **consumes** the next bullet's opening token, so the scan resumes
+past it and every second bullet vanishes. The projects path two functions
+below always used a lookahead and was correct.
+
+Measured on the live resume: **18 `\resumeItem` entries in the file, 10
+parsed.** Eight bullets of real experience had been invisible to keyword
+extraction, to component embeddings, and to every generation prompt ever
+built. Sorenson parsed 3 of 6, 101gen 3 of 5.
+
+**And the fix appeared to change nothing**, which was itself a finding. Scores
+were byte-identical afterwards, because `embedding_cache.py` keys on the
+*resume file's hash* — and the file had not changed, only the parse of it. So
+it served vectors built from the truncated bullets. R11's lesson wearing a
+different hat: a cache key must cover everything that affects the value, and
+"the input file" is not the same as "what we understood the input file to
+say".
+
+With the cache cleared, the true impact is modest: overall scores move from
+43.8-57.7 to 44.4-57.8, experience selection changes on **1 of 20** JDs and
+project selection on **0**. Selection barely notices. Generation should notice
+more — the prompt now carries 18 bullets of source material rather than 10 —
+and that is not something a selection metric can show.
+
+### The renderer transposed experience fields
+
+Jake's template uses `\resumeSubheading{#1}{#2}{#3}{#4}` for both sections
+with different meanings: education is `{school}{location}{degree}{dates}` and
+experience is `{title}{dates}{company}{location}`. Getting it wrong parsed
+cleanly and filed every job title as the employer. Nothing about the template
+hints at this; only the round trip showed it.
+
+### And one in the escaper
+
+Sequential replacement cannot escape LaTeX: the substitution for a backslash
+contains braces, so the later brace rules escaped those in turn and `a\b`
+became `a\textbackslash\{\}b`. Now a single pass, where nothing a
+replacement emits is looked at again.
+
+**Worth noting what found these.** Not the 232 tests that were passing, and
+not any amount of reading. Rendering a resume and parsing it back is a cheap
+equivalence check, and it caught a parser bug that four scoring changes, three
+verification runs and a frozen baseline had all missed — because every one of
+them measured the pipeline against itself, with the same truncated input on
+both sides.
+
+13 new tests.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

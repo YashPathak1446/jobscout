@@ -11,7 +11,8 @@ requests>=2.31.0
 beautifulsoup4>=4.12.0
 rich>=13.0.0
 
-# Document generation
+# Resume import (PDF/DOCX) and document generation
+pypdf>=4.0.0
 python-docx>=1.0.0
 
 # Data validation
