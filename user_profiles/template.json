@@ -116,6 +116,7 @@
   },
   "agent_preferences": {
     "discovery_sources": [
+      "ats",
       "github_newgrad",
       "serper",
       "adzuna"

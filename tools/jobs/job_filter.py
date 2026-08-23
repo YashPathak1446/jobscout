@@ -51,6 +51,59 @@ class FilterDecision:
         )
 
 
+# Wording that marks a posting as pitched above entry level. Used only to
+# decide whether a posting *needs* to match the profile's accepted range —
+# a title with none of these is never excluded on seniority.
+SENIOR_INDICATORS = [
+    'senior', 'sr.', 'sr ', 'staff', 'principal',
+    'lead', 'director', 'manager', 'head of',
+]
+
+# How each level a profile can ask for actually appears in job ads. The
+# profile stores levels ("new grad"); postings phrase them a dozen ways
+# ("recent graduate", "0-2 years", "University Graduate"), so the profile
+# field alone would match far less than it should.
+SENIORITY_SYNONYMS = {
+    "new grad": ["new grad", "new graduate", "recent graduate",
+                 "university graduate", "early career", "campus"],
+    "entry level": ["entry level", "entry-level", "associate",
+                    "0-2 years", "0-1 years", "1-2 years"],
+    "junior": ["junior", "jr.", "jr "],
+    "mid": ["mid-level", "mid level", "2-4 years", "3-5 years",
+            "engineer ii", "engineer iii"],
+    "senior": ["senior", "sr.", "sr ", "5+ years", "engineer iv"],
+    "staff": ["staff", "principal", "8+ years", "10+ years"],
+    "lead": ["lead", "manager", "director", "head of"],
+}
+
+
+def accepted_seniority_terms(levels) -> list:
+    """
+    Expand a profile's seniority levels into the phrasings ads actually use.
+
+    This replaces a hardcoded entry-level list. `job_preferences.seniority`
+    has existed on every profile since the schema was written and was read by
+    nothing but a print statement — the same dead-field shape as
+    `rarely_include` (R31). Reading it is what lets a mid-level or senior user
+    see jobs at all, rather than having their whole range excluded by a
+    constant written for one new grad.
+
+    An unknown level falls back to matching itself, so a profile can name a
+    level this map has never heard of and still work.
+    """
+    terms = []
+    for level in levels or []:
+        key = (level or "").strip().lower()
+        if not key:
+            continue
+        # The level's own name always counts. An ad that literally says
+        # "mid" should match the "mid" level, and only the paraphrases are
+        # listed in the map.
+        terms.append(key)
+        terms.extend(SENIORITY_SYNONYMS.get(key, []))
+    return sorted(set(terms))
+
+
 def evaluate(job, profile) -> FilterDecision:
     """
     Evaluate a job against a user profile.
@@ -76,30 +129,24 @@ def evaluate(job, profile) -> FilterDecision:
             decision.reason = f"Excluded keyword: {keyword}"
             return decision
 
-    senior_indicators = [
-        'senior', 'sr.', 'sr ', 'staff', 'principal',
-        'lead', 'director', 'manager', 'head of',
-    ]
-    entry_indicators = [
-        'new grad', 'entry level', 'junior', 'early career',
-        'associate', '0-2 years', '0-1 years', 'recent graduate',
-        'new graduate',
-    ]
+    has_senior = any(ind in text for ind in SENIOR_INDICATORS)
+    accepted = accepted_seniority_terms(prefs.seniority)
+    has_accepted = any(term in text for term in accepted)
 
-    has_senior = any(ind in text for ind in senior_indicators)
-    has_entry = any(ind in text for ind in entry_indicators)
-
-    if has_senior and not has_entry:
+    if has_senior and not has_accepted:
         decision.exclude = True
-        decision.reason = "Seniority too high (senior/staff/principal without entry-level indicator)"
+        decision.reason = (
+            "Seniority above this profile's range "
+            f"({', '.join(prefs.seniority) or 'unset'})"
+        )
         return decision
 
-    if has_entry:
+    if has_accepted:
         decision.seniority_score = 2
     elif not has_senior:
         decision.seniority_score = 1  # Unknown seniority — acceptable
     else:
-        decision.seniority_score = 0  # Has senior indicator but also entry — borderline
+        decision.seniority_score = 0  # Senior wording, but within range
 
     # -----------------------------------------------------------------------
     # 2. Role relevance scoring

@@ -28,6 +28,8 @@ from tools.profile import load_profile, UserProfile
 from tools.search import (
     JobListing,
     search_github_newgrad,
+    search_ats,
+    harvest_slugs,
     search_serper,
     search_adzuna,
     search_mock,
@@ -110,7 +112,9 @@ class DiscoveryAgent:
                 logger.info(f"✅ Reached pool target of {DISCOVERY_POOL_TARGET} candidates")
                 break
 
-            if source == "github_newgrad":
+            if source == "ats":
+                self._search_ats()
+            elif source == "github_newgrad":
                 self._search_github()
             elif source == "serper":
                 self._search_serper()
@@ -128,12 +132,44 @@ class DiscoveryAgent:
         # Final profile filtering and ranking
         filtered_jobs = self._filter_by_profile(new_jobs)
         
+        # Any job from any source whose apply URL lands on a known ATS
+        # reveals that company's slug, and from then on its entire board
+        # is reachable without a key. Cheap, and it compounds every run.
+        try:
+            harvest_slugs([job.apply_url for job in self.all_jobs])
+        except Exception as e:
+            logger.debug(f"Slug harvest skipped: {e}")
+
         # Persist updated seen URLs
         job_cache.save()
 
         logger.info(f"✅ Discovery complete: {len(filtered_jobs)} jobs after filtering")
         return filtered_jobs[:max_jobs]
     
+    def _search_ats(self) -> None:
+        """
+        Public ATS boards — no API key, every level, every department.
+
+        The only keyless source that is not new-grad-only. Company boards
+        carry the whole company, so `roles` does the narrowing that a search
+        query does for Serper; without it the pool fills with whatever sorts
+        first alphabetically, which in practice is account executives.
+
+        These listings arrive with `full_jd` already populated, so Enrichment
+        has nothing to scrape for them.
+        """
+        logger.info("Searching public ATS boards (no key needed)...")
+
+        try:
+            jobs = search_ats(
+                max_results=200,
+                roles=self.profile.job_preferences.target_roles,
+            )
+            added = self._deduplicate_and_add(jobs)
+            logger.info(f"   Added {added} new jobs from ATS boards")
+        except Exception as e:
+            logger.error(f"ATS search failed: {e}")
+
     def _search_github(self) -> None:
         """Search GitHub curated new grad lists."""
         logger.info("🐙 Searching GitHub new grad repos...")

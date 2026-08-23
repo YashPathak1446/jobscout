@@ -421,7 +421,14 @@ So: a store carrying score, status, location, apply URL, generated resume
 paths and which run produced the record — reusing `job_cache`'s dedup logic
 rather than its retention policy.
 
-## 13. Discovery beyond new grad
+## 13. Discovery beyond new grad — DONE (2026-08-23)
+
+**Done — see R34.** A keyless ATS source plus a profile-driven seniority gate.
+86 verified companies, ~11,600 open roles, no API key. The original entry
+follows; its guess that this was "smaller than it looks" was right about the
+query builder and wrong about where the real block was.
+
+### Original
 
 Smaller than it looks. `build_serper_query(role, seniority, site)` is already
 parameterised and the caller simply passes `"new grad"`; Adzuna is generic
@@ -2622,6 +2629,78 @@ plainly what was chosen and what it costs in quality, with a settings screen to
 override. Not silent, because quality differs materially between the rungs; not
 a mandatory choice screen, because most people do not yet know enough to
 answer it.
+
+---
+
+## R34. Keyless discovery at any level
+
+**Decision:** (August 2026) `tools/search/ats_search.py` reads public ATS
+boards, and the seniority gate reads the profile instead of a constant.
+
+**The gap.** Every source was narrow or keyed. `github_newgrad` needs no key
+but is new-grad-only by construction — those curated repos have no general
+equivalent. Serper and Adzuna reach any level and cost a key. So there was no
+way to find a mid-level backend role without paying for search, which is
+awkward for a project whose whole distribution plan is "costs the maintainer
+nothing".
+
+**Greenhouse, Lever and Ashby serve their customers' boards as public JSON.**
+One request returns Stripe's 578 open roles across every department and level.
+Seniority stops being a property of the source and becomes a filter applied
+afterwards, which is the entire trick.
+
+Two gains beyond being free:
+
+- **The JD arrives with the job.** Greenhouse honours `?content=true` and
+  Ashby returns `descriptionPlain`, so ATS listings skip Enrichment entirely —
+  the slowest and most breakable stage. Measured: 4,900-character descriptions
+  inline, in the same call.
+- **First-party data.** No markdown tables, no continuation glyphs (R13), no
+  redirect shims. The existing cache is 840 URLs and every one is a
+  `jobright.ai` redirect.
+
+**The seed list is verified, not plausible.** None of these APIs can enumerate
+companies, so slugs must be known. 145 candidates were probed live; **86
+returned jobs and 59 returned nothing** and were dropped. Every Lever slug in
+the first draft was dead — the API was fine, the guesses were not. Shipping
+the unverified list would have produced a source that silently found less than
+it should, which is this project's recurring failure shape. `harvest_slugs()`
+grows the list from any apply URL landing on a known ATS host, so it compounds.
+
+**Filtering happens before the cap, and that is not a detail.** The first
+working version returned Stripe's alphabetically-first roles: five account
+executives. A company board is the whole company, so `roles` must narrow
+before `max_results` truncates. Matching uses lookarounds rather than a word
+boundary — `-` is a word boundary, which would let "Stack Engineer" match
+"Full-Stack Engineer" while the full phrase failed.
+
+**Then the source worked and nothing came out.** 80 of 120 found roles were
+senior or staff, and `job_filter` excluded every one: *"Seniority too high
+(senior/staff/principal without entry-level indicator)"* — a constant written
+for one new grad, applied to everybody.
+
+`job_preferences.seniority` had been on every profile since the schema was
+written, holding `["new grad", "entry level", "junior"]`, and **was read by
+nothing but a print statement.** The same dead-field shape as `rarely_include`
+(R31), found the same way: by needing it. The gate now expands the profile's
+levels through a synonym map, because profiles store levels ("new grad") and
+ads phrase them a dozen ways ("recent graduate", "0-2 years", "University
+Graduate").
+
+**Measured, over 150 live ATS listings:**
+
+| profile | kept | senior/staff titles |
+|---|---|---|
+| new grad, before the change | 42 | 0 |
+| new grad, after | **42 (identical set)** | 0 |
+| `seniority: [mid, senior, staff]` | 126 | 82 |
+
+Byte-identical for the existing profile, and a senior user now sees senior
+roles. 34 new tests.
+
+**What this does not solve:** the job cache dedups by URL with a 7-day
+expiry, so a second run over the same boards returns almost nothing. That is
+correct for a run log and wrong for the job board R33 chose — see item 12.
 
 ---
 
