@@ -77,18 +77,30 @@ class TestAppIsAViewLayer(unittest.TestCase):
             update_profile_fields,
         )
 
-    def test_no_scoring_or_ranking_happens_in_the_ui(self):
+    def test_no_scoring_logic_in_the_ui(self):
         """
-        A blunt check for the failure mode R25 names: business logic creeping
-        into callbacks. `sorted(...)` over results, a comparison against a
-        threshold, or arithmetic on a score would all show up as these names.
+        The failure mode R25 names: business logic creeping into callbacks.
+
+        Checked against *identifiers*, not raw text. An earlier version grepped
+        the source and failed on the word "embedding" inside a comment
+        explaining why a replay is cheap — which is documentation doing its
+        job, not logic leaking. A test that punishes explanation trains you to
+        delete explanation.
         """
-        source = APP.read_text(encoding="utf-8")
-        for banned in ("scoring_threshold", "composite", "embedding", "_composite_score"):
-            self.assertNotIn(
-                banned, source,
-                f"'{banned}' suggests scoring logic has moved into the view layer",
-            )
+        names = set()
+        for node in ast.walk(self.tree):
+            if isinstance(node, ast.Name):
+                names.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                names.add(node.attr)
+
+        banned = {"scoring_threshold", "_composite_score", "_keyword_match_score",
+                  "score_breakdown", "conditional_hits", "select_components"}
+        leaked = sorted(banned & names)
+        self.assertEqual(
+            leaked, [],
+            f"scoring internals referenced in the view layer: {leaked}",
+        )
 
 
 if __name__ == "__main__":

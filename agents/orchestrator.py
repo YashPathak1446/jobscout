@@ -69,6 +69,53 @@ def _console_print(*args, **kwargs) -> None:
         print(*cleaned, **kwargs)
 
 
+def previous_runs(output_dir: str = "outputs", limit: int = 10) -> list:
+    """
+    Past runs, newest first, as {date, path, jobs, resumes}.
+
+    Generated resumes live on disk long after the session that made them, but
+    a Streamlit `session_state` does not survive a browser reload — so a user
+    who closed the tab lost every download link to files that were still
+    sitting in `outputs/`. This lets the UI find them again.
+
+    Runs that cannot be read are skipped rather than raised on: a half-written
+    state file from an interrupted run should cost that one row, not the
+    screen.
+    """
+    import json as _json
+
+    base = Path(output_dir)
+    if not base.is_dir():
+        return []
+
+    runs = []
+    for directory in sorted(base.iterdir(), reverse=True):
+        state_file = directory / "state.json"
+        if not directory.is_dir() or not state_file.is_file():
+            continue
+        try:
+            state = _json.loads(state_file.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+
+        runs.append({
+            "date": directory.name,
+            "path": str(directory),
+            "jobs": len(state.get("analysis_results") or []),
+            "resumes": len(state.get("generation_results") or []),
+        })
+        if len(runs) >= limit:
+            break
+
+    return runs
+
+
+def load_run(path: str) -> dict:
+    """The saved state of one past run, in the shape `run()` returns."""
+    import json as _json
+    return _json.loads((Path(path) / "state.json").read_text(encoding="utf-8"))
+
+
 def pdflatex_available() -> bool:
     """
     Is a LaTeX engine installed? R20's results screen branches on this.
@@ -281,6 +328,18 @@ class JobScoutOrchestrator:
             self._save_state()
             raise
     
+    @property
+    def enriched_jobs_file(self) -> str:
+        """
+        Where this run wrote its enriched jobs.
+
+        A caller that stopped at a checkpoint needs this to resume without
+        re-scraping: pass it back as `input_file` and Discovery and Enrichment
+        are skipped. Exposed as a property so the UI does not have to know the
+        orchestrator's directory layout (R25).
+        """
+        return str(self.output_path / "enriched_jobs.json")
+
     # =====================================================================
     # PROGRESS AND CHECKPOINTS
     # =====================================================================

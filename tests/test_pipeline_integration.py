@@ -103,5 +103,57 @@ class TestPipelineDrivenLikeTheUI(unittest.TestCase):
                 self.assertTrue(Path(path).exists(), f"missing generated file: {path}")
 
 
+@unittest.skipUnless(FIXTURE.exists(), f"needs {PROFILE} profile; skipped on a clean clone")
+class TestReviewBeforeGenerating(unittest.TestCase):
+    """
+    The two-phase run behind the UI's "show me the jobs first" toggle (R32).
+
+    Phase one declines the checkpoint, which stops the pipeline after scoring.
+    Phase two replays from the enriched jobs phase one wrote, so Discovery and
+    Enrichment do not run twice. If `enriched_jobs_file` ever stops pointing at
+    a real file, the second half silently finds nothing.
+    """
+
+    def setUp(self):
+        self.output_dir = tempfile.mkdtemp()
+        logging.disable(logging.CRITICAL)
+
+    def tearDown(self):
+        logging.disable(logging.NOTSET)
+        shutil.rmtree(self.output_dir, ignore_errors=True)
+
+    def _orchestrator(self, **kwargs):
+        return JobScoutOrchestrator(
+            profile_name=PROFILE, mock_mode=True, max_resumes=1,
+            generate_pdf=False, output_dir=self.output_dir, **kwargs,
+        )
+
+    def test_declining_stops_before_generation_then_resuming_produces_resumes(self):
+        first = self._orchestrator(checkpoint=True)
+        # Decline only the checkpoint after scoring; declining every stage
+        # would halt after Discovery with nothing scored.
+        paused = first.run(
+            max_jobs=3, on_checkpoint=lambda stage, items: stage != "analysis")
+
+        self.assertTrue(paused.get("analysis_results"), "scoring should have happened")
+        self.assertFalse(paused.get("generation_results"),
+                         "declining must stop before anything is written")
+
+        enriched = Path(first.enriched_jobs_file)
+        self.assertTrue(enriched.is_file(),
+                        "the second phase resumes from this file")
+
+        second = self._orchestrator(checkpoint=False, input_file=str(enriched))
+        finished = second.run(max_jobs=0, on_checkpoint=lambda stage, items: True)
+
+        self.assertTrue(finished.get("generation_results"),
+                        "resuming should produce resumes")
+
+    def test_accepting_runs_straight_through(self):
+        orchestrator = self._orchestrator(checkpoint=True)
+        state = orchestrator.run(max_jobs=3, on_checkpoint=lambda stage, items: True)
+        self.assertTrue(state.get("generation_results"))
+
+
 if __name__ == "__main__":
     unittest.main()

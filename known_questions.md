@@ -276,15 +276,11 @@ end against a live API run** — the day's free-tier Gemini quota was spent on
 the R21/R23/R27 measurements, so the one path still unexercised is a real
 generation run driven from the UI rather than the CLI.
 
-Known gaps, none blocking:
+**All three known gaps are now closed (R32):** previous runs, review before
+generating, and a tuning screen for importance tiers and JD triggers.
 
-- Results live in `session_state`, so closing the tab loses the download
-  links even though the files are still in `outputs/`. A "previous runs"
-  screen would fix it.
-- Checkpoints are auto-answered `True`. The profile toggle
-  `checkpoint_after_scoring` therefore has no effect in the UI; exposing
-  "review jobs before generating" as a real screen is a later change.
-- No importance editor, deliberately — R15 derives defaults.
+What is still missing is distribution — nothing packages this, so the audience
+is people willing to clone a repo and edit a `.env`.
 
 The original entry follows.
 
@@ -2407,6 +2403,57 @@ from the profiles on disk anyway, so it cannot read as a live setting.
 R30 — "only show tutor.com for education-focused roles" — is gone with it. It
 never fired, so nothing changes behaviourally. What actually keeps tutor.com
 down is its `low` importance tier, which the same restore brought back.
+
+---
+
+## R32. The UI grew the three things that made it a demo
+
+**Decision:** (August 2026) Previous runs, a review-before-generating step,
+and a component tuning screen. `app.py` is still a view layer — the boundary
+is now enforced by `test_ui_contract`, not just asserted in R25.
+
+**Previous runs.** Resumes outlive the session that made them; Streamlit's
+`session_state` does not. Closing the tab lost every download link to files
+still sitting in `outputs/`. `previous_runs()` and `load_run()` on the
+orchestrator list past runs and reload one into the results view. Runs whose
+state file cannot be read are skipped rather than raised on: a half-written
+file from an interrupted run should cost one row, not the screen.
+
+**Review before generating.** Generation is the expensive stage — one or two
+Gemini calls per resume — so it is the one worth pausing before. Implemented
+as two runs rather than a blocking callback, because a callback that waits
+cannot work inside Streamlit's rerun model. Phase one declines the checkpoint
+after scoring and returns its state; phase two replays from the enriched jobs
+phase one already wrote, exposed as `enriched_jobs_file` so the UI never
+builds a path. R28's cache makes re-scoring free, which is what makes running
+twice reasonable at all.
+
+**The integration test earned its place immediately.** `checkpoint=True` arms
+a checkpoint at *every* stage, and the first version declined all of them —
+so the run halted after Discovery, before anything was scored, and the review
+screen would have shown zero jobs. The callback now declines only the
+`analysis` stage. That bug is invisible by reading and obvious by running.
+
+**Component tuning.** The screen R21 has been asking for since it was written.
+Derivation reaches a component's tech stack — `ionic`, `capacitor` — but never
+the domain words a posting uses, `android` and `mobile app`, because the
+resume does not contain them. No amount of cleverness closes that from the
+resume alone; a person closes it in ten seconds. Each component gets its
+importance tier and its trigger list, editable.
+
+`read_component_rules()` and `write_component_rules()` sit in
+`init_profile.py`, so the UI never learns that a profile is JSON on disk.
+Writing touches only the two maps the screen owns, normalises and deduplicates
+terms, preserves existing rule descriptions, and **removes a rule whose list is
+emptied rather than storing an empty one** — an empty rule cannot fire and
+looks identical to one that never matched, which is the silence R17 removed.
+
+Verified end to end through the browser: `CLINICAL TRIALS` typed into the
+editor arrived as `clinical trials`, the other eleven triggers were preserved
+and sorted, the description survived, and `always_include`, `high_priority`
+and every other component were untouched.
+
+21 new tests.
 
 ---
 

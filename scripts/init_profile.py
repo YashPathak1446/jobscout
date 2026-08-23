@@ -188,6 +188,102 @@ def update_profile_fields(name: str, updates: dict) -> Path:
     return path
 
 
+def read_component_rules(name: str) -> dict:
+    """
+    Every component with its importance tier and JD triggers, for an editor.
+
+    Derivation reaches a component's *tech stack* — `ionic`, `capacitor` — but
+    not the *domain* words a posting actually uses, like `android` or `mobile
+    app` (R21). That gap is not closable from the resume alone, because the
+    resume never contains those words. A person can close it in ten seconds
+    per component, which is why this exists.
+
+    Returns experiences and projects in resume order, each entry carrying the
+    id, a human label, the effective tier and the current trigger list.
+    """
+    path = ROOT / "user_profiles" / f"{name}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"No profile named '{name}'.")
+
+    profile = json.loads(path.read_text(encoding="utf-8"))
+    rp = profile["resume_preferences"]
+
+    parser = ResumeParser(str(ROOT / rp["master_resume_path"]), skip_embeddings=True)
+    resume = parser.parsed_resume
+
+    from tools.profile.derivation import merge_importance
+
+    def collect(section, components, label_of):
+        tiers = merge_importance(
+            rp["component_importance"].get(section, {}),
+            parser.derived_importance.get(section, {}),
+        )
+        rules = rp[section].get("conditional_inclusion", {})
+        return [
+            {
+                "id": c.id,
+                "label": label_of(c),
+                "tier": tiers.get(c.id, "medium"),
+                "triggers": list(rules.get(c.id, {}).get("include_if_jd_contains", [])),
+            }
+            for c in components
+        ]
+
+    return {
+        "experiences": collect(
+            "experiences", resume.experiences,
+            lambda c: f"{c.title} — {c.company}",
+        ),
+        "projects": collect("projects", resume.projects, lambda c: c.name),
+    }
+
+
+def write_component_rules(name: str, importance: dict, triggers: dict) -> Path:
+    """
+    Save edited tiers and trigger lists back to the profile.
+
+    Only the two maps an editor owns are touched; everything else in the
+    profile is left exactly as it was. A component whose trigger list is
+    emptied has its rule removed rather than stored empty — an empty rule
+    cannot fire and is indistinguishable from one that never matched, which is
+    the silence R17 set out to remove.
+    """
+    path = ROOT / "user_profiles" / f"{name}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"No profile named '{name}'.")
+
+    profile = json.loads(path.read_text(encoding="utf-8"))
+    rp = profile["resume_preferences"]
+
+    # Read the component list once. Resolving section membership per component
+    # would re-parse the resume for every id on the screen.
+    known = read_component_rules(name)
+
+    for section in ("experiences", "projects"):
+        ids = {c["id"] for c in known[section]}
+
+        tiers = {k: v for k, v in (importance or {}).items() if k in ids}
+        if tiers:
+            rp["component_importance"].setdefault(section, {}).update(tiers)
+
+        rules = rp[section].setdefault("conditional_inclusion", {})
+        for comp_id, terms in (triggers or {}).items():
+            if comp_id not in ids:
+                continue
+            cleaned = [t.strip().lower() for t in terms if t and t.strip()]
+            if cleaned:
+                existing = rules.get(comp_id, {})
+                rules[comp_id] = {
+                    "include_if_jd_contains": sorted(set(cleaned)),
+                    "description": existing.get("description", "Edited by hand"),
+                }
+            else:
+                rules.pop(comp_id, None)
+
+    path.write_text(json.dumps(profile, indent=2) + chr(10), encoding="utf-8")
+    return path
+
+
 def main():
     ap = argparse.ArgumentParser(description="Bootstrap a profile from a resume.")
     ap.add_argument("--resume", required=True, help="Path to the master .tex resume")
