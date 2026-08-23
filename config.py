@@ -45,6 +45,14 @@ EMBEDDING_MODEL = "gemini-embedding-001"
 LLM_CACHE_ENABLED = True
 LLM_CACHE_DIR = ".cache/llm"
 
+# Embedding vector cache. embedding_cache.py covers the resume's own
+# components; this covers everything else that gets embedded, which in
+# practice means job descriptions. Replaying the frozen baseline used to cost
+# ~20 embedding calls every time, so the instrument this project measures
+# every scoring change with was also the thing exhausting its quota.
+EMBEDDING_CACHE_ENABLED = True
+EMBEDDING_CACHE_DIR = ".cache/embeddings"
+
 
 # --- Error classification ---------------------------------------------------
 

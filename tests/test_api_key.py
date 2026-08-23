@@ -95,13 +95,21 @@ class TestKeyIsThreadedNotGlobal(unittest.TestCase):
                     embeddings = [type("V", (), {"values": [0.1, 0.2]})()]
                 return R()
 
-        original = genai.Client
+        # The embedding cache short-circuits before the client is built, so
+        # without disabling it this test either reads a real vector or writes
+        # its 2-element stub into the real cache directory. It did the latter
+        # once; hence also the dimension guard in TextEmbeddingCache.
+        from tools.cache.text_embedding_cache import TextEmbeddingCache
+
+        original_client, original_cache = genai.Client, scorer._EMBEDDING_CACHE
         genai.Client = FakeClient
+        scorer._EMBEDDING_CACHE = TextEmbeddingCache(cache_dir="", enabled=False)
         try:
             with _EnvKey("env-key-must-not-win"):
                 vec = scorer._get_embedding("text", api_key="explicit-key")
         finally:
-            genai.Client = original
+            genai.Client = original_client
+            scorer._EMBEDDING_CACHE = original_cache
 
         self.assertEqual(seen["key"], "explicit-key")
         self.assertEqual(vec, [0.1, 0.2])

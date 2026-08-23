@@ -2240,6 +2240,61 @@ still 7.
 
 ---
 
+## R28. The measuring instrument was also what exhausted the quota
+
+**Decision:** (August 2026) `TextEmbeddingCache` — content-addressed, keyed on
+`(model, task_type, text)` — wired into `_get_embedding()`, the single point
+every embedding in the system passes through.
+
+**The problem was structural, not incidental.** `embedding_cache.py` caches
+the resume's own component vectors. Nothing cached the other side, so every
+replay of the frozen baseline re-embedded all 20 job descriptions. That
+baseline is what R14, R15, R21, R23 and R27 all rest on, and reaching for it
+cost ~20 API calls each time. Five comparisons in one afternoon — an ordinary
+amount for a day spent measuring — exhausted the free-tier daily quota. A
+method that says "measure before and after every change" cannot be built on an
+instrument that gets more expensive the more you use it.
+
+Measured directly: 2.30s uncached, 0.008s cached, identical vectors.
+
+**All three key components are load-bearing.** `model`, because vectors from
+different models are not comparable — R11's exact lesson, where the resume
+cache shipped without it. `task_type`, because `RETRIEVAL_QUERY` and
+`RETRIEVAL_DOCUMENT` produce genuinely different vectors for identical text.
+And `text` exactly as sent to the API, truncation included: keying on the
+untruncated string would give two inputs that truncate identically two entries
+for one identical call.
+
+**Then the test suite caught the change breaking a test, and the breakage was
+worse than the failure.** R22's injection test replaces `genai.Client` with a
+double returning `[0.1, 0.2]`. With a cache in front of the client, that test
+stopped reaching the client at all — and, before failing, **wrote its 2-element
+stub into the live cache directory under the real model name.** A subsequent
+real run embedding the string `"text"` would have received a 2-dimensional
+vector and produced cosine similarities from it without complaint.
+
+That is this project's recurring bug shape once more: not an error, a
+plausible number. So the fix is not only "isolate the test":
+
+- The test now points the module's cache at a disabled instance and restores
+  it afterwards.
+- `TextEmbeddingCache` takes an expected `dimensions` and **refuses to store,
+  and deletes on read, any vector of the wrong length.** Wired from
+  `EMBEDDING_DIMENSIONS`. A wrong-length vector is always a bug — a stubbed
+  double, a truncated write, a model change that slipped the key — and it is
+  precisely the kind that never announces itself.
+- Empty vectors are already refused, because `_get_embedding` returns `[]` on
+  API failure and caching that would turn one transient 429 into a permanent
+  wrong answer.
+
+**A latent bug fixed in passing:** `tools/cache/__init__.py` listed `JobCache`
+in `__all__` without importing it, so `from tools.cache import *` raised
+`AttributeError`. The package now exports what it advertises.
+
+16 new tests.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

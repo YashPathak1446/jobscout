@@ -50,6 +50,32 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
 # GEMINI EMBEDDINGS (Real)
 # =========================================================================
 
+_EMBEDDING_CACHE = None
+
+
+def _embedding_cache():
+    """
+    One cache per process, built on first use.
+
+    Lazy so that importing this module does not create a directory, which
+    matters for tests and for anyone importing the scorer to read a
+    dataclass.
+    """
+    global _EMBEDDING_CACHE
+
+    if _EMBEDDING_CACHE is None:
+        from config import EMBEDDING_CACHE_DIR, EMBEDDING_CACHE_ENABLED
+        from tools.cache.text_embedding_cache import TextEmbeddingCache
+
+        _EMBEDDING_CACHE = TextEmbeddingCache(
+            cache_dir=EMBEDDING_CACHE_DIR,
+            enabled=EMBEDDING_CACHE_ENABLED,
+            dimensions=EMBEDDING_DIMENSIONS,
+        )
+
+    return _EMBEDDING_CACHE
+
+
 def _get_embedding(
     text: str,
     task_type: str = "RETRIEVAL_DOCUMENT",
@@ -64,6 +90,16 @@ def _get_embedding(
                    RETRIEVAL_QUERY for search queries.
         api_key: Explicit key; falls back to the environment when None.
     """
+    # The cache key is the string actually sent to the API, truncation
+    # included. Keying on the untruncated text would give two inputs that
+    # truncate identically separate entries for one identical API call.
+    payload = text[:8000]
+    cache = _embedding_cache()
+
+    cached = cache.get(payload, EMBEDDING_MODEL, task_type)
+    if cached is not None:
+        return cached
+
     try:
         from google import genai
 
@@ -73,14 +109,16 @@ def _get_embedding(
 
         result = client.models.embed_content(
             model=EMBEDDING_MODEL,
-            contents=text[:8000],  # Safety truncation
+            contents=payload,
             config={
                 "task_type": task_type,
                 "output_dimensionality": EMBEDDING_DIMENSIONS,
             },
         )
 
-        return result.embeddings[0].values
+        vector = result.embeddings[0].values
+        cache.set(payload, EMBEDDING_MODEL, task_type, vector)
+        return vector
 
     except Exception as e:
         logger.error(f"Embedding API error: {e}")
