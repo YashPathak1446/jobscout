@@ -14,8 +14,10 @@ over a real socket through the real code path — it just does not need a 5 GB
 download or an internet connection, and it runs in CI forever.
 
 What it deliberately does **not** prove is bullet *quality* from a small local
-model. Only a real Ollama answers that, and it is the reason the README still
-calls this rung unmeasured.
+model — a fake server returns what the test told it to. Only a real Ollama
+answers that, and when one finally ran it produced two things this file could
+never have caught: a wrapper nobody predicted, and fabricated resume content.
+See R44, and read it before loosening anything here.
 """
 
 import json
@@ -255,3 +257,47 @@ class TestTheWholeRungEndToEnd(_ServedTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWrapperStripping(unittest.TestCase):
+    """
+    R44: what a real model actually wrapped its JSON in.
+
+    R43 tested this against a fake server, and a fake server returns exactly
+    what the test told it to — so it only ever proved the stripper handles the
+    wrapper the test already knew about. The first real reply from
+    llama3.1:8b used a different one.
+    """
+
+    def _parse(self, raw):
+        return json.loads(llm_backends._strip_code_fence(raw))
+
+    def test_a_triple_backtick_fence_is_stripped(self):
+        self.assertEqual(self._parse('```json\n{"n": 1}\n```'), {"n": 1})
+
+    def test_a_single_backtick_span_is_stripped(self):
+        """The real failure: every Ollama call died on this."""
+        self.assertEqual(self._parse('`{"n": 1}`'), {"n": 1})
+
+    def test_a_double_backtick_span_is_stripped(self):
+        self.assertEqual(self._parse('``{"n": 1}``'), {"n": 1})
+
+    def test_surrounding_whitespace_does_not_defeat_it(self):
+        self.assertEqual(self._parse('  `{"n": 1}`  '), {"n": 1})
+
+    def test_bare_json_is_left_alone(self):
+        self.assertEqual(self._parse('{"n": 1}'), {"n": 1})
+
+    def test_a_prose_preamble_is_deliberately_not_unwrapped(self):
+        """
+        This one must keep failing until there is a fabrication check.
+
+        llama3.1:8b prefixes "Here is the rewritten JSON output:" — and the
+        JSON behind that preamble invented metrics, a date and technologies
+        that were never on the resume. Refusing to parse it is what sends
+        generation to the verbatim floor, which uses the user's real bullets.
+        If this test ever fails, read R44 before "fixing" it.
+        """
+        raw = 'Here is the rewritten JSON output:\n\n```\n{"n": 1}\n```'
+        with self.assertRaises(ValueError):
+            self._parse(raw)

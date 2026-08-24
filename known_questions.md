@@ -323,9 +323,13 @@ release; a doctor's does not. It also gives item 7's detection a home.
 
 ## Not scheduled
 
-**Q6** — long master bullets. Working but fragile, no recent failure.
-Building a metric-preservation checker before seeing a failure on
-gemini-3.5-flash is the speculative work this doc otherwise avoids.
+**Q6** — long master bullets. The deferral premise has changed: R44 saw a
+model invent metrics, a date and technologies outright, so a
+content-preservation checker is no longer speculative. Half the instrument
+already exists — `_validate_metric_preservation` is written and has never been
+called, because no call site passes `master_resume_text` — and it checks the
+wrong direction: it finds master metrics missing from the output, not invented
+metrics present in it.
 
 ---
 
@@ -3514,6 +3518,110 @@ being precise about, because "we tested Ollama" would be exactly the kind of
 claim R42 was written about.
 
 16 new tests. 333 pass.
+
+---
+
+## R44. A real model ran, and invented a job
+
+**Measured:** (August 2026) Ollama installed, `llama3.1:8b` pulled, and the
+generation pipeline replayed over `outputs/2026-08-23/enriched_jobs.json` —
+the same 20 JDs, the same resume, the same component selection as the Gemini
+run of that date. Only the rewriting backend differs.
+
+| | Gemini | llama3.1:8b |
+|---|---|---|
+| valid | **3** | **0** |
+| needs_review | 0 | 3 |
+| bullets left unmodified | — | 11 of 13 |
+
+**Warm latency was never the problem.** 2–7 s per call on an RTX 5080; the
+first call's 43 s is model load. Speed is fine. Everything below is about
+what the model wrote.
+
+### Every rewrite failed to parse, twice, for different reasons
+
+The first failure was the wrapper. `_strip_code_fence` handled ```` ``` ````
+fences and only those, which was a guess about *which* markup a small model
+would use, and the guess was wrong: the first real reply came back as
+`` `{"n": 1}` `` — a single-backtick inline span. Fixed, and every trivial
+call worked afterwards.
+
+The second failure survived the fix. On the real 14,600-character tailoring
+prompt the reply opens with prose:
+
+    Here is the rewritten JSON output:
+
+    ```
+    { "experiences": [ ... ] }
+
+Pulling JSON out of that is four lines, and **those four lines are not being
+written.** See below.
+
+### The reply behind the prose was fabricated
+
+This is the finding. The model did not paraphrase the resume badly; it wrote a
+different resume:
+
+| | Master resume | llama3.1:8b |
+|---|---|---|
+| dates | June 2025 – Oct. 2025 | "Summer 2022" |
+| bullet 1 | Async serverless REST API, dual-Lambda fan-out, eliminated a 25-second downstream read timeout | "scalable web application using Python, Flask, and MySQL, resulting in a **30% reduction in development time**" |
+| bullet 2 | Terraform (HCL) — API Gateway, Lambda, IAM least-privilege, CloudWatch | "cloud-based infrastructure using AWS EC2, S3, and Lambda, achieving a **25% increase in application performance**" |
+
+Invented metrics, an invented date, and technologies that appear nowhere in
+the resume. Nothing of the original survives. A resume is a factual claim about
+a person, so this is not a quality gradient — it is the pipeline producing a
+document its owner would have to defend in an interview.
+
+**The parse failure is the only reason none of it shipped.** Generation caught
+the error, fell to `_verbatim_tailor`, and wrote the user's real bullets. The
+strictness that looked like a bug was load-bearing.
+
+So `_strip_code_fence` now carries a comment saying exactly that, and a test
+asserts the prose case still raises. Loosening it without a content check
+first would convert a safe failure into a silent one — which is the whole
+subject of A4.
+
+### The instrument for this exists and was never plugged in
+
+`_validate_metric_preservation` has been in `validation.py` all along. All
+three call sites invoke `validate_resume_output(tailored,
+bullet_budgets=...)` without `master_resume_text`, and the check is guarded on
+that argument being present — so it has never once run.
+
+That is the third time: `rarely_include` computed and discarded (R31),
+`_unparsed` written and unreachable (R41), and now this. The pattern is a
+capability built for a consumer that did not exist yet, with nothing failing
+when the wiring was never made.
+
+And wiring it is necessary but not sufficient. The check looks for master
+metrics **missing** from the output; it would pass a resume whose every number
+was invented, because it never asks where a number in the output came from.
+Catching this needs the opposite direction: a metric in the output that is not
+in the master is a fabrication.
+
+**Q6's premise has changed.** That entry deferred a metric-preservation checker
+as speculative — "building one before seeing a failure on gemini-3.5-flash is
+the speculative work this doc otherwise avoids." The failure has now been seen.
+Not on gemini-3.5-flash, on llama3.1:8b, which is a weaker claim than Q6 was
+waiting for — but the ladder means untrusted models are a supported
+configuration, so the checker is no longer speculative for the rung that needs
+it most.
+
+### What this changes
+
+- The README and the backend panel now say the rung was measured and did not
+  help, rather than that it was untested. "Unmeasured" was true this morning
+  and would be a softer claim than the evidence supports.
+- The rung stays. It fails safe, and it costs nothing to leave available for a
+  better local model — `choose_model` (R42) means anyone can point it at one.
+- Whether a larger local model behaves differently is unmeasured and worth
+  measuring before concluding anything about local inference in general. One
+  8B model is one data point.
+
+6 new tests. The measurement script is not committed: it pins config and
+replays a fixed input, which is a thing to re-run by hand, not a thing to keep
+green in CI.
 
 ---
 

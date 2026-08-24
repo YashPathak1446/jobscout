@@ -374,9 +374,9 @@ def _render_confirm():
 BACKEND_HEADLINES = {
     "gemini": "Bullets will be rewritten by Google Gemini.",
     "openai": "Bullets will be rewritten through your OpenAI-compatible key.",
-    "ollama": "Bullets will be rewritten locally by Ollama. Nothing leaves this "
-              "machine — and this rung has not been measured, so quality is "
-              "unproven rather than known.",
+    "ollama": "Ollama is running locally and nothing leaves this machine — but "
+              "on llama3.1:8b its rewrites were rejected and your own bullets "
+              "were used instead. Expect the same output as no model at all.",
     "none": "Jobs will be scored and the right components picked for each one, "
             "but your bullets will be used exactly as you wrote them.",
 }

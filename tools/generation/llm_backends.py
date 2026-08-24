@@ -235,19 +235,44 @@ def complete_json(prompt: str, gemini_key: str = None) -> dict:
 
 def _strip_code_fence(text: str) -> str:
     """
-    Unwrap ```json fences.
+    Unwrap a model's JSON out of whatever markup it decided to wrap it in.
 
-    Smaller models fence their output far more often than Gemini does, and an
-    unwrapped fence is the single most common reason a local model's reply
-    fails to parse. Cheap to handle, tedious to debug.
+    Smaller models mark up their output far more often than Gemini does, and
+    an unstripped wrapper is the single most common reason a local reply fails
+    to parse. This handled triple-backtick fences and only those, which was a
+    guess about *which* markup, and the guess was wrong: the first real reply
+    from llama3.1:8b came back as `{"n": 1}` — a single-backtick inline span.
+    Every call on the Ollama rung would have failed on it.
+
+    Worth recording how that was missed. R43 tested fence-stripping against a
+    fake server, and a fake server returns exactly what the test told it to —
+    so it proved the stripper handles the wrapper the test already knew about.
+    Only a real model volunteers a wrapper nobody predicted.
     """
-    if not text.startswith("```"):
-        return text
+    text = text.strip()
 
-    body = text.split("\n", 1)[1] if "\n" in text else ""
-    if body.rstrip().endswith("```"):
-        body = body.rstrip()[:-3]
-    return body.strip()
+    if text.startswith("```"):
+        body = text.split("\n", 1)[1] if "\n" in text else ""
+        if body.rstrip().endswith("```"):
+            body = body.rstrip()[:-3]
+        return body.strip()
+
+    # An inline code span: one or two backticks either side, no newline needed.
+    if text.startswith("`") and text.endswith("`") and len(text) > 1:
+        return text.strip("`").strip()
+
+    # DELIBERATELY NOT HANDLED: a reply that opens with prose, like
+    # "Here is the rewritten JSON output:\n\n```\n{...}". llama3.1:8b does
+    # exactly this, and pulling the JSON out of it is four lines.
+    #
+    # Do not add those four lines without reading R44 first. On that model the
+    # JSON inside the prose was *fabricated* — invented metrics, an invented
+    # date, technologies absent from the resume — and the parse failure is the
+    # only reason none of it reached a resume. Being stricter here is currently
+    # load-bearing: it fails to the verbatim floor, which uses the user's real
+    # bullets. Loosening it without a content-preservation check first would
+    # turn a safe failure into a silent one.
+    return text
 
 
 def env_openai_key() -> str:

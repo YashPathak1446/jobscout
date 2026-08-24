@@ -180,9 +180,16 @@ class TestThePanelDoesNotOverclaim(unittest.TestCase):
             + [c.value for c in app.caption]
         )
 
-    def test_the_ollama_rung_is_described_as_unmeasured(self):
-        text = self._panel_text("ollama")
-        self.assertIn("not been measured", text.lower().replace("’", "'"))
+    def test_the_ollama_rung_does_not_promise_rewriting_it_cannot_do(self):
+        """
+        Was "not been measured" until R44 measured it. On llama3.1:8b the
+        rewrites are rejected and the verbatim floor runs, so promising
+        tailored bullets here would be the overclaim A5 was about — just a
+        more specific one, now that there is evidence.
+        """
+        text = self._panel_text("ollama").lower()
+        self.assertIn("your own bullets", text)
+        self.assertIn("llama3.1:8b", text)
 
     def test_the_floor_still_says_how_to_move_up(self):
         text = self._panel_text("none")
