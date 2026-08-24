@@ -3399,6 +3399,82 @@ is a FastAPI concern rather than a Streamlit one.
 
 ---
 
+## R42. Three ways the system was quietly wrong
+
+**Decision:** (August 2026) Three small fixes with one shape in common: each
+kept working, produced wrong output, and said nothing. None was findable by
+reading the code — one needed a machine with the "wrong" model pulled, one
+needed two postings shown side by side, and one was a claim in the README that
+no measurement supported.
+
+### Detection and invocation disagreed about "available"
+
+`ollama_is_running` returned true when the server had *any* model pulled. The
+call then asked for `OLLAMA_MODEL`, hard-coded to `llama3.1`. Someone running
+Ollama with `mistral` was detected as having Ollama, told bullets would be
+rewritten locally, and then 404'd on a model that was never there — falling
+back to verbatim bullets without a word, because a failed rung and a chosen
+`none` are indistinguishable from outside.
+
+Detection already fetched the model list and threw it away, so the fix reads
+it: `ollama_models` returns the names, `choose_model` picks one, preferring the
+config's default and settling for whatever is there. Tags match loosely on
+purpose — `ollama pull llama3.1` stores `llama3.1:latest`, so a config naming
+the bare model would otherwise miss its own default.
+
+`choose_model` is split from the network call deliberately. The choosing is
+where the bug was and is the only half a test can reach without a server.
+
+### Two postings could share one resume file
+
+Resumes are named after the company and the first three words of the title.
+Affirm posts "Software Engineer I, Fullstack (Servicing International)" in
+Spain and in Poland; both produced the same filename, so the second overwrote
+the first and one posting's stored path pointed at a resume tailored to a
+different job description.
+
+The apply URL — already the job store's primary key — now contributes eight
+hex characters of SHA-256. Hashed rather than slugged because a URL is long
+and ugly, and *stable* rather than sequential, so a re-discovered posting
+overwrites its own resume instead of accumulating near-duplicates beside it.
+
+**Worth noting where this was found.** The generation loop had this bug from
+the day it was written, and every run log looked fine, because a run log shows
+one resume per row. The board shows both rows at once, and Streamlit refused
+to render two download buttons with the same key. A UI that puts two records
+side by side is a correctness test for whatever assumed they were distinct.
+
+### The README recommended what nobody had run
+
+R40 added a line calling a local Ollama "the free middle rung", and the backend
+panel told users to `ollama pull llama3.1`. Both advertise a path that has
+never completed a single call: detection is real, but `call_chat_json` has
+never spoken to a live Ollama, and the tests say so in as many words. The same
+adapter serves the `openai` rung, which has no key either — so two of the four
+rungs are structurally plausible and empirically untested.
+
+Both now say so. This is the smallest change here and the one most worth
+making: the rest of this document is careful to separate what was measured
+from what was assumed, and a README that quietly stopped doing that undoes the
+reason the document is trusted.
+
+The fix is honesty, not silence. The rung is still offered, still detected,
+still the right answer for someone with no key — it is simply labelled as
+unproven rather than described as if measurements existed behind it.
+
+### What these three share
+
+All three were introduced by someone (me, twice) doing something reasonable:
+assuming a configured default is present, naming a file after what a human
+would call it, recommending the option that helps users with no API key. The
+common failure is not carelessness, it is that **nothing in the system
+distinguishes "this worked" from "this fell back".** That is the same finding
+as R41's `.env` bug, and it is still open — see A4 in the current inventory.
+
+17 new tests, all offline.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

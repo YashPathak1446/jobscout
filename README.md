@@ -73,7 +73,10 @@ Free tier is sufficient for development.
 
 **Optional.** Discovery, scoring and component selection need no key at all;
 without one, bullets are used exactly as you wrote them rather than rewritten
-per posting. A local [Ollama](https://ollama.com) is the free middle rung.
+per posting. A local [Ollama](https://ollama.com) is the free middle rung —
+though note that rung is **untested**: the code path exists and its detection
+works, but no measurement in this project has been taken against a live
+Ollama. Gemini and the no-model floor are the two that have.
 
 ### 3. Set up your profile
 

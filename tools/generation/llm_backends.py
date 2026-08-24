@@ -50,21 +50,68 @@ DESCRIPTIONS = {
 }
 
 
-def ollama_is_running(base_url: str) -> bool:
+def ollama_models(base_url: str) -> list:
     """
-    Is there an Ollama serving models right now?
+    Every model this Ollama has actually pulled.
 
-    Asked rather than assumed, because Ollama being installed and Ollama
-    being *up* are different things, and the difference is a run that fails
-    halfway rather than one that picks another rung.
+    Asked rather than assumed, because Ollama being installed and Ollama being
+    *up* are different things, and the difference is a run that fails halfway
+    rather than one that picks another rung.
+
+    The list itself matters, not just its length — see `choose_model`.
     """
     try:
         request = urllib.request.Request(f"{base_url.rstrip('/')}/api/tags")
         with urllib.request.urlopen(request, timeout=3) as response:
             payload = json.loads(response.read().decode("utf-8"))
-        return bool(payload.get("models"))
     except Exception:
-        return False
+        return []
+
+    return [entry.get("name", "") for entry in (payload.get("models") or [])
+            if entry.get("name")]
+
+
+def ollama_is_running(base_url: str) -> bool:
+    """Is there an Ollama serving at least one model right now?"""
+    return bool(ollama_models(base_url))
+
+
+def choose_model(available, preferred: str = "") -> str:
+    """
+    Which of the pulled models to actually call.
+
+    Detection and invocation used to disagree about what "available" meant.
+    Detection returned true if *any* model was pulled; the call then asked for
+    `OLLAMA_MODEL`, hard-coded to one name. Someone running Ollama with
+    `mistral` was told bullets would be rewritten locally, and then the call
+    404'd on a model that was never there — falling back silently, because a
+    failed rung and a chosen `none` look identical from outside.
+
+    So the preference is a preference, not a requirement. Tags are matched
+    loosely on purpose: `ollama pull llama3.1` stores `llama3.1:latest`, and a
+    config naming the bare model should not miss its own default.
+
+    Kept separate from `ollama_models` so the choosing can be tested without a
+    server, which is the only half of this that tests can reach.
+    """
+    available = [name for name in (available or []) if name]
+    if not available:
+        return ""
+
+    if preferred:
+        if preferred in available:
+            return preferred
+        stem = preferred.split(":")[0]
+        for name in available:
+            if name.split(":")[0] == stem:
+                return name
+
+    return available[0]
+
+
+def resolve_ollama_model(base_url: str, preferred: str = "") -> str:
+    """The model to call on a live Ollama, or empty if it has none."""
+    return choose_model(ollama_models(base_url), preferred)
 
 
 def detect(gemini_key=None, openai_key=None, ollama_url=None) -> str:
@@ -169,8 +216,16 @@ def complete_json(prompt: str, gemini_key: str = None) -> dict:
         return None
 
     base_url = OLLAMA_BASE_URL if choice == "ollama" else OPENAI_BASE_URL
-    model = OLLAMA_MODEL if choice == "ollama" else OPENAI_MODEL
     api_key = None if choice == "ollama" else env_openai_key()
+    if choice == "ollama":
+        # Ask what this Ollama actually has rather than assuming the config's
+        # default is pulled. Empty means it has nothing to answer with.
+        model = resolve_ollama_model(OLLAMA_API_URL, OLLAMA_MODEL)
+        if not model:
+            logger.warning("Ollama is up but has no usable model pulled")
+            return None
+    else:
+        model = OPENAI_MODEL
     try:
         return call_chat_json(prompt, base_url, model, api_key)
     except Exception as exc:

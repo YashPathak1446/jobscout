@@ -374,7 +374,9 @@ def _render_confirm():
 BACKEND_HEADLINES = {
     "gemini": "Bullets will be rewritten by Google Gemini.",
     "openai": "Bullets will be rewritten through your OpenAI-compatible key.",
-    "ollama": "Bullets will be rewritten locally by Ollama. Nothing leaves this machine.",
+    "ollama": "Bullets will be rewritten locally by Ollama. Nothing leaves this "
+              "machine — and this rung has not been measured, so quality is "
+              "unproven rather than known.",
     "none": "Jobs will be scored and the right components picked for each one, "
             "but your bullets will be used exactly as you wrote them.",
 }
@@ -418,9 +420,11 @@ def _backend_panel():
         if chosen == "none":
             st.warning(headline, icon="✍️")
             st.caption(
-                "To get tailored bullets, add a Gemini key above, or install "
-                "**Ollama** and run `ollama pull llama3.1` for a free local "
-                "model that sends nothing anywhere."
+                "To get tailored bullets, add a Gemini key above, or run "
+                "**Ollama** locally with any model pulled — free, and nothing "
+                "leaves this machine. The Ollama path is not yet measured, so "
+                "expect rougher bullets than the numbers in this project's "
+                "notes."
             )
         else:
             st.success(headline, icon="✅")

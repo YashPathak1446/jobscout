@@ -11,6 +11,7 @@ Takes analysis results and generates tailored resumes:
 Location: jobscout_v3/agents/generation_agent.py
 """
 
+import hashlib
 import os
 import sys
 import logging
@@ -259,7 +260,8 @@ class GenerationAgent:
                 validation = validate_resume_output(tailored, bullet_budgets=bullet_budgets)
                 self._validate_selected_ids(tailored, budgeted_components, validation)
 
-                filename = self._generate_filename(company, job_title)
+                filename = self._generate_filename(
+                    company, job_title, job.get("apply_url", ""))
 
                 if validation.valid:
                     status = "valid"
@@ -1084,7 +1086,20 @@ Source bullets:
                 ollama_url=OLLAMA_API_URL,
             )
 
-        model = {"ollama": OLLAMA_MODEL, "openai": OPENAI_MODEL}.get(choice, "")
+        # Resolved once, here, rather than per job: it is a network call, and
+        # the answer cannot change mid-run in any way worth chasing. Asking
+        # what Ollama actually has is what stops the log promising a model
+        # that was never pulled.
+        if choice == "ollama":
+            self.ollama_model = llm_backends.resolve_ollama_model(
+                OLLAMA_API_URL, OLLAMA_MODEL)
+            if not self.ollama_model:
+                logger.warning("Ollama is up but has no model pulled; using "
+                               "your bullets as written instead")
+                choice = "none"
+
+        model = {"ollama": getattr(self, "ollama_model", ""),
+                 "openai": OPENAI_MODEL}.get(choice, "")
         logger.info(f"✍️  Bullets: {llm_backends.describe(choice, model)}")
         if choice == "none":
             logger.info("   Add a Gemini key, or run Ollama, to have bullets "
@@ -1181,7 +1196,8 @@ Source bullets:
         from tools.generation import llm_backends
 
         if self.llm_backend == "ollama":
-            base_url, model, key = OLLAMA_BASE_URL, OLLAMA_MODEL, None
+            base_url, key = OLLAMA_BASE_URL, None
+            model = getattr(self, "ollama_model", "") or OLLAMA_MODEL
         else:
             base_url, model = OPENAI_BASE_URL, OPENAI_MODEL
             key = llm_backends.env_openai_key()
@@ -1335,22 +1351,43 @@ Source bullets:
             logger.warning("   ⚠️  Falling back to mock tailoring")
             return self._mock_tailor(job, selected)
 
-    def _generate_filename(self, company: str, title: str) -> str:
-        """Generate safe filename from company and title."""
+    def _generate_filename(self, company: str, title: str, apply_url: str = "") -> str:
+        """
+        A safe, readable, *unique* filename for one posting's resume.
+
+        Company plus the first three title words is readable and not unique.
+        Affirm posts "Software Engineer I, Fullstack (Servicing International)"
+        in several countries; every one of them produced the same name, so the
+        last one written won and the others' stored paths pointed at a resume
+        tailored to a different job description. The job board is what made it
+        visible, by showing those rows side by side.
+
+        So the apply URL — already the job store's primary key — contributes a
+        short suffix. Hashed rather than slugged because a URL is long and
+        ugly, and stable rather than sequential because the same posting
+        re-discovered should overwrite its own resume instead of accumulating
+        near-duplicates beside it.
+        """
         # Clean company name
         company_clean = company.replace(" ", "_").replace(",", "").replace(".", "")
-        
+
         # Clean title - take first few words
         title_words = title.split()[:3]
         title_clean = "_".join(title_words).replace(",", "").replace(".", "")
-        
+
         # Combine
         name = self.profile.personal_info.name.replace(" ", "_")
         filename = f"{name}_{company_clean}_{title_clean}"
-        
+
         # Remove any non-alphanumeric except underscore
         filename = "".join(c for c in filename if c.isalnum() or c == "_")
-        
+
+        # Eight hex characters: unique across far more postings than discovery
+        # can reach, and short enough to keep the readable part readable.
+        if apply_url:
+            digest = hashlib.sha256(apply_url.encode("utf-8")).hexdigest()[:8]
+            filename = f"{filename}_{digest}"
+
         return filename
     
     def _strip_coursework(self, latex_text: str) -> str:
