@@ -36,6 +36,7 @@ Location: jobscout_v3/tools/search/ats_search.py
 
 import json
 import logging
+import random
 import re
 import urllib.error
 import urllib.request
@@ -349,6 +350,42 @@ def title_matches_roles(title: str, roles) -> bool:
     return False
 
 
+def _spread(by_company: dict, max_results: int) -> list:
+    """
+    Fill the cap round-robin across employers, not first-come.
+
+    Every company is asked before anything is cut, and then one job is taken
+    from each in turn until the cap is reached. Without this the cap goes to
+    whoever sorts first: a run capped at 20 came back 18 Affirm, 3 Airtable,
+    2 Airbnb — the alphabetical head of the seed file — while 54 Greenhouse
+    companies were never contacted and Lever, Ashby, Workable and
+    SmartRecruiters were never reached at all.
+
+    `title_matches_roles` already solved this *within* a company, and its
+    docstring says why: truncate first and you get whatever sorts first
+    rather than what you asked for. The same argument applies one level up,
+    and this is the level it was missing from.
+
+    Order within a company is preserved, so a board that lists its newest
+    roles first still surfaces them first.
+    """
+    if max_results <= 0:
+        return []
+
+    queues = [list(jobs) for jobs in by_company.values()]
+    spread = []
+
+    while queues and len(spread) < max_results:
+        for queue in list(queues):
+            if len(spread) >= max_results:
+                break
+            spread.append(queue.pop(0))
+            if not queue:
+                queues.remove(queue)
+
+    return spread
+
+
 def search_ats(max_results: int = 50, companies=None, boards=None, roles=None) -> list:
     """
     Pull open roles from public ATS boards. No API key.
@@ -369,16 +406,13 @@ def search_ats(max_results: int = 50, companies=None, boards=None, roles=None) -
     companies = companies if companies is not None else load_companies()
     wanted = boards or list(BOARDS)
 
-    listings, reached, failed, seen_total = [], 0, 0, 0
+    by_company, reached, failed, seen_total = {}, 0, 0, 0
     for board in wanted:
         reader = BOARDS.get(board)
         if not reader:
             continue
 
         for slug in companies.get(board, []):
-            if len(listings) >= max_results:
-                break
-
             found = reader(slug)
             if not found:
                 failed += 1
@@ -386,20 +420,31 @@ def search_ats(max_results: int = 50, companies=None, boards=None, roles=None) -
 
             reached += 1
             seen_total += len(found)
-            listings.extend(
-                job for job in found if title_matches_roles(job.title, roles)
-            )
+            matching = [job for job in found
+                        if title_matches_roles(job.title, roles)]
+            if matching:
+                by_company[f"{board}:{slug}"] = matching
 
-        if len(listings) >= max_results:
-            break
-
+    matched = sum(len(jobs) for jobs in by_company.values())
     logger.info(
-        f"ATS: {len(listings)} matching listings from {seen_total} open roles "
-        f"across {reached} board(s)"
+        f"ATS: {matched} matching listings from {seen_total} open roles "
+        f"across {reached} board(s), {len(by_company)} hiring"
         + (f", {failed} unreachable" if failed else "")
     )
 
-    final = listings[:max_results]
+    # Which companies the cap reaches is randomised per run. Round-robin over
+    # a fixed order still hands every run the same alphabetical head — 79
+    # companies are hiring and a cap of 20 would only ever show A through D.
+    # The job store is durable (R35), so varying the order means successive
+    # runs widen the board instead of re-finding the same twenty employers.
+    #
+    # Deterministic replay is not lost: `--input` re-runs analysis and
+    # generation over a saved enriched_jobs.json, which is where reproducing
+    # a result actually matters.
+    ordered = list(by_company.items())
+    random.shuffle(ordered)
+
+    final = _spread(dict(ordered), max_results)
     _hydrate(final)
     return final
 

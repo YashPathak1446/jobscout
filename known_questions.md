@@ -3744,6 +3744,85 @@ asking exists.
 
 ---
 
+## R46. The cap decided which companies existed
+
+**Decision:** (August 2026) `search_ats` asks every seeded company before it
+cuts anything, and fills the cap round-robin across employers.
+
+**The symptom** was the board: 23 jobs, three companies — Affirm 18, Airtable
+3, Airbnb 2 — scoring 52–55%. A three-point spread across 23 postings reads
+like a scoring problem, and that is how it was first written up. It was not.
+
+**The cause** was four lines in the discovery loop:
+
+```python
+for slug in companies.get(board, []):
+    if len(listings) >= max_results:
+        break
+```
+
+Companies were visited in seed-file order, which is alphabetical, and the loop
+stopped the moment it had enough. Affirm alone fills a cap of 20. So 54 of 57
+Greenhouse companies were never contacted, and Lever, Ashby, Workable and
+SmartRecruiters were **never reached at all** — four of the five boards R34
+built, dead on arrival for any default run.
+
+R34 claimed 86 companies and ~11,600 roles. That number was real and had never
+once been exercised.
+
+**The fix is the argument `title_matches_roles` already makes.** Its docstring
+says filtering has to precede the cap, because "truncating first returns an
+alphabetical slice of the wrong jobs". That was solved *within* a company and
+left unsolved *across* companies, which is the same sentence one level up.
+Every board is now read, matches are grouped by employer, and `_spread` takes
+one job from each in turn.
+
+**Order is randomised per run.** Round-robin over a fixed order still hands
+every run the same alphabetical head: 79 companies are hiring, and a cap of 20
+would only ever show A through D. The store is durable (R35), so varying the
+order means successive runs widen the board instead of re-finding the same
+twenty employers. Deterministic replay is not lost — `--input` re-runs analysis
+and generation over a saved `enriched_jobs.json`, which is where reproducing a
+result actually matters.
+
+### Measured
+
+| | before | after |
+|---|---|---|
+| companies in one run | 3 | **11** |
+| score spread in one run | 3.0 | **12.4** |
+| durable store | 23 jobs, 3 companies, 1 board | **97 jobs, 49 companies, 5 boards** |
+| boards reached | greenhouse | greenhouse, ashby, lever, workable, smartrecruiters |
+
+A full sweep costs 58s for 94 board fetches, against roughly three before.
+That is the honest price of the fix and it is worth it: discovery is keyless,
+so the cost is wall-clock rather than quota, and it buys the difference
+between three employers and forty-nine.
+
+The first run after the change produced valid resumes for **Modal** and
+**Cartesia** — both Ashby companies, from a board the old code could not
+reach.
+
+### What this says about the 57%
+
+B1 assumed the score's ceiling was the problem and the display should change.
+Half of that was wrong. The spread went from 3.0 to 12.4 without touching the
+scorer, because **a metric cannot discriminate between twenty near-identical
+postings at one employer** — it was being asked an impossible question and
+answering it correctly.
+
+The ceiling is still real: 54.6 remains the top, and cosine similarity between
+a resume and a JD does not approach 1.0. So B1's display change is still worth
+making. But it is now a smaller, better-informed change, and the thing that
+actually made the number useful was fixing what it was ranking.
+
+Worth stating plainly because the instinct was to reach for the scorer first.
+The scorer was fine.
+
+8 new tests, 363 pass, baselines clean.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

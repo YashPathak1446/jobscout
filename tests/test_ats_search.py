@@ -262,3 +262,101 @@ class TestHtmlStripping(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheCapIsSpreadAcrossEmployers(unittest.TestCase):
+    """
+    R46: the cap used to go to whoever sorted first.
+
+    `search_ats` broke out of the company loop as soon as it had enough
+    listings, so a run capped at 20 came back 18 Affirm, 3 Airtable, 2 Airbnb —
+    the alphabetical head of the seed file — while 54 Greenhouse companies were
+    never contacted and four other boards were never reached at all.
+
+    `title_matches_roles` had already solved this *within* a company, and said
+    why in its docstring: truncate first and you get whatever sorts first
+    rather than what you asked for. This is the same argument one level up.
+    """
+
+    def test_one_prolific_company_cannot_eat_the_whole_cap(self):
+        by_company = {
+            "gh:affirm": [f"affirm-{i}" for i in range(18)],
+            "gh:airtable": ["airtable-1", "airtable-2", "airtable-3"],
+            "gh:airbnb": ["airbnb-1", "airbnb-2"],
+        }
+        spread = ats_search._spread(by_company, 9)
+
+        self.assertEqual(len(spread), 9)
+        employers = {job.rsplit("-", 1)[0] for job in spread}
+        self.assertEqual(len(employers), 3, f"all three should appear: {spread}")
+
+    def test_order_within_a_company_is_preserved(self):
+        """A board listing its newest roles first should still surface them."""
+        by_company = {"a": ["a1", "a2", "a3"], "b": ["b1"]}
+        spread = ats_search._spread(by_company, 4)
+        self.assertEqual([j for j in spread if j.startswith("a")], ["a1", "a2", "a3"])
+
+    def test_a_cap_larger_than_the_pool_returns_everything(self):
+        by_company = {"a": ["a1", "a2"], "b": ["b1"]}
+        self.assertEqual(len(ats_search._spread(by_company, 100)), 3)
+
+    def test_a_cap_of_zero_returns_nothing(self):
+        self.assertEqual(ats_search._spread({"a": ["a1"]}, 0), [])
+
+    def test_no_companies_is_not_an_error(self):
+        self.assertEqual(ats_search._spread({}, 10), [])
+
+    def test_a_short_cap_still_takes_from_different_employers_first(self):
+        """Two slots, two companies — not two jobs from the first one."""
+        by_company = {"a": ["a1", "a2", "a3"], "b": ["b1", "b2"]}
+        self.assertEqual(ats_search._spread(by_company, 2), ["a1", "b1"])
+
+
+class TestEveryCompanyIsAsked(unittest.TestCase):
+    """The cap must not decide which companies get contacted."""
+
+    def setUp(self):
+        self._real = dict(ats_search.BOARDS)
+        self.asked = []
+
+        def fake(slug):
+            self.asked.append(slug)
+            return [
+                ats_search._listing("greenhouse", slug, f"{slug}-{i}",
+                                    "Software Engineer", slug.title(),
+                                    "Remote", f"https://x.test/{slug}/{i}", "jd")
+                for i in range(10)
+            ]
+
+        ats_search.BOARDS["greenhouse"] = fake
+
+    def tearDown(self):
+        ats_search.BOARDS.clear()
+        ats_search.BOARDS.update(self._real)
+
+    def test_a_small_cap_does_not_stop_the_search_early(self):
+        slugs = ["affirm", "airbnb", "airtable", "zapier", "zoom"]
+        found = ats_search.search_ats(max_results=3, boards=["greenhouse"],
+                                      companies={"greenhouse": slugs},
+                                      roles=["Software Engineer"])
+
+        self.assertEqual(sorted(self.asked), sorted(slugs),
+                         "every seeded company must be contacted")
+        self.assertEqual(len(found), 3)
+        self.assertEqual(len({job.company for job in found}), 3,
+                         "three slots should mean three employers")
+
+    def test_the_last_company_alphabetically_can_still_be_returned(self):
+        """
+        The old code never reached it. Run enough times that a shuffle
+        excluding it every time would be vanishingly unlikely.
+        """
+        slugs = ["affirm", "airbnb", "airtable", "zapier"]
+        seen = set()
+        for _ in range(25):
+            found = ats_search.search_ats(max_results=1, boards=["greenhouse"],
+                                          companies={"greenhouse": slugs},
+                                          roles=["Software Engineer"])
+            seen.update(job.company for job in found)
+
+        self.assertIn("Zapier", seen)

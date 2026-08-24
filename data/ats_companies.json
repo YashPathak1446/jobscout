@@ -111,6 +111,7 @@
   "workable": [
     "blueground",
     "epignosis",
+    "j",
     "orfium",
     "skroutz",
     "spotawheel"
@@ -118,6 +119,9 @@
   "smartrecruiters": [
     "BoschGroup",
     "Experian",
-    "SmartRecruiters"
+    "SmartRecruiters",
+    "boschgroup",
+    "experian",
+    "smartrecruiters"
   ]
 }
