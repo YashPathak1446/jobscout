@@ -312,6 +312,46 @@ class JobStore:
         filters.pop("sort", None)
         return len(self.query(sort="best", limit=-1, offset=0, **filters))
 
+    # Below this many scored jobs, quartiles are noise dressed as a judgement.
+    MIN_FOR_BANDS = 8
+
+    def score_bands(self) -> dict:
+        """
+        Where the quartiles of *your* scored jobs fall.
+
+        The displayed score is already normalised onto 0-100, but against a
+        window far wider than reality: the Gemini calibration maps raw cosine
+        0.30-0.90, and 95 scored jobs across seven runs used 0.563-0.653 —
+        **15% of the span**. Everything therefore lands between 44 and 59 and
+        reads as "about 53" whatever it is.
+
+        Re-cutting the calibration would fix the look and break the meaning:
+        `scoring_threshold` gates the pipeline at 40, and moving the scale
+        moves that gate silently. That is R24's failure exactly — a number
+        used as a quality bar that could not grade — so the scale stays and
+        the *presentation* learns to divide it.
+
+        Computed from the store rather than hardcoded, so it calibrates to
+        whoever is using it. A resume and a corpus this has never seen will
+        produce a different band of raw similarities, and constants tuned to
+        one person would be wrong for everyone else.
+
+        Returns empty when there is too little to divide, because a quartile
+        over three jobs is not information.
+        """
+        scores = [
+            row["score"] for row in self._db.execute(
+                "SELECT score FROM jobs WHERE score IS NOT NULL ORDER BY score")
+        ]
+        if len(scores) < self.MIN_FOR_BANDS:
+            return {}
+
+        def at(fraction):
+            return scores[min(len(scores) - 1, int(len(scores) * fraction))]
+
+        return {"strong": at(0.75), "typical": at(0.25),
+                "n": len(scores), "low": scores[0], "high": scores[-1]}
+
     def facets(self) -> dict:
         """
         The values worth offering as filters, with counts.

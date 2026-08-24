@@ -38,6 +38,7 @@ from agents.orchestrator import (
     load_run,
     pdflatex_available,
     previous_runs,
+    score_bands,
     seniority_levels,
     set_job_status,
 )
@@ -995,8 +996,9 @@ def screen_board(has_latex):
     first = (int(page) - 1) * page_size + 1
     st.caption(f"Showing {first}–{first + len(rows) - 1} of {matching} job(s)")
 
+    bands = score_bands()
     for row in rows:
-        _board_row(row, statuses, has_latex)
+        _board_row(row, statuses, has_latex, bands)
 
 
 def _count_for(entries, value):
@@ -1035,14 +1037,42 @@ def _since(stamp) -> str:
     return f"found {seen:%-d %b}" if os.name != "nt" else f"found {seen:%d %b}"
 
 
-def _board_row(row, statuses, has_latex):
+def _match_label(score, bands) -> str:
+    """
+    A score, plus where it sits among yours.
+
+    The number alone is close to useless and it took data to see why. It is
+    already normalised onto 0-100, but against a window much wider than
+    reality — 95 scored jobs across seven runs spanned **44 to 59**, using 15%
+    of the scale. So every job reads as "about 53" and the differences that do
+    exist are invisible at a glance.
+
+    Re-cutting the calibration would fix the look and break the meaning:
+    `scoring_threshold` gates the pipeline at 40, and moving the scale moves
+    that gate silently — R24's exact failure. So the number is left alone and
+    the label does the work, from quartiles of the user's own scored jobs.
+
+    The percentage stays alongside. Dropping it would hide the one thing that
+    is comparable between two jobs on the same board.
+    """
+    text = f"{score:.0f}% match"
+    if not bands:
+        return text
+    if score >= bands["strong"]:
+        return f"{text}  ·  **strong**"
+    if score < bands["typical"]:
+        return f"{text}  ·  weak"
+    return text
+
+
+def _board_row(row, statuses, has_latex, bands=None):
     url = row["url"]
     with st.container(border=True):
         heading, control = st.columns([4, 1])
 
         title = f"**{_plain(row.get('company')) or '?'} — {_plain(row.get('title')) or '?'}**"
         if row.get("score") is not None:
-            title += f"  ·  {row['score']:.0f}% match"
+            title += f"  ·  {_match_label(row['score'], bands)}"
         heading.markdown(title)
 
         meta = [

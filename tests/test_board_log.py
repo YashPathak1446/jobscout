@@ -261,3 +261,66 @@ class TestTheFacadeDoesNotMisreadZero(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestScoreBands(_StoreTest):
+    """
+    R49: the number is normalised against a window far wider than reality.
+
+    95 scored jobs across seven runs spanned 44 to 59 on a 0-100 scale — 15%
+    of it — so every job reads as "about 53". Re-cutting the calibration would
+    fix the look and break the meaning, because `scoring_threshold` gates the
+    pipeline at 40 and moving the scale moves that gate silently (R24). So the
+    scale stays and the presentation divides it, from the user's own data.
+    """
+
+    def _with_scores(self, values):
+        for i, value in enumerate(values):
+            url = f"https://x.test/{i}"
+            self.store.record([_Listing(url)])
+            self.store.set_score(url, value)
+
+    def test_too_few_scores_means_no_bands(self):
+        """A quartile over three jobs is not information."""
+        self._with_scores([50.0, 52.0, 54.0])
+        self.assertEqual(self.store.score_bands(), {})
+
+    def test_bands_appear_once_there_is_enough_to_divide(self):
+        self._with_scores([40 + i for i in range(12)])
+        bands = self.store.score_bands()
+        self.assertIn("strong", bands)
+        self.assertIn("typical", bands)
+        self.assertEqual(bands["n"], 12)
+
+    def test_the_strong_cut_is_above_the_typical_cut(self):
+        self._with_scores([40 + i for i in range(20)])
+        bands = self.store.score_bands()
+        self.assertGreater(bands["strong"], bands["typical"])
+
+    def test_bands_calibrate_to_the_data_they_are_given(self):
+        """
+        The whole reason these are computed rather than constants: a different
+        resume against a different corpus lands in a different band of raw
+        similarities, and hardcoded cuts would be wrong for everyone but the
+        person they were tuned on.
+        """
+        self._with_scores([10 + i for i in range(20)])
+        low = self.store.score_bands()
+
+        self.tearDown()
+        self.setUp()
+        self._with_scores([80 + i for i in range(20)])
+        high = self.store.score_bands()
+
+        self.assertLess(low["strong"], high["typical"])
+
+    def test_unscored_jobs_are_not_counted_as_zero(self):
+        self._with_scores([40 + i for i in range(10)])
+        self.store.record([_Listing("https://unscored.test/1")])
+        self.assertEqual(self.store.score_bands()["n"], 10)
+
+    def test_the_range_is_reported(self):
+        self._with_scores([44.0] + [50.0] * 8 + [59.0])
+        bands = self.store.score_bands()
+        self.assertEqual(bands["low"], 44.0)
+        self.assertEqual(bands["high"], 59.0)

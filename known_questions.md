@@ -3978,6 +3978,85 @@ statuses and history rows were written to the real board and are gone.
 
 ---
 
+## R49. The score was fine; the window it was shown through was not
+
+**Decision:** (August 2026) The score is left exactly as it is, and the board
+labels each job against the quartiles of the user's own scored jobs.
+
+**My first two explanations were both wrong**, and it took reading the scorer
+and then measuring to find out.
+
+The first was "cosine similarity between two related documents tops out around
+0.7, so 57% is near the ceiling." That assumed the displayed number was a raw
+cosine. It is not: `_normalise` already maps raw onto 0-100 per backend, and
+the Gemini calibration spans 0.30-0.90 — so 100 is reachable by construction.
+
+The second was R46's, that the pool was the problem. That one was half right
+and worth the work — fixing discovery took the *within-run* spread from 3.0 to
+12.4 — but it did not move the band the numbers live in.
+
+### What the measurement says
+
+95 scored jobs across seven runs:
+
+| | |
+|---|---|
+| displayed | 43.8 – 58.9 (mean 53.0, sd 3.0) |
+| implied raw cosine | 0.563 – 0.653 |
+| calibration assumes | 0.30 – 0.90 |
+| **span actually used** | **15%** |
+
+So the scale is not unreachable, it is **miscalibrated in the other
+direction**: the window is three times wider than anything real, and every job
+lands in a fifteen-point band that reads as "about 53" whatever it is. The
+differences that exist are real and invisible.
+
+### Why the calibration was not re-cut
+
+That is the obvious fix and it would have been a bad one. `scoring_threshold`
+gates the pipeline at 40 and is stored per profile. Moving the scale moves
+that gate silently — a job that scored 41 before would score 12 after and stop
+getting a resume, with nothing in the diff to say so.
+
+That is R24 exactly: a number used as a quality bar that could not grade. The
+answer there was to stop asking the number to mean something it could not, not
+to renumber it.
+
+There is a second reason. The observed range belongs to **one resume against
+one corpus**. Constants tuned to it would be wrong for the next person, and
+`CALIBRATION` already carries the warning: getting the floor wrong sends every
+job to 0.0 and the pipeline finds nothing.
+
+### So the presentation divides it instead
+
+`score_bands()` reads the quartiles out of the store — the user's own scored
+jobs — and the board appends **strong** or **weak** to the percentage. Nothing
+below eight scored jobs, because a quartile over three is not information.
+
+Self-calibrating by construction: a different resume in a different market
+produces a different band of similarities and the labels move with it. No
+constants, and nothing the pipeline reads.
+
+The percentage stays alongside the label. It is the only part that is
+comparable between two jobs on the same board, and hiding it to make the UI
+tidier would lose the thing that works.
+
+### Verified
+
+Against the real store of 97 jobs: bands at 50.6 and 53.0, splitting 38 scored
+jobs 11 strong / 18 typical / 9 weak. Driven in the running app — page 1 shows
+strong, page 2 shows weak, and the counts match the store.
+
+6 new tests, 408 pass, baselines clean.
+
+**What is still true.** A 54% is not "54% of a perfect match" and no display
+change makes it one. The label says where a job stands among yours, which is
+the question you can actually act on. Making the absolute number meaningful
+across users is Q17's problem — embeddings reward vocabulary overlap rather
+than role type — and it is still open.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

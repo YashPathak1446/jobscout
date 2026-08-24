@@ -238,6 +238,24 @@ def job_history(url: str) -> list:
         store.close()
 
 
+def score_bands() -> dict:
+    """
+    Where your scored jobs' quartiles fall, for labelling a match.
+
+    The score is normalised against a window much wider than real data uses —
+    95 scored jobs spanned 44 to 59 on a 0-100 scale — so the raw number reads
+    as "about 53" whatever it is. This lets a screen say where one job sits
+    among yours without changing the number the pipeline gates on.
+    """
+    from tools.jobs.job_store import JobStore
+
+    store = JobStore()
+    try:
+        return store.score_bands()
+    finally:
+        store.close()
+
+
 def board_sorts() -> list:
     """The orderings the board may ask for. The view never builds SQL."""
     from tools.jobs.job_store import JobStore
