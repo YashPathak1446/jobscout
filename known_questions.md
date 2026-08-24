@@ -466,7 +466,21 @@ item 11's goal of needing no keys. Keyless general sources worth evaluating:
 Arbeitnow, Remotive (remote only), USAJOBS (US federal). Terms change — verify
 before designing around any of them.
 
-## 14. The React frontend
+## 14. The React frontend — screens settled first (2026-08-23)
+
+**All four screens exist, in Streamlit — see R40 and R41.** The board, the
+backend explanation, the seniority controls and the import confirmation
+screen all landed, along with the facades they need, a bug that let the
+wizard destroy a profile, and a `.env` that only some entry points loaded.
+Still missing: runs as background jobs, which is a FastAPI concern rather
+than a Streamlit one.
+
+Doing this in Streamlit first was the cheap order. Item 14 predicted items
+9-13 would change what the screens must show, and they did — settling that in
+a file you can edit in a text editor costs less than settling it in React.
+What remains for React is a re-skin plus the two missing screens.
+
+### Original
 
 Cheaper than a rewrite because R25 built for it: `app.py` reaches the pipeline
 only through `agents.orchestrator` and `scripts.init_profile`, and
@@ -3219,6 +3233,169 @@ predicted.
 
 22 new tests, all offline. The model path is checked by hand against a real
 PDF, because mocking a model here would only test the mock.
+
+---
+
+## R40. The screens catch up with the pipeline, and a wizard that broke profiles
+
+**Decision:** (August 2026) Three of R33's four frontend decisions now have
+screens in `app.py`. Item 14 said each of items 9-13 changes what the screens
+must show; this is the pass that changed them, and it is worth doing in
+Streamlit before React because it settles *what* the screens are while the
+cost of changing that answer is still a text editor.
+
+**The board is the main view now.** `screen_board` lists every job the store
+has ever held — score, location, source, status, and the resume written for it
+— filterable by status, minimum score and whether a resume exists. It is not a
+sixth wizard step: a step is something you finish and leave, and R33's whole
+point is that this is the thing you come back to. Setup is what you pass
+through to reach it. Six facades on the orchestrator carry it, because
+`test_ui_contract` forbids the view layer from knowing the board is SQLite.
+
+**The key stopped being mandatory.** The "about you" screen disabled Continue
+until a Gemini key was entered. That was true when it was written and stopped
+being true the moment R36 moved embeddings off the API and R37 gave rewriting
+a floor that needs no model — at which point the UI was holding the door shut
+on a pipeline that had already learned to run without a key. It now detects
+the rung, says what that rung costs in plain words, and lets you through:
+
+    ✍️  Jobs will be scored and the right components picked for each one,
+        but your bullets will be used exactly as you wrote them.
+        To get tailored bullets, add a Gemini key above, or install Ollama...
+
+Detected and explained, per R33 — not asked, because nobody can answer "which
+model backend?" before they have seen the tool work once.
+
+**Seniority is a control.** R34 made the gate read `job_preferences.seniority`
+instead of a constant, which helps nobody while the only way to set it is
+editing JSON. The form offers the seven levels from `SENIORITY_SYNONYMS`, and
+its help text says what the old copy hid: the exclusion list is a separate,
+harder filter, and excluding "senior" while asking for senior roles finds you
+nothing.
+
+### The wizard could destroy a profile by being walked through
+
+`update_profile_fields` merged one level deep. The preferences screen collects
+two of `locations`' seven fields, so saving it replaced the whole section —
+dropping `countries`, which the schema requires, along with `states_priority`,
+which discovery reads. **The result was a profile that would not load at all.**
+Walking a screen that says "Save and continue" left the pipeline unable to
+start.
+
+The docstring already promised the right behaviour ("a form that collects three
+fields cannot wipe the other thirty"); the code just stopped one level short of
+it. The merge is now recursive, and lists still replace, because merging two
+lists is a guess about intent.
+
+This is R30's shape for the third time: **a form destroying data it never
+showed the user.** So the fix is not only the merge. `read_preferences` and
+`read_personal` let both forms seed from what is stored, because a form that
+cannot read what it wrote reverts it on the next save — the same destruction,
+one layer up, and invisible for exactly as long.
+
+**Verified against the real profile**, which is the only test that would have
+convinced me: opening the preferences screen and clicking "Save and continue"
+now leaves `yash_pathak.json` byte-identical. Before the fix, that click
+dropped 9 target roles, 8 exclude keywords and 5 location fields.
+
+### Two bugs only the running app could show
+
+Neither is deep, and neither was findable by reading.
+
+**Two postings can share one resume file.** Generation names a resume after
+company and title, and Affirm posts the same title in several countries — so
+two board rows pointed at one PDF, and Streamlit refused to render duplicate
+widget keys. The board is the first screen to show both rows at once. Keyed on
+the posting URL instead. *The underlying collision is real and not fixed here:
+two different postings genuinely overwrite each other's resume on disk.*
+
+**A job title ended in a space.** `"Software Engineer II, Backend (Furnishing
+Platform) "` inside `**...**` breaks the closing delimiter, so that one row
+printed its own asterisks. Titles are other people's HTML; `_plain` strips and
+escapes them.
+
+**What is still missing from R33:** the import confirmation screen (R39 also
+flagged it), and runs as background jobs — a multi-minute run still needs the
+tab open, which is a FastAPI concern rather than a Streamlit one.
+
+25 new tests. The board's facades are tested against a store of their own, so
+the suite never touches the user's real board.
+
+---
+
+## R41. The confirmation screen, and a key that only some entry points found
+
+**Decision:** (August 2026) Importing is now two calls with a person in
+between. `extract_resume` reads an upload into a schema and writes nothing;
+`save_extracted` renders whatever the user confirmed. R33 required this and
+R39 shipped the import without it, which left a misread resume discoverable
+only by opening the generated `.tex` — the exact failure R33 predicted, and
+one R39 flagged in its own entry.
+
+The old `save_resume` extracted and wrote in a single call, so there was
+nowhere for confirmation to happen. That is the whole reason the screen did
+not exist: not that it was hard, but that the seam was missing. It still
+exists, implemented in terms of the two halves, for callers that genuinely
+have no screen.
+
+**A `.tex` upload skips the screen.** It is the user's own file in the
+pipeline's own format, so there is nothing a model guessed at, and asking
+someone to proofread their own document back to them is friction that teaches
+them to click past it.
+
+**Entries can be dropped, not only corrected.** Extraction can invent an
+experience out of a heading it misread, and a screen that only allows
+correction leaves no way to say "this is not a job". Each entry has an
+include toggle; the build is blocked if nothing is left, because a resume
+with nothing to tailor is not a resume.
+
+**Verified against a real PDF end to end**: a generated resume was read back
+into three experiences, three projects, six skill categories and correct
+GitHub and LinkedIn URLs — R39's link-annotation and kerning fixes both still
+holding — then a corrected name and a dropped project were carried through
+`save_extracted` into a rebuilt profile. The corrections are what landed, not
+the extraction.
+
+### `_normalise` threw away the hook R39 built for this screen
+
+The heuristic floor stores text it could not split under `_unparsed`,
+deliberately, so a confirmation screen can show it. `_normalise` then rebuilt
+a fixed five-key dict — so the key was written, populated, and unreachable by
+the only thing that wanted it. Carried through now, and the screen warns when
+it is non-empty.
+
+Worth naming as a pattern: **the floor was built for a consumer that did not
+exist yet, and nothing failed when the wiring was cut.** No test could have
+caught it, because until this screen there was no behaviour to assert.
+
+### The `.env` file was loaded by agents, not by the project
+
+`load_dotenv()` was called at import in each of the three agents, which covers
+every path that goes through an agent and no others. `scripts/init_profile.py`
+does not import an agent, so importing a PDF from the command line resolved no
+key at all, dropped silently to the heuristic floor, and produced a resume
+with **zero experiences** — on a machine with a perfectly good key in `.env`.
+
+Found while testing this screen, and initially misread as a model failure. The
+give-away was `complete_json` returning `None` rather than raising: the `none`
+rung is a legitimate state, so falling to it looks identical to choosing it.
+That is a fair design — R37 wanted the floor to be silent — but it means a
+misconfiguration and a deliberate choice produce the same log line.
+
+`load_dotenv()` now lives in `config.py`, which is already the module that
+decides what "no key" means (`resolve_api_key`, R22) and which everything
+imports. One place, every entry point. It is idempotent and never overrides a
+variable already set in the real environment, so the agents' own calls are
+harmless.
+
+**The screens are now driven by tests, not by clicking.** `streamlit.testing`
+runs `app.py` headlessly, which is how the corrections-propagate cases are
+asserted: edit a field, click confirm, read the written `.tex`. Testing the
+helpers instead would still pass on a version of `app.py` that skipped the
+screen entirely.
+
+13 new tests. R33 is now fully built except for runs as background jobs, which
+is a FastAPI concern rather than a Streamlit one.
 
 ---
 

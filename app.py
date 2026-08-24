@@ -25,13 +25,23 @@ import streamlit as st
 from agents.orchestrator import (
     JobScoutOrchestrator,
     available_profiles,
+    backend_status,
+    board_jobs,
+    board_stats,
+    job_statuses,
     load_run,
     pdflatex_available,
     previous_runs,
+    seniority_levels,
+    set_job_status,
 )
 from scripts.init_profile import (
     create_profile,
+    extract_resume,
     read_component_rules,
+    read_personal,
+    read_preferences,
+    save_extracted,
     save_resume,
     update_profile_fields,
     write_component_rules,
@@ -72,6 +82,17 @@ def _init_state():
     st.session_state.setdefault("results", None)
     # Set when a run stops at the review checkpoint and is waiting to resume.
     st.session_state.setdefault("pending", None)
+    # "setup" walks the wizard; "board" is the job board. The board is not a
+    # sixth step — R33 decided the app is a board you live in, and a step is
+    # something you finish and leave. Setup is the thing you pass through.
+    st.session_state.setdefault("view", "setup")
+    # Detection asks whether Ollama is up, which is a network call. Cached so
+    # it does not run on every keystroke in a text field.
+    st.session_state.setdefault("backend", None)
+    # An extraction waiting to be confirmed: what the model read, the file it
+    # read it from, and what the profile will be called. Nothing is written
+    # while this is set (R33).
+    st.session_state.setdefault("pending_import", None)
 
 
 def _goto(step: int):
@@ -82,6 +103,12 @@ def _goto(step: int):
 # ------------------------------------------------------------ screen: 1 ----
 
 def screen_resume():
+    # An extraction awaiting confirmation takes over the screen: agreeing with
+    # it, or fixing it, is the only sensible next action.
+    if st.session_state.pending_import:
+        _render_confirm()
+        return
+
     st.subheader("1. Your resume")
     st.caption(
         "Upload your resume as PDF, Word or LaTeX. Everything it already "
@@ -128,22 +155,29 @@ def screen_resume():
         )
     confirmed = st.checkbox(f"Yes, replace '{name}'") if clash else False
 
-    if st.button("Build my profile", type="primary",
+    if st.button("Read my resume", type="primary",
                  disabled=not (uploaded and name) or (clash and not confirmed)):
         with st.spinner("Reading your resume..."):
-            resume_path = save_resume(uploaded.getvalue(), uploaded.name)
             try:
-                summary = create_profile(resume_path, name, force=confirmed)
-            except FileExistsError:
-                st.error(f"A profile named '{name}' already exists.")
-                return
+                extracted = extract_resume(uploaded.getvalue(), uploaded.name)
             except Exception as exc:                       # surfaced, not swallowed
-                st.error(f"Could not build a profile from that resume: {exc}")
+                st.error(f"Could not read that resume: {exc}")
                 return
 
-        st.session_state.profile_name = name
-        st.session_state.setup_summary = summary
-        _goto(1)
+        # A `.tex` upload is already in the pipeline's own format, so there is
+        # nothing a model guessed at and nothing to confirm.
+        if extracted["kind"] == "latex":
+            if not _build(extracted["path"], name, confirmed):
+                return
+            _goto(1)
+            st.rerun()
+
+        st.session_state.pending_import = {
+            "schema": extracted["schema"],
+            "source": str(extracted["source"]),
+            "name": name,
+            "force": confirmed,
+        }
         st.rerun()
 
     summary = st.session_state.setup_summary
@@ -162,29 +196,277 @@ def screen_resume():
                 st.write(f"**{field}** — {value}")
 
 
+def _build(resume_path, name, force):
+    """Build and store a profile, reporting failure on screen. True if it worked."""
+    try:
+        summary = create_profile(resume_path, name, force=force)
+    except FileExistsError:
+        st.error(f"A profile named '{name}' already exists.")
+        return False
+    except Exception as exc:                               # surfaced, not swallowed
+        st.error(f"Could not build a profile from that resume: {exc}")
+        return False
+
+    st.session_state.profile_name = name
+    st.session_state.setup_summary = summary
+    return True
+
+
+def _lines(values) -> str:
+    return "\n".join(v for v in (values or []) if v)
+
+
+def _entry_fields(entry, index, kind, fields):
+    """
+    One extracted experience or project, editable.
+
+    Returns the corrected entry, or None if the user unticked it. Extraction
+    can invent an entry out of a heading it misread, and a screen that only
+    allows correction leaves no way to say "this is not a job".
+    """
+    label = " — ".join(str(entry.get(f) or "") for f, _ in fields[:2]).strip(" —")
+    with st.expander(label or f"{kind} {index + 1}", expanded=False):
+        keep = st.checkbox("Include this", value=True, key=f"keep-{kind}-{index}")
+
+        corrected = {}
+        columns = st.columns(2)
+        for position, (field, caption) in enumerate(fields):
+            corrected[field] = columns[position % 2].text_input(
+                caption, value=str(entry.get(field) or ""),
+                key=f"{kind}-{index}-{field}")
+
+        text = st.text_area(
+            "Bullets, one per line", value=_lines(entry.get("bullets")),
+            height=160, key=f"{kind}-{index}-bullets",
+            help="These are used as written unless a model rewrites them for "
+                 "a specific job.")
+        corrected["bullets"] = [line.strip() for line in text.split("\n") if line.strip()]
+
+    return corrected if keep else None
+
+
+def _render_confirm():
+    """
+    Every extracted field, shown for correction before anything is saved (R33).
+
+    Extraction from a PDF or Word file will misread some resumes — R39 found a
+    header that yielded the word "GitHub" as a URL and kerning that split
+    "WebApp" in two, on a file this project generated itself. A silent misparse
+    produces bad resumes until somebody opens one, so nothing is written until
+    this screen is agreed with.
+
+    It doubles as the moment the user sees what the system understood about
+    them, which is a better first impression than a spinner.
+    """
+    pending = st.session_state.pending_import
+    schema = pending["schema"]
+
+    st.subheader("Is this right?")
+    st.caption(
+        "This is what was read from your file. Correct anything wrong — it is "
+        "used exactly as it stands here. Nothing has been saved yet."
+    )
+
+    a, b, c = st.columns(3)
+    a.metric("Experiences", len(schema.get("experiences") or []))
+    b.metric("Projects", len(schema.get("projects") or []))
+    c.metric("Skill groups", len(schema.get("skills") or {}))
+
+    # The floor keeps text it could not split into entries. Showing it is the
+    # difference between "we found one job" and "we found one job and could
+    # not read this part", which are very different things to be told.
+    unparsed = schema.get("_unparsed") or {}
+    leftovers = {k: v for k, v in unparsed.items() if v}
+    if leftovers:
+        st.warning(
+            "Some of your resume could not be split into separate entries — "
+            "most likely because no model was available to read it. It is "
+            "shown below; anything you want kept has to be typed in above.",
+            icon="⚠️",
+        )
+        with st.expander("What could not be read"):
+            for section, lines in leftovers.items():
+                st.markdown(f"**{section}**")
+                st.text("\n".join(lines) if isinstance(lines, list) else str(lines))
+
+    contact = dict(schema.get("contact") or {})
+    st.markdown("#### Contact")
+    st.caption(
+        "A PDF shows link *text*, not link targets, so a URL field holding "
+        "the word `GitHub` means the address never made it into the file."
+    )
+    columns = st.columns(2)
+    for position, (field, caption) in enumerate(
+            [("name", "Name"), ("email", "Email"), ("phone", "Phone"),
+             ("github", "GitHub URL"), ("linkedin", "LinkedIn URL")]):
+        contact[field] = columns[position % 2].text_input(
+            caption, value=str(contact.get(field) or ""), key=f"contact-{field}")
+
+    st.markdown("#### Education")
+    education = []
+    for index, entry in enumerate(schema.get("education") or []):
+        columns = st.columns(2)
+        corrected = {}
+        for position, (field, caption) in enumerate(
+                [("school", "School"), ("degree", "Degree"),
+                 ("location", "Location"), ("dates", "Dates")]):
+            corrected[field] = columns[position % 2].text_input(
+                caption, value=str(entry.get(field) or ""), key=f"edu-{index}-{field}")
+        education.append(corrected)
+    if not education:
+        st.caption("Nothing was read as education.")
+
+    st.markdown("#### Experience")
+    experiences = [
+        _entry_fields(entry, index, "experience",
+                      [("company", "Company"), ("title", "Title"),
+                       ("location", "Location"), ("dates", "Dates")])
+        for index, entry in enumerate(schema.get("experiences") or [])
+    ]
+
+    st.markdown("#### Projects")
+    projects = [
+        _entry_fields(entry, index, "project",
+                      [("name", "Project"), ("tech", "Built with"),
+                       ("dates", "Dates")])
+        for index, entry in enumerate(schema.get("projects") or [])
+    ]
+
+    st.markdown("#### Skills")
+    skills = {}
+    for index, (category, values) in enumerate((schema.get("skills") or {}).items()):
+        text = st.text_input(category, value=str(values or ""), key=f"skill-{index}")
+        if text.strip():
+            skills[category] = text.strip()
+
+    corrected = {
+        "contact": contact,
+        "education": education,
+        "experiences": [e for e in experiences if e],
+        "projects": [p for p in projects if p],
+        "skills": skills,
+    }
+
+    st.divider()
+    nothing_left = not (corrected["experiences"] or corrected["projects"])
+    if nothing_left:
+        st.error("Keep at least one experience or project — a resume needs "
+                 "something to tailor.")
+
+    back, forward = st.columns([1, 3])
+    if back.button("Start over"):
+        st.session_state.pending_import = None
+        st.rerun()
+
+    if forward.button("This is right — build my profile", type="primary",
+                     disabled=nothing_left):
+        with st.spinner("Building your profile..."):
+            resume_path = save_extracted(corrected, pending["source"])
+            if not _build(resume_path, pending["name"], pending["force"]):
+                return
+        st.session_state.pending_import = None
+        _goto(1)
+        st.rerun()
+
+
 # ------------------------------------------------------------ screen: 2 ----
+
+BACKEND_HEADLINES = {
+    "gemini": "Bullets will be rewritten by Google Gemini.",
+    "openai": "Bullets will be rewritten through your OpenAI-compatible key.",
+    "ollama": "Bullets will be rewritten locally by Ollama. Nothing leaves this machine.",
+    "none": "Jobs will be scored and the right components picked for each one, "
+            "but your bullets will be used exactly as you wrote them.",
+}
+
+
+def _backend_panel():
+    """
+    Say what will rewrite bullets, and let a key change it (R33).
+
+    The key used to be mandatory here — Continue stayed disabled without one —
+    which stopped being true the moment R36 moved embeddings off the API and
+    R37 gave rewriting a floor that needs no model at all. Discovery, scoring
+    and component selection now work with nothing configured, so demanding a
+    key was the UI holding the door shut on a pipeline that had already
+    learned to run without it.
+
+    Detected and explained rather than asked: quality does differ between the
+    rungs, and most people cannot answer "which model backend?" before they
+    have seen the tool work once.
+    """
+    key = st.text_input(
+        "Google Gemini API key (optional)", value=st.session_state.api_key,
+        type="password",
+        help="Stays on this machine and is passed straight to the pipeline. "
+             "Free at aistudio.google.com/app/apikey. Without one, JobScout "
+             "still finds and scores jobs and builds a resume per posting.",
+    )
+
+    # Re-detect when the answer could have changed, not on every rerun: the
+    # check asks the network whether Ollama is up.
+    cached = st.session_state.backend
+    if cached is None or cached.get("key_used") != key:
+        cached = backend_status(key)
+        cached["key_used"] = key
+        st.session_state.backend = cached
+
+    chosen = cached["backend"]
+    headline = BACKEND_HEADLINES.get(chosen, cached["description"])
+
+    with st.container(border=True):
+        if chosen == "none":
+            st.warning(headline, icon="✍️")
+            st.caption(
+                "To get tailored bullets, add a Gemini key above, or install "
+                "**Ollama** and run `ollama pull llama3.1` for a free local "
+                "model that sends nothing anywhere."
+            )
+        else:
+            st.success(headline, icon="✅")
+            st.caption(cached["description"])
+
+        if cached["forced"]:
+            st.caption(
+                f"`LLM_BACKEND` in config.py pins this to **{chosen}**, so "
+                "detection is not choosing it."
+            )
+
+    return key
+
+
+
 
 def screen_about_you():
     st.subheader("2. About you")
     st.caption(
-        "Two things a resume cannot reliably tell us, plus your API key. "
-        "An address line says where you live, not where you are allowed to work."
+        "Two things a resume cannot reliably tell us. An address line says "
+        "where you live, not where you are allowed to work."
     )
 
-    key = st.text_input(
-        "Google Gemini API key", value=st.session_state.api_key, type="password",
-        help="Stays on this machine and is passed straight to the pipeline. "
-             "Get one free at aistudio.google.com/app/apikey",
+    # Seeded, not blank: saving a blank form over stored answers is the same
+    # silent revert the preferences screen had.
+    try:
+        stored = read_personal(st.session_state.profile_name)
+    except Exception:
+        stored = {"location": "", "visa_status": ""}
+
+    location = st.text_input("Where are you based?", value=stored["location"],
+                             placeholder="City, State")
+    visa = st.selectbox(
+        "Work authorisation", VISA_OPTIONS,
+        index=VISA_OPTIONS.index(stored["visa_status"])
+        if stored["visa_status"] in VISA_OPTIONS else 0,
     )
-    location = st.text_input("Where are you based?", placeholder="City, State")
-    visa = st.selectbox("Work authorisation", VISA_OPTIONS, index=0)
+
+    key = _backend_panel()
 
     back, forward = st.columns([1, 5])
     if back.button("Back"):
         _goto(0)
         st.rerun()
 
-    if forward.button("Continue", type="primary", disabled=not (key and location)):
+    if forward.button("Continue", type="primary", disabled=not location):
         st.session_state.api_key = key
         update_profile_fields(st.session_state.profile_name, {
             "personal_info": {
@@ -203,14 +485,42 @@ def screen_about_you():
 def screen_preferences():
     st.subheader("3. What are you looking for?")
 
-    roles = st.multiselect("Target roles", ROLE_OPTIONS, default=["Software Engineer"])
+    # Seeded from the profile, never from this form's own defaults. A
+    # returning user who opens this screen and saves would otherwise revert
+    # every answer they had tuned, which is the same silent destruction the
+    # nested-merge bug caused one layer down.
+    try:
+        current = read_preferences(st.session_state.profile_name)
+    except Exception:
+        current = {"target_roles": ["Software Engineer"], "seniority": ["new grad"],
+                   "exclude_keywords": [], "cities": [], "remote_ok": True}
+
+    options = ROLE_OPTIONS + [r for r in current["target_roles"] if r not in ROLE_OPTIONS]
+    roles = st.multiselect("Target roles", options,
+                           default=current["target_roles"] or ["Software Engineer"])
+
+    levels = seniority_levels()
+    seniority = st.multiselect(
+        "Levels to look at", levels,
+        default=[s for s in current["seniority"] if s in levels] or ["new grad"],
+        format_func=lambda s: s.title(),
+        help="Postings phrase these a dozen ways — 'recent graduate', "
+             "'0-2 years', 'Engineer II' — so each level you pick matches "
+             "more wordings than its name.",
+    )
+
     cities = st.text_input("Cities (comma separated, optional)",
+                           value=", ".join(current["cities"]),
                            placeholder="San Francisco, New York")
-    remote_ok = st.checkbox("Remote roles are fine", value=True)
+    remote_ok = st.checkbox("Remote roles are fine", value=current["remote_ok"])
     excludes = st.multiselect(
-        "Skip postings mentioning", EXCLUDE_OPTIONS,
-        default=["senior", "staff", "principal", "5+ years"],
-        help="Filters out roles you are not eligible for as a new grad.",
+        "Skip postings mentioning",
+        EXCLUDE_OPTIONS + [e for e in current["exclude_keywords"]
+                           if e not in EXCLUDE_OPTIONS],
+        default=current["exclude_keywords"],
+        help="A hard filter on wording, separate from the levels above. "
+             "Excluding 'senior' while asking for senior roles will find you "
+             "nothing.",
     )
 
     back, forward = st.columns([1, 5])
@@ -218,10 +528,12 @@ def screen_preferences():
         _goto(1)
         st.rerun()
 
-    if forward.button("Save and continue", type="primary", disabled=not roles):
+    if forward.button("Save and continue", type="primary",
+                     disabled=not (roles and seniority)):
         update_profile_fields(st.session_state.profile_name, {
             "job_preferences": {
                 "target_roles": roles,
+                "seniority": seniority,
                 "exclude_keywords": excludes,
                 "locations": {
                     "cities": [c.strip() for c in cities.split(",") if c.strip()],
@@ -457,6 +769,9 @@ def _render_results(state, has_latex):
         return
 
     st.success(f"{len(results)} resume(s) generated from {len(analysed)} scored jobs.")
+    if st.button("See all your jobs"):
+        st.session_state.view = "board"
+        st.rerun()
 
     for item in results:
         job = item.get("job", {})
@@ -466,7 +781,7 @@ def _render_results(state, has_latex):
             None,
         )
 
-        header = f"{job.get('company', '?')} — {job.get('title', '?')}"
+        header = f"{_plain(job.get('company')) or '?'} — {_plain(job.get('title')) or '?'}"
         if score is not None:
             header += f"  ·  {score:.0f}% match"
 
@@ -491,8 +806,36 @@ def _render_results(state, has_latex):
                 st.link_button("Open the posting", job["apply_url"])
 
 
-def _download(column, path, label, mime):
-    """Offer a generated file, or say why it is missing rather than nothing."""
+def _plain(text) -> str:
+    """
+    A scraped string, safe to drop inside markdown.
+
+    Job titles come from other people's HTML, and one of the real ones ends in
+    a space: `"Software Engineer II, Backend (Furnishing Platform) "`. Inside
+    `**...**` a trailing space breaks the closing delimiter, so that row
+    rendered its own asterisks. Stripping fixes that case and escaping covers
+    the rest — a title with an asterisk or underscore in it would garble the
+    same way, and nothing upstream promises it will not.
+    """
+    cleaned = (text or "").strip()
+    for character in ("\\", "*", "_", "`", "[", "]"):
+        cleaned = cleaned.replace(character, "\\" + character)
+    return cleaned
+
+
+def _download(column, path, label, mime, unique=""):
+    """
+    Offer a generated file, or say why it is missing rather than nothing.
+
+    `unique` disambiguates the widget key. Keying on the path alone was enough
+    for a run log, where each row is a different resume, and not enough for
+    the board, where two postings can point at the same generated file —
+    generation names a resume after the company and title, so two openings
+    with the same title at the same company overwrite each other. The board is
+    the first screen to show both of those rows at once, and Streamlit raised
+    a duplicate-key error rather than rendering. Callers pass something that
+    identifies the row.
+    """
     if not path:
         return
     try:
@@ -503,13 +846,124 @@ def _download(column, path, label, mime):
         return
 
     column.download_button(label, data, file_name=os.path.basename(path),
-                           mime=mime, key=f"{label}-{path}")
+                           mime=mime, key=f"{label}-{unique or path}")
+
+
+# ----------------------------------------------------------------- board ----
+
+STATUS_LABELS = {
+    "new": "New",
+    "seen": "Seen",
+    "applied": "Applied",
+    "rejected": "Rejected",
+    "archived": "Archived",
+}
+
+
+def screen_board(has_latex):
+    """
+    Every job ever discovered, not just this run's (R33, R35).
+
+    The run screen answers "what did that run do"; this answers "what am I
+    working through", which is the question a person actually returns to a job
+    tool with. The store keeps score, status and resume paths per posting, so
+    a job marked `applied` stays applied across runs that re-find it.
+    """
+    st.subheader("Your jobs")
+
+    stats = board_stats()
+    if not stats["total"]:
+        st.info(
+            "No jobs yet. Run a search and everything it finds is kept here — "
+            "scores, statuses and the resumes written for each posting.",
+            icon="🔍",
+        )
+        return
+
+    a, b, c = st.columns(3)
+    a.metric("Jobs found", stats["total"])
+    b.metric("Scored", stats["scored"])
+    c.metric("With a resume", stats["with_resume"])
+
+    counts = stats["by_status"]
+    statuses = job_statuses()
+
+    with st.container(border=True):
+        left, middle, right = st.columns([2, 1, 1])
+        shown = left.multiselect(
+            "Show", statuses,
+            default=[s for s in statuses if s != "archived"],
+            format_func=lambda s: f"{STATUS_LABELS.get(s, s)} ({counts.get(s, 0)})",
+        )
+        min_score = middle.slider("Minimum score", 0, 100, 0, step=5)
+        only_resumes = right.checkbox("Only with a resume")
+
+    rows = board_jobs(
+        status=shown or None,
+        min_score=min_score or None,
+        has_resume=True if only_resumes else None,
+    )
+
+    if not rows:
+        st.caption("Nothing matches those filters.")
+        return
+
+    st.caption(f"{len(rows)} job(s)")
+
+    for row in rows:
+        _board_row(row, statuses, has_latex)
+
+
+def _board_row(row, statuses, has_latex):
+    url = row["url"]
+    with st.container(border=True):
+        heading, control = st.columns([4, 1])
+
+        title = f"**{_plain(row.get('company')) or '?'} — {_plain(row.get('title')) or '?'}**"
+        if row.get("score") is not None:
+            title += f"  ·  {row['score']:.0f}% match"
+        heading.markdown(title)
+
+        meta = [row.get("location") or "", row.get("source") or ""]
+        if row.get("scored_at") is None:
+            meta.append("not scored yet")
+        heading.caption("  ·  ".join(m for m in meta if m))
+
+        # Writing only on a real change keeps a render from re-recording the
+        # status a row already has.
+        current = row.get("status") or "new"
+        picked = control.selectbox(
+            "Status", statuses,
+            index=statuses.index(current) if current in statuses else 0,
+            format_func=lambda s: STATUS_LABELS.get(s, s),
+            key=f"status-{url}", label_visibility="collapsed",
+        )
+        if picked != current:
+            set_job_status(url, picked)
+            st.rerun()
+
+        buttons = st.columns(3)
+        pdf_path = row.get("resume_pdf")
+        if has_latex and pdf_path:
+            _download(buttons[0], pdf_path, "PDF", "application/pdf", unique=url)
+        if row.get("resume_tex"):
+            _download(buttons[1], row["resume_tex"], ".tex", "text/plain", unique=url)
+        if url:
+            buttons[2].link_button("Open posting", url)
 
 
 # ------------------------------------------------------------------ main ----
 
 def _sidebar(step):
     st.sidebar.success(f"Profile: **{st.session_state.profile_name}**")
+
+    if st.session_state.view == "board":
+        if st.sidebar.button("Back to setup", type="primary"):
+            st.session_state.view = "setup"
+            st.rerun()
+    elif st.sidebar.button("Your jobs", type="primary"):
+        st.session_state.view = "board"
+        st.rerun()
 
     st.sidebar.caption("Steps")
     for index, name in enumerate(STEPS):
@@ -539,14 +993,19 @@ def main():
     _init_state()
 
     st.title("JobScout")
-    st.caption("Find new-grad roles and tailor your resume to each one, locally.")
+    st.caption("Find roles at your level and tailor your resume to each one, locally.")
 
     step = st.session_state.step
-    st.progress((step + 1) / len(STEPS),
-                text=f"Step {step + 1} of {len(STEPS)}: {STEPS[step]}")
 
     if step > 0 and st.session_state.profile_name:
         _sidebar(step)
+
+    if st.session_state.view == "board":
+        screen_board(pdflatex_available())
+        return
+
+    st.progress((step + 1) / len(STEPS),
+                text=f"Step {step + 1} of {len(STEPS)}: {STEPS[step]}")
 
     [screen_resume, screen_about_you, screen_preferences,
      screen_tuning, screen_run][step]()

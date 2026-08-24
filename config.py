@@ -12,6 +12,25 @@ in the listing with full generateContent support while 404-ing on real calls.
 Only the live probe tells the truth.
 """
 
+# `.env` is loaded here rather than per entry point.
+#
+# The three agents each called `load_dotenv()` at import, which covered every
+# path that goes through an agent and no others. `scripts/init_profile.py`
+# does not, so importing a PDF from the command line resolved no key, dropped
+# to the heuristic floor, and produced a resume with zero experiences — a
+# silent degradation on a machine that had a perfectly good key in `.env`.
+#
+# This module is already the one that decides what "no key" means
+# (`resolve_api_key`), and everything imports it, so loading here fixes every
+# entry point at once. `load_dotenv` is idempotent, and it never overrides a
+# variable already set in the real environment.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+
 # Generation fallback chain, tried in order.
 # Free-tier quota is per-model, so each entry adds real daily capacity.
 #

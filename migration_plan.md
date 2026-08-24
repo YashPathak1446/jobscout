@@ -255,7 +255,7 @@ When changing the system, every profile-touching change has to answer:
 If a change adds a new profile field that's USER-INPUT, that's debt. Track
 it in this doc until the UI catches up.
 
-### Current debt (updated 2026-08-21)
+### Current debt (updated 2026-08-23)
 
 These fields are USER-INPUT but currently hand-edited in JSON:
 
@@ -264,9 +264,16 @@ These fields are USER-INPUT but currently hand-edited in JSON:
       requirement. Top-2 high, next-4 medium; explicit profile values win.
 - [ ] `experiences.always_include` / `never_include` — needs UI toggle
 - [ ] `projects.always_include` / `never_include` — needs UI toggle
-- [ ] `job_preferences.exclude_keywords` — needs UI checkboxes
-- [ ] `job_preferences.locations.*` — needs UI form
-- [ ] `target_roles` — needs UI multi-select
+- [x] `job_preferences.exclude_keywords` — **done (R40)**, a multi-select on
+      the preferences screen, seeded from the profile.
+- [~] `job_preferences.locations.*` — **cities and `remote_ok` done (R40)**.
+      The rest (countries, state priorities, relocation) are still JSON, but
+      the form no longer destroys them — see R40 on the merge bug.
+- [x] `target_roles` — **done (R40)**, a multi-select that keeps roles the
+      option list has never heard of.
+- [x] `job_preferences.seniority` — **done (R40)**, added once R34 made the
+      gate read it. Was not on this list because nothing read the field when
+      the list was written.
 
 These fields are DERIVED but currently hand-edited:
 

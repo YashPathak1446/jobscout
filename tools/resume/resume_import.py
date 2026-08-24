@@ -160,7 +160,14 @@ def to_schema(text: str, agent=None) -> dict:
 
 
 def _normalise(schema: dict) -> dict:
-    """Fill in missing keys so callers never have to defend against them."""
+    """
+    Fill in missing keys so callers never have to defend against them.
+
+    `_unparsed` is carried through rather than dropped. The heuristic floor
+    keeps text it could not split under that key specifically so a
+    confirmation screen can show it, and building a fixed five-key dict here
+    quietly threw it away — the hook existed and nothing could reach it.
+    """
     out = {
         "contact": dict(schema.get("contact") or {}),
         "education": list(schema.get("education") or []),
@@ -168,6 +175,9 @@ def _normalise(schema: dict) -> dict:
         "projects": list(schema.get("projects") or []),
         "skills": dict(schema.get("skills") or {}),
     }
+    unparsed = schema.get("_unparsed")
+    if unparsed:
+        out["_unparsed"] = unparsed
     for section in ("experiences", "projects"):
         for entry in out[section]:
             entry["bullets"] = [b for b in (entry.get("bullets") or []) if b]

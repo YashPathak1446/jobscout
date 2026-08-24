@@ -71,6 +71,10 @@ cp .env.example .env
 Get a Gemini API key at [aistudio.google.com](https://aistudio.google.com).
 Free tier is sufficient for development.
 
+**Optional.** Discovery, scoring and component selection need no key at all;
+without one, bullets are used exactly as you wrote them rather than rewritten
+per posting. A local [Ollama](https://ollama.com) is the free middle rung.
+
 ### 3. Set up your profile
 
 Copy the template and customize:
@@ -108,10 +112,28 @@ Generated resumes appear in `outputs/<date>/`.
 streamlit run app.py
 ```
 
-Four screens: upload your resume, add your API key and the two things a resume
-cannot state (where you live, and what you are allowed to work as), pick what
-you are looking for, then run. Progress streams while it works, and each
-result offers a download.
+Five screens: upload your resume, answer the two things a resume cannot state
+(where you live, and what you are allowed to work as), pick what you are
+looking for and at which levels, optionally tune what gets shown, then run.
+Progress streams while it works, and each result offers a download.
+
+**A PDF or Word resume is confirmed before it is used.** Everything read out
+of it — contact details, education, each experience and project with its
+bullets — is shown for correction, and you can drop an entry extraction got
+wrong entirely. Nothing is written until you agree with it, because a silent
+misparse otherwise produces bad resumes until somebody notices. A `.tex`
+upload skips that step; it is already in the pipeline's own format.
+
+**An API key is optional.** The app detects what is available — a Gemini key,
+an OpenAI-compatible key, a local Ollama, or nothing — and says plainly what
+it picked and what that costs. With nothing configured you still get jobs
+discovered, scored, and a resume per posting with the right components
+selected; only the bullet rewriting is skipped.
+
+**"Your jobs"** in the sidebar is the board: every posting ever discovered,
+with its score, its status and the resume written for it. Mark jobs applied or
+rejected and that sticks across runs — a re-discovered posting never loses
+what you recorded about it.
 
 If you already have a profile, the first screen lets you pick it and skip
 straight to running.

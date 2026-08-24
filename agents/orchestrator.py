@@ -134,6 +134,120 @@ def available_profiles() -> list:
     return list_available_profiles()
 
 
+# ------------------------------------------------------------------------
+# The board's facades (R33)
+#
+# R33 decided the app is a persistent job board rather than a run log, and
+# R35 built the store that makes that possible. These are the three things a
+# board does — list, count, and record what the user decided — exposed so the
+# view layer never learns that any of it is SQLite (R25).
+# ------------------------------------------------------------------------
+
+def job_statuses() -> tuple:
+    """What a user is allowed to say about a job."""
+    from tools.jobs.job_store import STATUSES
+    return STATUSES
+
+
+def board_jobs(status=None, min_score=None, has_resume=None, limit=200) -> list:
+    """
+    The board's rows: every job ever discovered, best-scoring first.
+
+    Unscored jobs sort to the bottom rather than as if they scored zero, which
+    matters because discovery now reaches thousands of roles (R34) and
+    analysis only looks at the top slice of them.
+    """
+    from tools.jobs.job_store import JobStore
+
+    store = JobStore()
+    try:
+        return store.query(status=status, min_score=min_score,
+                           has_resume=has_resume, limit=limit)
+    finally:
+        store.close()
+
+
+def board_stats() -> dict:
+    """Totals for the board's header. Returns zeros if no run has happened."""
+    from tools.jobs.job_store import JobStore
+
+    store = JobStore()
+    try:
+        return store.stats()
+    finally:
+        store.close()
+
+
+def set_job_status(url: str, status: str) -> None:
+    """Record what the user decided about one job. Raises on a bad status."""
+    from tools.jobs.job_store import JobStore
+
+    store = JobStore()
+    try:
+        store.set_status(url, status)
+    finally:
+        store.close()
+
+
+def seniority_levels() -> list:
+    """
+    The levels a profile can ask for, entry-level first.
+
+    R34 made the seniority gate read the profile instead of a constant, which
+    only helps if something lets a user set it. The list lives with the
+    synonym map that has to understand it, not in the form.
+    """
+    from tools.jobs.job_filter import SENIORITY_SYNONYMS
+    return list(SENIORITY_SYNONYMS.keys())
+
+
+def backend_status(gemini_key: str = "") -> dict:
+    """
+    What will rewrite bullets on the next run, and what that costs.
+
+    R33: detected, then explained — not silent, because output quality differs
+    materially between rungs, and not a mandatory choice screen, because most
+    people do not yet know enough to answer one. Returns the chosen rung, a
+    line describing it, and whether each rung is currently reachable, so the
+    UI can show what it would take to move up.
+
+    Detection touches the network (it asks whether Ollama is up), so a caller
+    rendering on every keystroke should cache it.
+    """
+    from config import (LLM_BACKEND, OLLAMA_API_URL, OLLAMA_MODEL,
+                        OPENAI_MODEL, resolve_api_key)
+    from tools.generation import llm_backends
+
+    # `resolve_api_key` is the single place that decides what "no key passed"
+    # means (R22); asking the environment directly here would be a second
+    # answer to the same question.
+    key = resolve_api_key(gemini_key or None)
+    openai_key = llm_backends.env_openai_key()
+    ollama_up = llm_backends.ollama_is_running(OLLAMA_API_URL)
+
+    configured = (LLM_BACKEND or "auto").lower()
+    if configured in ("auto", ""):
+        chosen = llm_backends.detect(gemini_key=key, openai_key=openai_key,
+                                     ollama_url=OLLAMA_API_URL)
+        forced = False
+    else:
+        chosen = configured
+        forced = True
+
+    model = {"ollama": OLLAMA_MODEL, "openai": OPENAI_MODEL}.get(chosen, "")
+    return {
+        "backend": chosen,
+        "forced": forced,
+        "description": llm_backends.describe(chosen, model),
+        "available": {
+            "gemini": bool(key),
+            "openai": bool(openai_key),
+            "ollama": ollama_up,
+            "none": True,
+        },
+    }
+
+
 class _CheckpointStop(Exception):
     """Raised when a checkpoint declines to continue. Caught inside run()."""
 

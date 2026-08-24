@@ -111,31 +111,42 @@ def save_resume(file_bytes: bytes, filename: str) -> Path:
     resume — both are facts about this project, and keeping them here is what
     lets `app.py` stay a view layer (R25).
     """
+    extracted = extract_resume(file_bytes, filename)
+    if extracted["kind"] == "latex":
+        return extracted["path"]
+    return save_extracted(extracted["schema"], extracted["source"])
+
+
+def extract_resume(file_bytes: bytes, filename: str) -> dict:
+    """
+    Read an upload far enough to show it, without committing to anything.
+
+    This is the half of importing that happens *before* a person has agreed
+    that the extraction is right. R33 requires every extracted field to be
+    confirmed before use, and a function that extracts and writes in one call
+    leaves nowhere for that to happen — which is exactly why the confirmation
+    screen did not exist for as long as it did.
+
+    Returns either:
+        {"kind": "latex", "path": Path}       already LaTeX; nothing to confirm
+        {"kind": "extracted", "schema": {...}, "source": Path}
+
+    A `.tex` upload skips confirmation deliberately. It is the user's own file
+    in the pipeline's own format, so there is nothing a model guessed at.
+    """
+    from tools.generation import llm_backends
+    from tools.resume import resume_import, tex_renderer
+
     RESUME_DIR.mkdir(parents=True, exist_ok=True)
     source = RESUME_DIR / Path(filename).name
     source.write_bytes(file_bytes)
 
     if source.suffix.lower() == ".tex":
-        return source
+        return {"kind": "latex", "path": source}
 
-    return import_to_tex(source)
-
-
-def import_to_tex(source, destination=None) -> Path:
-    """
-    Convert a PDF or DOCX resume into a `.tex` the pipeline can read.
-
-    Returns the path written. Raises if nothing usable came out, rather than
-    writing an empty resume that fails confusingly three stages later.
-    """
-    from tools.generation import llm_backends
-    from tools.resume import resume_import, tex_renderer
-
-    source = Path(source)
     text = resume_import.extract_text(source)
-
     if tex_renderer.looks_like_latex(text):
-        return source
+        return {"kind": "latex", "path": source}
 
     schema = resume_import.to_schema(text, agent=llm_backends.complete_json)
     if not (schema.get("experiences") or schema.get("projects")):
@@ -144,9 +155,38 @@ def import_to_tex(source, destination=None) -> Path:
             "A text-based PDF works best; a scanned image will not."
         )
 
+    return {"kind": "extracted", "schema": schema, "source": source}
+
+
+def save_extracted(schema: dict, source, destination=None) -> Path:
+    """
+    Render a confirmed schema to the `.tex` the pipeline reads.
+
+    The other half of `extract_resume`. Takes whatever the user corrected
+    rather than whatever the model said, which is the entire point of the
+    split.
+    """
+    from tools.resume import tex_renderer
+
+    source = Path(source)
     target = Path(destination) if destination else source.with_suffix(".tex")
     tex_renderer.write(schema, target)
     return target
+
+
+def import_to_tex(source, destination=None) -> Path:
+    """
+    Convert a PDF or DOCX resume into a `.tex`, unconfirmed.
+
+    The CLI path, where there is no screen to confirm on. The UI uses
+    `extract_resume` and `save_extracted` instead, so that a misread is caught
+    by a person rather than discovered three stages later.
+    """
+    source = Path(source)
+    extracted = extract_resume(source.read_bytes(), source.name)
+    if extracted["kind"] == "latex":
+        return extracted["path"]
+    return save_extracted(extracted["schema"], extracted["source"], destination)
 
 
 def create_profile(resume_path, name: str, force: bool = False) -> dict:
@@ -200,14 +240,37 @@ def create_profile(resume_path, name: str, force: bool = False) -> dict:
     }
 
 
+def _merge(target: dict, updates: dict) -> dict:
+    """
+    Recursive dict merge: only the leaf keys given are replaced.
+
+    The non-recursive version of this replaced a whole nested section with
+    whatever partial dict a form happened to collect, and `job_preferences.
+    locations` is where that bit. The preferences screen collects two of its
+    seven fields, so saving it dropped `countries` — which the schema requires
+    — and the profile stopped loading at all. The wizard could break a working
+    profile just by being walked through.
+
+    That is R30's shape again: a form destroying data it never showed the
+    user. The fix belongs here rather than in the caller, because every future
+    form that touches a nested section would otherwise have to remember.
+    """
+    for key, value in (updates or {}).items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge(target[key], value)
+        else:
+            target[key] = value
+    return target
+
+
 def update_profile_fields(name: str, updates: dict) -> Path:
     """
     Merge answers into an existing profile and write it back.
 
     `updates` is nested by section, e.g.
     ``{"personal_info": {"location": "Irvine, CA"}}``. Only the keys given are
-    touched, so a form that collects three fields cannot wipe the other
-    thirty.
+    touched, at any depth, so a form that collects three fields cannot wipe
+    the other thirty.
 
     Kept here rather than in the UI so that knowing a profile is JSON on disk,
     and where, stays out of the view layer (R25).
@@ -217,15 +280,55 @@ def update_profile_fields(name: str, updates: dict) -> Path:
         raise FileNotFoundError(f"No profile named '{name}'.")
 
     profile = json.loads(path.read_text(encoding="utf-8"))
-
-    for section, fields in (updates or {}).items():
-        if isinstance(fields, dict):
-            profile.setdefault(section, {}).update(fields)
-        else:
-            profile[section] = fields
+    _merge(profile, updates or {})
 
     path.write_text(json.dumps(profile, indent=2) + chr(10), encoding="utf-8")
     return path
+
+
+def read_preferences(name: str) -> dict:
+    """
+    The job-preference answers a form needs to show what is already set.
+
+    Without this the preferences screen renders its own defaults every time,
+    so a returning user who opens it and saves silently reverts whatever they
+    had tuned — the same destruction as above, one layer up. A form that
+    cannot read cannot safely write.
+    """
+    path = ROOT / "user_profiles" / f"{name}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"No profile named '{name}'.")
+
+    prefs = json.loads(path.read_text(encoding="utf-8")).get("job_preferences", {})
+    locations = prefs.get("locations", {}) or {}
+    return {
+        "target_roles": prefs.get("target_roles", []) or [],
+        "seniority": prefs.get("seniority", []) or [],
+        "exclude_keywords": prefs.get("exclude_keywords", []) or [],
+        "cities": locations.get("cities", []) or [],
+        "remote_ok": bool(locations.get("remote_ok", True)),
+    }
+
+
+def read_personal(name: str) -> dict:
+    """
+    The two answers the "about you" screen asks for, as already stored.
+
+    Same reason as `read_preferences`: a form that renders blanks and then
+    saves them overwrites whatever was there. Location and work authorisation
+    are the two fields derivation deliberately does not guess (R16), so
+    re-entering them is the user's work, and losing them on a revisit wastes
+    it twice.
+    """
+    path = ROOT / "user_profiles" / f"{name}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"No profile named '{name}'.")
+
+    personal = json.loads(path.read_text(encoding="utf-8")).get("personal_info", {})
+    return {
+        "location": personal.get("location", "") or "",
+        "visa_status": personal.get("visa_status", "") or "",
+    }
 
 
 def read_component_rules(name: str) -> dict:
