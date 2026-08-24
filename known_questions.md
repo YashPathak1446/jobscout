@@ -3475,6 +3475,48 @@ as R41's `.env` bug, and it is still open — see A4 in the current inventory.
 
 ---
 
+## R43. The untested rung, tested — the half a socket can prove
+
+**Decision:** (August 2026) `tests/test_openai_compatible_rung.py` stands up a
+stdlib HTTP server on loopback that speaks Ollama's `/api/tags` and the OpenAI
+`/v1/chat/completions` envelope, and drives the real adapter against it.
+
+**The gap.** `ollama` and `openai` are one adapter with a different base URL,
+and neither had ever completed a call. Detection was tested; the completion
+was tested against its *parsing* only, with the tests saying "No network here"
+in as many words. So the rung this project recommends to anyone without an API
+key was, strictly, never known to work — a fact that surfaced only because
+someone asked how Ollama was being used.
+
+**Why a fake server rather than a mock.** A mock of `urlopen` tests that the
+code calls the function you think it calls. This sends a real request over a
+real socket through the real code path, and the assertions are about what
+arrived: the model name in the body, `stream: false`, the `Authorization`
+header present with a key and absent without one. It needs no download, no
+account and no internet, and it runs in CI forever.
+
+Two findings came straight out of it, neither reachable from a list literal:
+
+- **A fenced reply parses.** Small local models wrap JSON in ```` ```json ````
+  far more often than Gemini does, and `_strip_code_fence` existed for that
+  reason without ever having unwrapped a reply that arrived over a wire.
+- **The A2 fix holds end to end.** Config asks for `llama3.1`, the server has
+  `llama3.1:latest`, and `complete_json` calls the one that exists.
+
+**What this deliberately does not prove.** Bullet *quality* from a small local
+model. The fake server returns whatever the test tells it to, so it can show
+that a schema round-trips and cannot show whether `llama3.1` follows a prompt
+tuned against Gemini. That is the question the README's "unmeasured" label is
+about, and it stays unanswered until a real Ollama runs.
+
+So this closes the plumbing half of A1 and leaves the quality half open. Worth
+being precise about, because "we tested Ollama" would be exactly the kind of
+claim R42 was written about.
+
+16 new tests. 333 pass.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format
