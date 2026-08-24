@@ -123,6 +123,23 @@ def validate_resume_output(data: dict, master_resume_text: str = "", bullet_budg
         result.add_error("'projects' must be a list")
         return result
 
+    # Every entry must be an object, checked here and returned on rather than
+    # defended against downstream.
+    #
+    # llama3.1:8b returned `"experiences": ["exp_sorenson", ...]` — a list of
+    # id strings where the schema says objects. Valid JSON, wrong contract, and
+    # it only started arriving once R45 asked the server for JSON and stopped
+    # the replies failing at the parse. Three separate consumers then crashed
+    # on `.get`, each looking like its own bug; they were one missing gate.
+    # A structural problem belongs at the structural check.
+    for section in ("experiences", "projects"):
+        for position, component in enumerate(data.get(section) or [], 1):
+            if not isinstance(component, dict):
+                result.add_error(
+                    f"{section[:-1].title()} {position} must be an object with "
+                    f"id and bullets, not {type(component).__name__}")
+                return result
+
     # Use budget-aware or generic validation based on whether budgets are provided
     if bullet_budgets:
         _validate_experiences_with_budget(
@@ -147,6 +164,7 @@ def validate_resume_output(data: dict, master_resume_text: str = "", bullet_budg
 
     if master_resume_text:
         _validate_metric_preservation(data, master_resume_text, result)
+        _validate_no_invented_metrics(data, master_resume_text, result)
 
     result.metrics = {
         "total_experiences": len(data.get("experiences", [])),
@@ -533,6 +551,116 @@ def _validate_metric_preservation(data: dict, master_text: str, result: Validati
     if missing_metrics and len(missing_metrics) > 3:
         result.add_warning(
             f"Several metrics from master resume not found in output: {', '.join(missing_metrics[:5])}"
+        )
+
+
+def _normalise_for_metric_search(text: str) -> str:
+    """
+    Flatten text so a figure matches however it was typeset.
+
+    The master is LaTeX and writes its numbers in math mode: `$\\sim 503$ms`,
+    `$\\sim 10$ minutes`, `$\\sim 3.6$x`. A generated bullet writes `503ms`,
+    `10 min`, `3.6x`. Comparing those raw finds nothing in common, because a
+    `$` sits between the number and its unit.
+
+    That mattered: the first version of this check flagged 13 of 16 past
+    Gemini resumes as fabricated, and every one was real — the markup, not
+    the model. A fabrication check that cries wolf is worse than none, because
+    it teaches you to click past the error that eventually matters.
+
+    So: escapes become their character, LaTeX commands are dropped (they carry
+    no digits), math delimiters go, and whitespace goes.
+    """
+    for escape, plain in (("\\%", "%"), ("\\$", "$"), ("\\&", "&"),
+                          ("\\_", "_"), ("\\#", "#")):
+        text = text.replace(escape, plain)
+
+    # A resume writes "under a second"; a tailored bullet writes "<1 sec".
+    # Same claim, and the numeral is the better line for it — so the words
+    # are folded to the numeral rather than counted as an invention. Found by
+    # the audit: this was the only remaining false positive across 16 past
+    # resumes, and it appeared in four of them.
+    for words, numeral in ((r"\ba second\b", "1 second"), (r"\bone second\b", "1 second"),
+                           (r"\ba minute\b", "1 minute"), (r"\bone minute\b", "1 minute"),
+                           (r"\ban hour\b", "1 hour"), (r"\bone hour\b", "1 hour")):
+        text = re.sub(words, numeral, text, flags=re.IGNORECASE)
+
+    text = re.sub(r"\\[a-zA-Z]+", " ", text)      # \sim, \times, \leftrightarrow
+    text = text.replace("$", " ")                 # math-mode delimiters
+    return re.sub(r"\s+", "", text.lower())
+
+
+def _metric_variants(metric: str) -> set:
+    """
+    The forms one figure may legitimately take between resume and bullet.
+
+    `36M+` in a bullet is `36M-article` in the master; `30K+ documents` is
+    `30K+ web documents`. The number and its unit are the durable part, so the
+    trailing noun and a trailing `+` are both allowed to differ.
+    """
+    base = _normalise_for_metric_search(metric)
+    variants = {base, base.replace("+", "")}
+
+    head = re.match(r"[\d.]+[a-z%]*\+?", base)
+    if head:
+        variants.add(head.group(0))
+        variants.add(head.group(0).replace("+", ""))
+
+    return {v for v in variants if v}
+
+
+def find_invented_metrics(data: dict, master_text: str) -> List[tuple]:
+    """
+    Numbers in the output that appear nowhere in the master resume.
+
+    The inverse of `_validate_metric_preservation`, and the direction that
+    matters. That function asks whether the master's metrics survived, which a
+    resume of pure invention passes trivially — every master metric is equally
+    absent whether the model dropped them or replaced them with new ones.
+
+    R44 is why this exists: llama3.1:8b returned "30% reduction in development
+    time" and "25% increase in application performance" for work whose real
+    bullets contain neither figure. A resume is a factual claim about a person,
+    so a number the resume never made is not a style problem.
+
+    Deliberately conservative. Only metrics `is_significant_metric` accepts are
+    checked, and a metric counts as invented only when its normalised form
+    appears nowhere in the whole master — not merely somewhere else in it.
+    Flagging a real achievement would be worse than missing an invented one,
+    because it would train someone to ignore this error.
+
+    Returns (component_id, metric, bullet) for each, so the message can point
+    at the sentence rather than just the number.
+    """
+    master = _normalise_for_metric_search(master_text)
+    invented = []
+
+    for section in ("experiences", "projects"):
+        for component in data.get(section) or []:
+            # Malformed shape is the structural validators' to report; this
+            # one only has an opinion about numbers.
+            if not isinstance(component, dict):
+                continue
+            component_id = component.get("id") or component.get("name") or "?"
+            for bullet in component.get("bullets") or []:
+                if not isinstance(bullet, str):
+                    continue
+                for metric in extract_metrics(bullet):
+                    if not is_significant_metric(metric):
+                        continue
+                    if not any(v in master for v in _metric_variants(metric)):
+                        invented.append((component_id, metric, bullet))
+
+    return invented
+
+
+def _validate_no_invented_metrics(data: dict, master_text: str, result: ValidationResult):
+    """An invented figure is an error, not a warning. See `find_invented_metrics`."""
+    for component_id, metric, bullet in find_invented_metrics(data, master_text):
+        result.add_error(
+            f"{component_id}: '{metric}' does not appear anywhere in your resume. "
+            f"A tailored bullet may reword your work; it may not invent a number.\n"
+            f"    → {bullet[:120]}"
         )
 
 

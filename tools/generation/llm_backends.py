@@ -151,26 +151,42 @@ def call_chat_json(prompt: str, base_url: str, model: str, api_key: str = None) 
     Raises on transport or parse failure so the caller can fall down the
     ladder rather than silently producing an empty resume.
     """
-    body = json.dumps({
+    payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         # Low but not zero: bullet rewriting under hard length constraints
         # wants consistency, and some providers reject exactly 0.
         "temperature": 0.2,
         "stream": False,
-    }).encode("utf-8")
+        # Ask the server for JSON rather than asking the model nicely and
+        # scraping whatever markup it chose. Measured on llama3.1:8b: without
+        # this the reply is `{"n": 5}` in backticks, with it the reply is bare
+        # JSON — and it came back three times faster. This is the right fix
+        # for R44's parse failures; unwrapping prose after the fact is not.
+        "response_format": {"type": "json_object"},
+    }
 
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    request = urllib.request.Request(
-        f"{base_url.rstrip('/')}/chat/completions", data=body, headers=headers)
+    def _post(body_dict):
+        request = urllib.request.Request(
+            f"{base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(body_dict).encode("utf-8"), headers=headers)
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
 
-    with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    try:
+        response_payload = _post(payload)
+    except urllib.error.HTTPError:
+        # One adapter serves every OpenAI-compatible provider, and not all of
+        # them accept `response_format`. A provider that rejects it should
+        # cost a retry, not the run.
+        payload.pop("response_format")
+        response_payload = _post(payload)
 
-    text = payload["choices"][0]["message"]["content"].strip()
+    text = response_payload["choices"][0]["message"]["content"].strip()
     return json.loads(_strip_code_fence(text))
 
 

@@ -102,10 +102,6 @@ class GenerationAgent:
         self.mock_mode = mock_mode
         self.api_key = api_key
 
-        self.llm_cache = LLMCache(
-            cache_dir=LLM_CACHE_DIR,
-            enabled=LLM_CACHE_ENABLED and use_cache,
-        )
         self.last_model_used = None
 
         # Resolve pdflatex once per run, not once per resume: find_pdflatex
@@ -118,7 +114,6 @@ class GenerationAgent:
         logger.info("📝 Initializing Generation Agent...")
         logger.info(f"Profile: {profile.personal_info.name}")
         logger.info(f"Mock mode: {mock_mode}")
-        logger.info(f"Cache: {'enabled' if self.llm_cache.enabled else 'disabled'}")
 
         if not generate_pdf:
             logger.info("PDF: disabled (--no-pdf)")
@@ -139,6 +134,17 @@ class GenerationAgent:
         # downgrade to something nobody wants. Now the absence of a key picks
         # the best backend that *is* available, and says so.
         self.llm_backend = self._resolve_backend(api_key) if not mock_mode else "mock"
+
+        # Built after the rung is resolved, because the rung is part of the
+        # key: a cached Ollama reply must never be served to a run asking
+        # Gemini, which is how a llama3.1 answer was once read as a Gemini
+        # regression (R45).
+        self.llm_cache = LLMCache(
+            cache_dir=LLM_CACHE_DIR,
+            enabled=LLM_CACHE_ENABLED and use_cache,
+            backend=self.llm_backend,
+        )
+        logger.info(f"Cache: {'enabled' if self.llm_cache.enabled else 'disabled'}")
 
         logger.info("✅ Ready to generate resumes")
     
@@ -257,7 +263,8 @@ class GenerationAgent:
 
                     continue
 
-                validation = validate_resume_output(tailored, bullet_budgets=bullet_budgets)
+                validation = validate_resume_output(tailored, master_resume_text=self._master_resume_text(),
+                                            bullet_budgets=bullet_budgets)
                 self._validate_selected_ids(tailored, budgeted_components, validation)
 
                 filename = self._generate_filename(
@@ -420,21 +427,116 @@ class GenerationAgent:
     # BULLET LENGTH FITTING (deterministic post-LLM compression)
     # =========================================================================
 
-    def _apply_bullet_fitting(self, tailored: Dict) -> Dict:
+    def _master_resume_text(self) -> str:
         """
-        Run every bullet through the deterministic fit function.
+        The master resume as text, for the invented-metric check.
 
-        The LLM produces content; this step handles length precision. Bullets
-        that overshoot a good zone get compressed deterministically. Provider-
-        agnostic — works the same regardless of which LLM produced the text.
+        Cached: validation runs per job, sometimes twice with the repair loop,
+        and this is the same file every time.
+
+        Its absence is why that check never ran. `validate_resume_output` takes
+        `master_resume_text` and skips the metric checks when it is empty, and
+        no call site had ever passed it — so the guard was written, shipped and
+        dead for as long as it existed (R31 and R41 are the same story).
+        """
+        if getattr(self, "_master_text_cache", None) is None:
+            try:
+                with open(self.resume_parser.resume_path, encoding="utf-8") as handle:
+                    self._master_text_cache = handle.read()
+            except OSError as exc:
+                logger.warning(f"   Could not read master resume for validation: {exc}")
+                self._master_text_cache = ""
+        return self._master_text_cache
+
+    def _restore_factual_fields(self, tailored: Dict) -> Dict:
+        """
+        Take company, title, dates and location back from the master resume.
+
+        These are records, not writing. The prompt asks the model to echo them
+        unchanged and it has no reason to alter them — but "no reason to" is
+        not a guarantee, and the LaTeX builder reads them straight out of the
+        model's reply. llama3.1:8b returned `"dates": "Summer 2022"` for work
+        done June–Oct 2025 (R44); one successful parse and that date was on a
+        resume.
+
+        The model still chooses *which* components appear and rewrites their
+        bullets. It just no longer supplies any field whose correct value is
+        already known, which removes the whole class rather than detecting it
+        afterwards. Anything whose id cannot be matched is left alone — an
+        unknown id is a different failure, and `_validate_selected_ids`
+        already reports it.
 
         Mutates `tailored` in place. Returns the same dict.
         """
+        lookups = (
+            ("experiences", self.resume_parser.get_experience_by_id,
+             ("company", "title", "location", "dates")),
+            ("projects", self.resume_parser.get_project_by_id,
+             ("name", "tech", "dates")),
+        )
+
+        if not isinstance(tailored, dict):
+            return tailored
+
+        restored = 0
+        for section, lookup, fields in lookups:
+            for component in tailored.get(section) or []:
+                # This runs before validation, so it has to survive anything a
+                # model can emit. llama3.1:8b returned a list of strings where
+                # the schema says objects — valid JSON, wrong shape — and an
+                # unguarded .get() turned a resume that should have been
+                # rejected into a crashed run. Malformed input is validation's
+                # to report, not this function's to trip over.
+                if not isinstance(component, dict):
+                    continue
+                source = lookup(component.get("id", ""))
+                if source is None:
+                    continue
+                for field in fields:
+                    truth = getattr(source, field, None)
+                    if truth is None:
+                        continue
+                    if component.get(field) != truth:
+                        component[field] = truth
+                        restored += 1
+
+        if restored:
+            logger.info(f"   🔒 Restored {restored} factual field(s) from your resume")
+
+        return tailored
+
+    def _apply_bullet_fitting(self, tailored: Dict) -> Dict:
+        """
+        Normalise a model's reply: restore the facts, then fit the bullets.
+
+        The LLM produces content; this step handles everything deterministic
+        that follows. Bullets that overshoot a good zone get compressed, and
+        fields the model had no business rewriting are taken back from the
+        master resume first.
+
+        The restore lives here rather than at the five call sites because
+        every path that post-processes model output already comes through
+        this one function, and a guard that can be skipped by adding a sixth
+        path is the kind that eventually is.
+
+        Provider-agnostic — works the same regardless of which LLM produced
+        the text. Mutates `tailored` in place. Returns the same dict.
+        """
+        self._restore_factual_fields(tailored)
+
         adjusted = 0
         unchanged = 0
         flagged = 0
 
         for exp in tailored.get('experiences', []):
+            # A model can return a list of strings where the schema says
+            # objects — valid JSON, wrong contract. Skipping here lets
+            # validation report that as errors and route the resume to
+            # needs_review, which is what the rest of this pipeline does with
+            # bad model output. Crashing the run is the one response that
+            # loses the other jobs too.
+            if not isinstance(exp, dict):
+                continue
             new_bullets = []
             for b in exp.get('bullets', []):
                 if not isinstance(b, str):
@@ -451,6 +553,8 @@ class GenerationAgent:
             exp['bullets'] = new_bullets
 
         for proj in tailored.get('projects', []):
+            if not isinstance(proj, dict):
+                continue
             new_bullets = []
             for b in proj.get('bullets', []):
                 if not isinstance(b, str):
@@ -1066,11 +1170,13 @@ Source bullets:
             logger.warning(f"   ⚠️  Expected {expected_proj} projects but got {proj_count}")
 
         if exp_count > 0:
-            exp_ids = [exp.get('id') or exp.get('title', 'Unknown') for exp in tailored.get('experiences', [])]
+            exp_ids = [exp.get('id') or exp.get('title', 'Unknown')
+                       for exp in tailored.get('experiences', []) if isinstance(exp, dict)]
             logger.debug(f"   📋 Experiences: {', '.join(exp_ids)}")
 
         if proj_count > 0:
-            proj_ids = [proj.get('id') or proj.get('name', 'Unknown') for proj in tailored.get('projects', [])]
+            proj_ids = [proj.get('id') or proj.get('name', 'Unknown')
+                        for proj in tailored.get('projects', []) if isinstance(proj, dict)]
             logger.debug(f"   📋 Projects: {', '.join(proj_ids)}")
 
     def _resolve_backend(self, api_key) -> str:
@@ -1304,7 +1410,8 @@ Source bullets:
             # Deterministic length fitting — LLM produces content, this handles precision.
             tailored = self._apply_bullet_fitting(tailored)
 
-            validation = validate_resume_output(tailored, bullet_budgets=bullet_budgets)
+            validation = validate_resume_output(tailored, master_resume_text=self._master_resume_text(),
+                                            bullet_budgets=bullet_budgets)
             self._validate_selected_ids(tailored, selected, validation)
 
             if validation.valid:
@@ -1331,7 +1438,8 @@ Source bullets:
             # Fit the repair output too
             repaired = self._apply_bullet_fitting(repaired)
 
-            repair_validation = validate_resume_output(repaired, bullet_budgets=bullet_budgets)
+            repair_validation = validate_resume_output(repaired, master_resume_text=self._master_resume_text(),
+                                                   bullet_budgets=bullet_budgets)
             self._validate_selected_ids(repaired, selected, repair_validation)
 
             if repair_validation.valid:
@@ -1460,6 +1568,11 @@ Source bullets:
     """
 
         for exp in tailored.get('experiences', []):
+            # needs_review resumes are still written to disk, so this runs on
+            # output validation has already rejected. Skip what it cannot
+            # render rather than losing the whole file.
+            if not isinstance(exp, dict):
+                continue
             verbatim = bool(exp.get('_already_latex'))
             title = self._escape_latex(exp.get('title', 'Unknown Title'))
             company = self._escape_latex(exp.get('company', 'Unknown Company'))
@@ -1492,6 +1605,8 @@ Source bullets:
     """
 
         for proj in tailored.get('projects', []):
+            if not isinstance(proj, dict):
+                continue
             verbatim = bool(proj.get('_already_latex'))
             name = self._escape_latex(proj.get('name', 'Unknown Project'))
             tech = self._escape_latex(proj.get('tech', ''))
@@ -1771,14 +1886,17 @@ Source bullets:
         expected_exp_ids = self._resolve_expected_experience_ids(selected)
         expected_proj_ids = self._resolve_expected_project_ids(selected)
 
+        # Non-dict entries are a contract violation `validate_resume_output`
+        # already reports; this check is about *which* ids came back, and it
+        # should not be the thing that crashes on a malformed one.
         actual_exp_ids = [
             exp.get("id")
-            for exp in tailored.get("experiences", [])
+            for exp in tailored.get("experiences", []) if isinstance(exp, dict)
         ]
 
         actual_proj_ids = [
             proj.get("id")
-            for proj in tailored.get("projects", [])
+            for proj in tailored.get("projects", []) if isinstance(proj, dict)
         ]
 
         self._validate_id_list(

@@ -6,11 +6,22 @@ pattern. Purpose: during development you re-run the same jobs repeatedly,
 and every rerun burns free-tier quota on prompts whose answers haven't
 changed. Keyed on the prompt text, an identical rerun costs zero requests.
 
-Keyed on the prompt ONLY, not (prompt, model). If gemini-3.5-flash answered
-a prompt yesterday and today the chain falls through to flash-lite, you still
-want the cached answer — the point is avoiding the call. The model that
-actually produced the response is recorded in the payload so you can tell
-later which model's output you're looking at.
+Keyed on (prompt, backend) — not on the exact model.
+
+The original reasoning still holds *within* a provider: if gemini-3.5-flash
+answered yesterday and today the chain falls through to flash-lite, you want
+the cached answer, because the point is avoiding the call. That reasoning was
+written before R37 turned one provider into a ladder of four, and it does not
+survive the change. Ollama's reply to a prompt is not a substitute for
+Gemini's.
+
+It bit exactly as you would expect: three llama3.1 responses in the cache were
+served to a run pinned to Gemini, and the result was read as a regression in
+Gemini's output until the payload's recorded model gave it away (R45). That is
+R11's finding — the embedding cache needed the model in its key — arriving a
+second time in the sibling module that did not get the lesson.
+
+The rung, not the model id, so a fallback within a provider still hits.
 """
 
 import hashlib
@@ -26,8 +37,10 @@ logger = logging.getLogger(__name__)
 class LLMCache:
     """File-backed cache of parsed LLM JSON responses, keyed by prompt hash."""
 
-    def __init__(self, cache_dir: str = ".cache/llm", enabled: bool = True):
+    def __init__(self, cache_dir: str = ".cache/llm", enabled: bool = True,
+                 backend: str = ""):
         self.enabled = enabled
+        self.backend = backend or "default"
         self.cache_dir = Path(cache_dir)
         if self.enabled:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -36,7 +49,8 @@ class LLMCache:
         self.misses = 0
 
     def _key(self, prompt: str) -> str:
-        return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:32]
+        seed = f"{self.backend}|{prompt}"
+        return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
 
     def _path(self, prompt: str) -> Path:
         return self.cache_dir / f"{self._key(prompt)}.json"

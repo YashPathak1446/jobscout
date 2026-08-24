@@ -323,13 +323,12 @@ release; a doctor's does not. It also gives item 7's detection a home.
 
 ## Not scheduled
 
-**Q6** — long master bullets. The deferral premise has changed: R44 saw a
-model invent metrics, a date and technologies outright, so a
-content-preservation checker is no longer speculative. Half the instrument
-already exists — `_validate_metric_preservation` is written and has never been
-called, because no call site passes `master_resume_text` — and it checks the
-wrong direction: it finds master metrics missing from the output, not invented
-metrics present in it.
+**Q6** — long master bullets. **Answered by R45 for the fabrication half.**
+`find_invented_metrics` now checks the direction that matters — a figure in
+the output that is nowhere in the master — and it is wired, calibrated against
+16 real resumes, and an error rather than a warning. What remains of Q6 is the
+original narrow question about metric survival when a *long* master bullet is
+compressed, which is still unmeasured and still has no observed failure.
 
 ---
 
@@ -3622,6 +3621,126 @@ it most.
 6 new tests. The measurement script is not committed: it pins config and
 replays a fixed input, which is a thing to re-run by hand, not a thing to keep
 green in CI.
+
+---
+
+## R45. Making fabrication impossible, then visible, then irrelevant
+
+**Decision:** (August 2026) R44 watched a model invent a job. This is the fix,
+in four layers, done in that order because each one makes the next safe.
+
+| | Gemini | llama3.1:8b |
+|---|---|---|
+| before | 3 valid | 0 valid, 3 needs_review, 11/13 bullets untouched |
+| after | **3 valid** | 0 valid, 3 needs_review, **0 crashed** |
+
+Gemini is unchanged, which was the point: a guard that costs the working
+backend anything is not a guard, it is a trade.
+
+### 1. Fields with a known correct value are no longer asked for
+
+Dates, company, title and location are records, not writing, and the LaTeX
+builder read them straight out of the model's reply — so `"dates": "Summer
+2022"` was one successful parse from the page. `_restore_factual_fields` takes
+all four back from the master resume, keyed by the component id the model
+echoes.
+
+This removes the class rather than detecting it. The model still chooses which
+components appear and still rewrites their bullets; it simply no longer
+supplies any field whose right answer was already known.
+
+It lives inside `_apply_bullet_fitting` rather than at the five call sites
+that post-process model output, because a guard that can be skipped by adding
+a sixth path eventually is.
+
+### 2. Figures inside bullets are checked against the resume
+
+Bullets are the part the model genuinely has to write, so those need
+detection rather than prevention. `find_invented_metrics` is the inverse of
+the `_validate_metric_preservation` that has sat unused in this file for
+months: that one asks whether the master's numbers survived, which a resume of
+pure invention passes trivially, since every master metric is equally absent
+whether it was dropped or replaced.
+
+An invented figure is an **error**, not a warning. A resume is a factual claim
+about a person.
+
+**Calibrating it was most of the work, and the first version was wrong.** It
+flagged 13 of 16 past Gemini resumes as fabricated. Every one was a false
+positive: the master writes its numbers in LaTeX math mode — `$\sim 503$ms`,
+`$\sim 10$ minutes`, `$\sim 3.6$x` — and a `$` between the number and its unit
+defeats a substring search. Four more survived that fix, all the same case:
+the master says "to under a second" and the bullet says "to <1 sec", which is
+the same claim and the better line.
+
+Worth stating plainly, because the temptation was to ship the first version
+and call 13/16 a finding: **a fabrication check that cries wolf is worse than
+no check**, because it teaches you to click past the error that eventually
+matters. The audit existed to catch that, and did.
+
+**The audit's real result: Gemini invented nothing.** 0 of 16 resumes across
+6 runs, once the check could tell markup from a claim.
+
+### 3. Parsing fixed at the protocol, not with a regex
+
+R44 left the prose-preamble case deliberately unhandled, because the parse
+failure was the only thing keeping fabricated content off resumes. With
+layers 1 and 2 in place that is no longer load-bearing, so it could be fixed
+properly: `response_format: {"type": "json_object"}` on the request.
+
+Measured on llama3.1:8b: without it the reply is backtick-wrapped and takes
+6.1s; with it the reply is bare JSON in 2.1s. Asking the server for JSON beats
+asking the model nicely and scraping the result. A provider that rejects the
+field costs one retry without it, since the same adapter serves every
+OpenAI-compatible endpoint.
+
+### 4. What that exposed: three crashes hiding behind a parse error
+
+With replies finally parsing, llama3.1 returned `"experiences": ["exp_sorenson",
+...]` — a list of id strings where the schema says objects. Valid JSON, wrong
+contract, and it crashed `_restore_factual_fields`, then `_apply_bullet_fitting`,
+then `find_invented_metrics`, then `_validate_selected_ids`, then the LaTeX
+builder. Five sites, each looking like its own bug.
+
+They were one missing gate. `validate_resume_output` now rejects a non-object
+component up front and returns, the way it already did for a missing key. The
+per-site guards stay as belt-and-braces, but the structural check is where a
+structural problem belongs.
+
+This is the shape worth remembering: **fixing the parse did not introduce
+these, it revealed them.** They had been unreachable behind a failure that
+happened earlier.
+
+### And a cache that served one model's answers as another's
+
+The clean measurement was nearly reported as a Gemini regression: a run pinned
+to Gemini came back 0 valid, and the errors were budget violations that looked
+like Gemini had got worse. It had not. `LLMCache` keys on the prompt alone, so
+three llama3.1 responses were being served to it.
+
+The docstring defended that on purpose — a fallback from gemini-3.5-flash to
+flash-lite should still hit — and the reasoning was sound when written, before
+R37 turned one provider into a ladder of four. Ollama's answer is not a
+substitute for Gemini's.
+
+Keyed on (backend, prompt) now: the rung rather than the model id, so a
+fallback within a provider still hits. **This is R11 arriving a second time** —
+that entry put the model in the embedding cache's key for this exact reason,
+and the sibling module never got the lesson. Existing entries are keyed the
+old way and are simply missed once.
+
+### What is still true about llama3.1:8b
+
+It cannot produce a valid resume here: bullet-count budgets ignored, lengths
+outside every zone. What changed is that it now fails **safely and visibly** —
+no fabricated dates, no invented figures, no crashes, everything routed to
+needs_review. R37 predicted a smaller model would follow this prompt less
+exactly and the validation loop would catch the difference. It does now.
+
+Whether a larger local model does better is unmeasured, and the harness for
+asking exists.
+
+16 new tests, 355 pass, baselines clean.
 
 ---
 
