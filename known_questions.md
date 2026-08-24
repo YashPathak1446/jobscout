@@ -3901,6 +3901,83 @@ whole point is not crying wolf:
 
 ---
 
+## R48. From a list to a log
+
+**Decision:** (August 2026) The board gains the filters the store always had,
+paging with a total, and a `status_history` table that lets ghosting derive
+itself.
+
+A list shows what you have; a log shows what has **happened**. That needs two
+things the board did not have: a way to find one row among thousands, and a
+record of when each thing changed.
+
+### The filters existed and were never offered
+
+`JobStore.query` has taken `company` and `source` since the day it was
+written, and no screen ever passed either. Three timestamps were stored and
+none were displayed. That was survivable while the board held 23 jobs from
+three employers; R46 made it 97 from forty-nine, and it will keep growing,
+because the store never forgets.
+
+Added to the store rather than the screen, so the view layer still builds no
+SQL: multi-value `company` and `source`, a `search` over title and company,
+`SORTS` as a named map, `offset`, `count()` and `facets()`.
+
+Two details worth keeping:
+
+- **The search term is escaped.** A user typing `100%` wants jobs mentioning a
+  percentage, not every row in the table, and an unescaped `LIKE` gives them
+  the latter. There is a test for `%` and one for `_`.
+- **An unknown sort falls back rather than raising.** The keys are a fixed map
+  and a stale bookmark should not be an error — and it means nothing a caller
+  passes can reach the ORDER BY.
+
+### Paging says how much is hidden
+
+`limit` was 200 with no total, so "200 jobs" and "all 412 of your jobs" looked
+identical. That is the silent-truncation shape this project keeps finding, and
+C3 was on the inventory as its own item; it is closed here because a page
+without a count is the same bug. The board now reads **Showing 1–25 of 97**.
+
+### Ghosting is derived, never clicked
+
+`ghosted` was the status you asked for, and it should not be a button. It
+means *applied, and silence since* — a fact about time, not a decision. A
+stored status would go stale the moment a reply arrived, and would need you to
+notice the anniversary yourself, which is the work a log is supposed to do for
+you.
+
+So `status_history` records what changed and when, `ghosted(after_days=28)`
+computes the rest, and a job that moved on from `applied` drops out by
+construction — its current status is no longer `applied`, so it cannot be
+silent.
+
+The history is worth having on its own: it answers how long between applying
+and hearing back, across everything, which nothing in this project could
+answer before.
+
+### A bug the tests would not have found
+
+`ghosted_jobs(after_days=0)` returned the 28-day answer. The facade read
+`after_days or GHOSTED_AFTER_DAYS`, and `0 or 28` is `28` — so a legitimate
+threshold was silently swapped for a different question.
+
+Found by calling it with 0 and disbelieving the result, not by reading it.
+Same family as the rest of R47: a wrong answer that looks exactly like a right
+one. There is now a test that pins zero specifically.
+
+### Verified
+
+28 new tests. The screen was driven in the running app: search narrowed 97 to
+17, paging reported *Showing 1–25 of 97*, dates render as "found yesterday",
+sources as "Greenhouse", and a backdated application surfaced the ghosted
+banner with its own expander. The store was restored afterwards — the test
+statuses and history rows were written to the real board and are gone.
+
+402 pass, baselines clean.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

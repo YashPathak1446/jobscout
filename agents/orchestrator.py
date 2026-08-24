@@ -149,22 +149,99 @@ def job_statuses() -> tuple:
     return STATUSES
 
 
-def board_jobs(status=None, min_score=None, has_resume=None, limit=200) -> list:
+def board_jobs(status=None, min_score=None, has_resume=None, company=None,
+               source=None, search=None, sort="best", limit=50, offset=0) -> list:
     """
-    The board's rows: every job ever discovered, best-scoring first.
+    The board's rows: every job ever discovered, ordered as asked.
 
     Unscored jobs sort to the bottom rather than as if they scored zero, which
-    matters because discovery now reaches thousands of roles (R34) and
+    matters because discovery reaches thousands of roles (R34, R46) and
     analysis only looks at the top slice of them.
+
+    Every filter here already existed in the store and none of them had ever
+    been offered to a screen. `limit` defaults small because it is now paged —
+    see `board_total`, without which a page cap looks exactly like running out
+    of jobs.
     """
     from tools.jobs.job_store import JobStore
 
     store = JobStore()
     try:
         return store.query(status=status, min_score=min_score,
-                           has_resume=has_resume, limit=limit)
+                           has_resume=has_resume, company=company,
+                           source=source, search=search, sort=sort,
+                           limit=limit, offset=offset)
     finally:
         store.close()
+
+
+def board_total(status=None, min_score=None, has_resume=None, company=None,
+                source=None, search=None) -> int:
+    """How many jobs match, ignoring the page window."""
+    from tools.jobs.job_store import JobStore
+
+    store = JobStore()
+    try:
+        return store.count(status=status, min_score=min_score,
+                           has_resume=has_resume, company=company,
+                           source=source, search=search)
+    finally:
+        store.close()
+
+
+def board_filters() -> dict:
+    """
+    The companies and sources worth offering, with counts, commonest first.
+
+    Read from the store so a board that has just learned a new ATS offers it
+    without anyone editing a list in the view layer.
+    """
+    from tools.jobs.job_store import JobStore
+
+    store = JobStore()
+    try:
+        return store.facets()
+    finally:
+        store.close()
+
+
+def ghosted_jobs(after_days=None) -> list:
+    """
+    Applied to, and silent since — computed, never clicked.
+
+    Ghosting is not a decision anyone makes; it is what happens to a job while
+    nobody does anything. A stored status would go stale the moment a reply
+    arrived, and would need the user to notice the anniversary themselves,
+    which is the work a log is supposed to do for them.
+    """
+    from tools.jobs.job_store import GHOSTED_AFTER_DAYS, JobStore
+
+    store = JobStore()
+    try:
+        # `if after_days is None`, not `or` — a threshold of 0 days is a
+        # legitimate ask ("everything I have applied to and not heard about")
+        # and `0 or 28` silently answers a different question.
+        window = GHOSTED_AFTER_DAYS if after_days is None else after_days
+        return store.ghosted(window)
+    finally:
+        store.close()
+
+
+def job_history(url: str) -> list:
+    """Every status one job has held, oldest first."""
+    from tools.jobs.job_store import JobStore
+
+    store = JobStore()
+    try:
+        return store.history(url)
+    finally:
+        store.close()
+
+
+def board_sorts() -> list:
+    """The orderings the board may ask for. The view never builds SQL."""
+    from tools.jobs.job_store import JobStore
+    return list(JobStore.SORTS)
 
 
 def board_stats() -> dict:

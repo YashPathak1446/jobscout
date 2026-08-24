@@ -27,7 +27,7 @@ Location: jobscout_v3/tools/jobs/job_store.py
 
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,11 @@ DEFAULT_DB = ROOT / "data" / "jobs.db"
 # What a user can say about a job. `new` is the only one the pipeline sets;
 # the rest are theirs.
 STATUSES = ("new", "seen", "applied", "rejected", "archived")
+
+# How long after applying silence starts to mean something. Four weeks is the
+# point most advice treats a non-answer as an answer; it is a default, not a
+# fact, which is why `ghosted_after_days` is a parameter everywhere below.
+GHOSTED_AFTER_DAYS = 28
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -60,6 +65,23 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_score  ON jobs(score);
 CREATE INDEX IF NOT EXISTS idx_jobs_seen   ON jobs(last_seen);
+
+-- When each status was set, not just what it is now.
+--
+-- "Ghosted" is the status this board most wants and the one a user should
+-- never have to click: it means "applied, and silence since", which is a fact
+-- about *time*, not a decision. Without a record of when a status changed
+-- there is nothing to measure that silence from — so the board could offer a
+-- `ghosted` button and would be asking the user to do the arithmetic.
+--
+-- It also answers the question a log exists for: how long between applying
+-- and hearing back, across everything.
+CREATE TABLE IF NOT EXISTS status_history (
+    url        TEXT NOT NULL,
+    status     TEXT NOT NULL,
+    changed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_history_url ON status_history(url, changed_at);
 """
 
 
@@ -145,11 +167,59 @@ class JobStore:
         self._db.commit()
 
     def set_status(self, url: str, status: str) -> None:
-        """Record what the *user* decided. Rejects anything not in STATUSES."""
+        """
+        Record what the *user* decided, and when.
+
+        The timestamp is the point: `applied` alone cannot tell you a reply is
+        overdue, and asking someone to remember the date defeats the purpose
+        of keeping a log for them.
+        """
         if status not in STATUSES:
             raise ValueError(f"Unknown status {status!r}; expected one of {STATUSES}")
+
         self._db.execute("UPDATE jobs SET status = ? WHERE url = ?", (status, url))
+        self._db.execute(
+            "INSERT INTO status_history (url, status, changed_at) VALUES (?,?,?)",
+            (url, status, _now()))
         self._db.commit()
+
+    def history(self, url: str) -> list:
+        """Every status this job has held, oldest first."""
+        return [
+            dict(row) for row in self._db.execute(
+                "SELECT status, changed_at FROM status_history WHERE url = ?"
+                " ORDER BY changed_at", (url,))
+        ]
+
+    def status_changed_at(self, url: str, status: str):
+        """When a job most recently entered a status, or None."""
+        row = self._db.execute(
+            "SELECT changed_at FROM status_history WHERE url = ? AND status = ?"
+            " ORDER BY changed_at DESC LIMIT 1", (url, status)).fetchone()
+        return row["changed_at"] if row else None
+
+    def ghosted(self, after_days: int = GHOSTED_AFTER_DAYS) -> list:
+        """
+        Applied to, and silent since.
+
+        Derived rather than stored, because it is not a decision anybody makes
+        — it is what has happened to a job while nobody did anything. A stored
+        `ghosted` status would go stale the moment a reply arrived, and would
+        need the user to notice the anniversary in the first place.
+
+        A job that moved on from `applied` is excluded by construction: the
+        current status is what it is now, and only jobs still sitting at
+        `applied` can have been ignored.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=after_days)).isoformat()
+        rows = self._db.execute(
+            "SELECT j.*, MAX(h.changed_at) AS applied_at"
+            "  FROM jobs j JOIN status_history h ON h.url = j.url"
+            " WHERE j.status = 'applied' AND h.status = 'applied'"
+            " GROUP BY j.url"
+            " HAVING applied_at < ?"
+            " ORDER BY applied_at", (cutoff,)).fetchall()
+        return [dict(row) for row in rows]
 
     # -- reading --------------------------------------------------------------
 
@@ -157,18 +227,34 @@ class JobStore:
         row = self._db.execute("SELECT * FROM jobs WHERE url = ?", (url,)).fetchone()
         return dict(row) if row else None
 
+    # How the board may order itself. Kept here rather than in the view so the
+    # screen never builds SQL, and so an unknown value cannot reach the query.
+    SORTS = {
+        "best": "score IS NULL, score DESC, last_seen DESC",
+        "newest": "first_seen DESC",
+        "recent": "last_seen DESC",
+        "company": "company COLLATE NOCASE, score IS NULL, score DESC",
+    }
+
     def query(self, status=None, min_score=None, company=None, source=None,
-              unscored=False, has_resume=None, limit=200) -> list:
+              unscored=False, has_resume=None, search=None, sort="best",
+              limit=200, offset=0) -> list:
         """
-        The board's read path: filter, newest-scored first.
+        The board's read path: filter, then order.
 
         Args:
             status: One status, or a list of them.
             min_score: Only jobs scoring at least this.
-            company / source: Exact matches.
+            company / source: One value, or a list of them.
             unscored: Only jobs analysis has not looked at yet.
             has_resume: True for jobs with a generated resume, False without.
-            limit: Row cap.
+            search: Case-insensitive substring of the title or company.
+            sort: A key from `SORTS`. Unknown values fall back to "best"
+                rather than raising, because a stale bookmark in a UI should
+                not be an error.
+            limit / offset: Page window. The board reached ~11,600 discovered
+                roles once discovery stopped stopping early (R46), so a fixed
+                cap silently hid most of the store.
         """
         where, params = [], []
 
@@ -180,27 +266,72 @@ class JobStore:
             where.append("score >= ?")
             params.append(float(min_score))
         if company:
-            where.append("company = ?")
-            params.append(company)
+            wanted = [company] if isinstance(company, str) else list(company)
+            where.append(f"company IN ({','.join('?' * len(wanted))})")
+            params.extend(wanted)
         if source:
-            where.append("source = ?")
-            params.append(source)
+            wanted = [source] if isinstance(source, str) else list(source)
+            where.append(f"source IN ({','.join('?' * len(wanted))})")
+            params.extend(wanted)
         if unscored:
             where.append("score IS NULL")
         if has_resume is True:
             where.append("resume_tex IS NOT NULL")
         elif has_resume is False:
             where.append("resume_tex IS NULL")
+        if search and search.strip():
+            # Escaped so a literal % or _ in a search box matches itself
+            # rather than turning into a wildcard.
+            term = search.strip().replace("\\", "\\\\")
+            term = term.replace("%", "\\%").replace("_", "\\_")
+            where.append(r"(title LIKE ? ESCAPE '\' OR company LIKE ? ESCAPE '\')")
+            params.extend([f"%{term}%", f"%{term}%"])
 
         sql = "SELECT * FROM jobs"
         if where:
             sql += " WHERE " + " AND ".join(where)
+
         # Scored jobs first and best-scoring at the top; unscored fall to the
         # bottom rather than sorting as if they scored zero.
-        sql += " ORDER BY score IS NULL, score DESC, last_seen DESC LIMIT ?"
-        params.append(int(limit))
+        sql += f" ORDER BY {self.SORTS.get(sort, self.SORTS['best'])}"
+        sql += " LIMIT ? OFFSET ?"
+        params.extend([int(limit), int(offset)])
 
         return [dict(r) for r in self._db.execute(sql, params).fetchall()]
+
+    def count(self, **filters) -> int:
+        """
+        How many rows those filters match, ignoring the page window.
+
+        The board needs this to say "showing 50 of 412" — without it a page
+        cap is indistinguishable from having run out of jobs, which is the
+        silent-truncation shape this project keeps finding.
+        """
+        filters.pop("limit", None)
+        filters.pop("offset", None)
+        filters.pop("sort", None)
+        return len(self.query(sort="best", limit=-1, offset=0, **filters))
+
+    def facets(self) -> dict:
+        """
+        The values worth offering as filters, with counts.
+
+        Read from the store rather than hardcoded, so a board that has just
+        learned a new ATS shows it without anyone editing a list.
+        """
+        companies = [
+            {"value": r["company"], "count": r["n"]}
+            for r in self._db.execute(
+                "SELECT company, COUNT(*) n FROM jobs WHERE company IS NOT NULL"
+                " GROUP BY company ORDER BY n DESC, company COLLATE NOCASE")
+        ]
+        sources = [
+            {"value": r["source"], "count": r["n"]}
+            for r in self._db.execute(
+                "SELECT source, COUNT(*) n FROM jobs WHERE source IS NOT NULL"
+                " GROUP BY source ORDER BY n DESC, source")
+        ]
+        return {"companies": companies, "sources": sources}
 
     def unprocessed_urls(self) -> set:
         """URLs the pipeline has not scored yet."""

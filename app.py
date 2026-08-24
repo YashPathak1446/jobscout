@@ -19,6 +19,7 @@ Location: jobscout_v3/app.py
 """
 
 import os
+from datetime import datetime, timezone
 
 import streamlit as st
 
@@ -26,8 +27,13 @@ from agents.orchestrator import (
     JobScoutOrchestrator,
     available_profiles,
     backend_status,
+    board_filters,
     board_jobs,
+    board_sorts,
     board_stats,
+    board_total,
+    ghosted_jobs,
+    job_history,
     job_statuses,
     load_run,
     pdflatex_available,
@@ -871,6 +877,13 @@ def _download(column, path, label, mime, unique=""):
 
 # ----------------------------------------------------------------- board ----
 
+SORT_LABELS = {
+    "best": "Best match",
+    "newest": "Newest found",
+    "recent": "Recently seen",
+    "company": "Company A–Z",
+}
+
 STATUS_LABELS = {
     "new": "New",
     "seen": "Seen",
@@ -907,6 +920,23 @@ def screen_board(has_latex):
 
     counts = stats["by_status"]
     statuses = job_statuses()
+    facets = board_filters()
+
+    # Derived, not clicked. Ghosting is what happens to a job while nobody
+    # does anything, so the board works it out rather than asking the user to
+    # notice an anniversary and press a button.
+    ghosted = ghosted_jobs()
+    if ghosted:
+        st.warning(
+            f"**{len(ghosted)} application(s) have gone quiet** — applied to "
+            f"over four weeks ago with no change since.",
+            icon="🕓",
+        )
+        with st.expander("Which ones"):
+            for job in ghosted:
+                st.write(f"- **{_plain(job.get('company'))}** — "
+                         f"{_plain(job.get('title'))}  "
+                         f"({_since(job.get('applied_at')).replace('found', 'applied')})")
 
     with st.container(border=True):
         left, middle, right = st.columns([2, 1, 1])
@@ -918,20 +948,91 @@ def screen_board(has_latex):
         min_score = middle.slider("Minimum score", 0, 100, 0, step=5)
         only_resumes = right.checkbox("Only with a resume")
 
-    rows = board_jobs(
-        status=shown or None,
-        min_score=min_score or None,
-        has_resume=True if only_resumes else None,
-    )
+        # Company and source were filterable in the store from the day it was
+        # written and had never been offered here. They matter more since R46:
+        # the board went from three employers to forty-nine.
+        search = st.text_input("Search titles and companies", placeholder="backend, staff, remote")
 
-    if not rows:
+        pick_company, pick_source, pick_sort = st.columns([2, 1, 1])
+        companies = pick_company.multiselect(
+            "Company", [c["value"] for c in facets["companies"]],
+            format_func=lambda v: f"{v} ({_count_for(facets['companies'], v)})",
+        )
+        sources = pick_source.multiselect(
+            "Where from", [s["value"] for s in facets["sources"]],
+            format_func=lambda v: v.replace("ats_", "").replace("_", " ").title(),
+        )
+        sort = pick_sort.selectbox("Sort by", board_sorts(),
+                                   format_func=lambda s: SORT_LABELS.get(s, s))
+
+    criteria = {
+        "status": shown or None,
+        "min_score": min_score or None,
+        "has_resume": True if only_resumes else None,
+        "company": companies or None,
+        "source": sources or None,
+        "search": search or None,
+    }
+
+    matching = board_total(**criteria)
+    if not matching:
         st.caption("Nothing matches those filters.")
         return
 
-    st.caption(f"{len(rows)} job(s)")
+    # Paged, and the total is shown alongside. A page cap with no total looks
+    # exactly like having run out of jobs, which is the silent-truncation
+    # shape this project keeps finding — and the store holds thousands now.
+    page_size = 25
+    pages = (matching + page_size - 1) // page_size
+    page = 1
+    if pages > 1:
+        page = st.number_input(f"Page (1–{pages})", min_value=1, max_value=pages,
+                               value=1, step=1)
+
+    rows = board_jobs(sort=sort, limit=page_size,
+                      offset=(int(page) - 1) * page_size, **criteria)
+
+    first = (int(page) - 1) * page_size + 1
+    st.caption(f"Showing {first}–{first + len(rows) - 1} of {matching} job(s)")
 
     for row in rows:
         _board_row(row, statuses, has_latex)
+
+
+def _count_for(entries, value):
+    for entry in entries:
+        if entry["value"] == value:
+            return entry["count"]
+    return 0
+
+
+def _since(stamp) -> str:
+    """
+    "first seen 3 days ago", from a stored timestamp.
+
+    The store has recorded `first_seen`, `last_seen` and `scored_at` since it
+    was written and the board showed none of them. For a log, when a posting
+    turned up is most of what distinguishes one row from another — and a
+    relative phrase reads faster than an ISO timestamp when you are scanning.
+    """
+    if not stamp:
+        return ""
+    try:
+        seen = datetime.fromisoformat(str(stamp))
+    except ValueError:
+        return ""
+
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    days = (datetime.now(timezone.utc) - seen).days
+
+    if days <= 0:
+        return "found today"
+    if days == 1:
+        return "found yesterday"
+    if days < 30:
+        return f"found {days} days ago"
+    return f"found {seen:%-d %b}" if os.name != "nt" else f"found {seen:%d %b}"
 
 
 def _board_row(row, statuses, has_latex):
@@ -944,7 +1045,11 @@ def _board_row(row, statuses, has_latex):
             title += f"  ·  {row['score']:.0f}% match"
         heading.markdown(title)
 
-        meta = [row.get("location") or "", row.get("source") or ""]
+        meta = [
+            row.get("location") or "",
+            (row.get("source") or "").replace("ats_", "").title(),
+            _since(row.get("first_seen")),
+        ]
         if row.get("scored_at") is None:
             meta.append("not scored yet")
         heading.caption("  ·  ".join(m for m in meta if m))
@@ -970,6 +1075,15 @@ def _board_row(row, statuses, has_latex):
             _download(buttons[1], row["resume_tex"], ".tex", "text/plain", unique=url)
         if url:
             buttons[2].link_button("Open posting", url)
+
+        # Only for jobs the user has actually touched. Every row carries one
+        # automatic `new`, and an expander on all of them would be noise.
+        if (row.get("status") or "new") != "new":
+            with st.expander("History"):
+                for entry in job_history(url):
+                    when = _since(entry["changed_at"]).replace("found ", "")
+                    st.caption(f"{STATUS_LABELS.get(entry['status'], entry['status'])}"
+                               f" — {when or entry['changed_at'][:10]}")
 
 
 # ------------------------------------------------------------------ main ----
