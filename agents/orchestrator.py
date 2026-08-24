@@ -925,6 +925,19 @@ class JobScoutOrchestrator:
             f.write(f"**Valid:** {valid}\n")
             f.write(f"**Needs review:** {review}\n")
             f.write(f"**Failed:** {failed}\n\n")
+
+            # A run whose model never answered still produces resumes, in the
+            # user's own words. That is a good floor and a bad surprise, so
+            # the summary says it happened and why (R47).
+            degraded = [r for r in gen_results if r.get("degraded")]
+            if degraded:
+                f.write(f"> ⚠️  **Bullets were not rewritten** for "
+                        f"{len(degraded)} of {len(gen_results)} resume(s). "
+                        f"Your own bullets were used instead, correctly "
+                        f"selected for each job.\n>\n")
+                for reason in sorted({r["degraded"] for r in degraded}):
+                    f.write(f"> - {reason}\n")
+                f.write("\n")
             
             if gen_results:
                 f.write("### Generated Files:\n\n")

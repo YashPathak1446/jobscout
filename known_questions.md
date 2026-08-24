@@ -3823,6 +3823,84 @@ The scorer was fine.
 
 ---
 
+## R47. Telling "you chose this" apart from "this broke"
+
+**Decision:** (August 2026) The deliberate floor returns, a broken rung raises,
+and anything that lands on the floor by accident says why somewhere the user
+will actually look.
+
+**The pattern this closes.** Five bugs in three days had one signature: the
+pipeline kept working, produced something worse, and said nothing
+distinguishable. An unloaded `.env` shipped a resume with zero experiences
+(R41). An Ollama with the wrong model pulled promised local rewriting and
+404'd (R42). A cache served one model's answers as another's, read as a
+Gemini regression (R45). In every case the fallback was *right* — falling back
+is the design — and what was missing was any way to tell a chosen floor from a
+failed climb.
+
+`complete_json` returned `None` for both. So did the generation path: two
+routes into `_verbatim_tailor` producing byte-identical output, one because
+you asked and one because something broke, sharing a log line.
+
+### The rule
+
+    none rung        →  returns None      (a choice)
+    a rung that fails →  raises BackendFailure with a reason
+
+`BackendFailure` subclasses `RuntimeError`, so callers already catching broadly
+keep working — they can now say *what* went wrong instead of guessing the
+friendlier of two possibilities.
+
+### Carrying it to the user
+
+A log line nobody reads is barely better than silence, so the reason travels:
+`_verbatim_tailor(reason=...)` stamps `_verbatim_reason` on the payload, the
+result record carries it as `degraded`, and both the run summary and the
+results screen show it. On the payload rather than beside it, because every
+caller already threads one dict through fitting, validation and the result —
+an out-of-band value would be dropped by the first one that forgot.
+
+> ⚠️ **Bullets were not rewritten** for 1 of 1 resume(s). Your own bullets
+> were used instead, correctly selected for each job.
+> - Ollama was selected but has no model pulled — run `ollama pull llama3.1`
+
+### The instance the unit tests missed
+
+Everything above passed, and a real run with a deliberately dead Ollama still
+recorded `degraded: None`.
+
+`_resolve_backend` downgrades an unusable rung to `none` at construction, so
+the run reached the floor *by choice* as far as every later line of code could
+tell. That is A4's exact shape surviving **inside R42's fix for it** — the fix
+that added the warning in the first place. The warning was there; the result
+was empty; the summary and the UI stayed quiet.
+
+Worth recording as the more interesting half of this entry: a pattern is not
+closed by fixing the instances you found it in, and the only thing that caught
+this was running the pipeline against a broken backend rather than asserting
+against a stub.
+
+### While in there
+
+The Gemini failure path fell back to `_mock_tailor`, not the verbatim floor —
+so a real outage told the user their run had gone to "mock tailoring", which
+sounds like test output and gives them nothing to act on. R37 built the floor
+and explained why it is "no longer called mock"; this path was never moved
+over. It is now.
+
+**Verified in three directions**, because one is not enough for a change whose
+whole point is not crying wolf:
+
+| run | `degraded` | summary |
+|---|---|---|
+| broken rung (Ollama on a dead port) | the reason, with the fix | says so |
+| deliberate `none` | `None` | silent |
+| normal Gemini | `None` ×3, 3/3 valid | silent |
+
+11 new tests, 374 pass, baselines clean.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

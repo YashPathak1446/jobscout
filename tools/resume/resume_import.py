@@ -152,9 +152,21 @@ def to_schema(text: str, agent=None) -> dict:
             parsed = agent(EXTRACTION_PROMPT + text[:24000])
             if isinstance(parsed, dict) and parsed.get("contact"):
                 return _normalise(parsed)
-            logger.warning("Extraction returned nothing usable; falling back")
+            if parsed is None:
+                # The deliberate floor: no model is configured at all. Not a
+                # problem, and saying "failed" about it would be wrong.
+                logger.info("No model configured; reading the resume by pattern")
+            else:
+                logger.warning("Extraction returned no contact block; "
+                               "reading the resume by pattern instead")
         except Exception as exc:
-            logger.warning(f"Model extraction failed ({exc}); falling back")
+            # A rung that should have answered did not. Distinct from having
+            # no rung, and the distinction is the whole of R47: this is the
+            # line that would have named the unloaded `.env` in R41 instead of
+            # quietly producing a resume with no experiences.
+            logger.warning(f"Resume extraction failed — {exc}. "
+                           "Reading the resume by pattern instead, which will "
+                           "find less. Fixing the cause is worth it.")
 
     return _normalise(heuristic_schema(text))
 

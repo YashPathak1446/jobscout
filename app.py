@@ -773,6 +773,22 @@ def _render_results(state, has_latex):
         return
 
     st.success(f"{len(results)} resume(s) generated from {len(analysed)} scored jobs.")
+
+    # A run whose model never answered still produces resumes — good ones, in
+    # your own words. Saying so is the difference between a floor and a
+    # surprise, and for a long time this screen said nothing at all (R47).
+    degraded = [r for r in results if r.get("degraded")]
+    if degraded:
+        st.warning(
+            f"**Bullets were not rewritten** for {len(degraded)} of "
+            f"{len(results)} resume(s). Your own bullets were used instead, "
+            f"still chosen and ordered for each job.",
+            icon="✍️",
+        )
+        with st.expander("Why"):
+            for reason in sorted({r["degraded"] for r in degraded}):
+                st.write(f"- {reason}")
+
     if st.button("See all your jobs"):
         st.session_state.view = "board"
         st.rerun()

@@ -325,6 +325,11 @@ class GenerationAgent:
                     "latex_path": str(latex_path),
                     "pdf_path": str(pdf_path) if pdf_path else None,
                     "page_count": page_count,
+                    # Present only when the model path was meant to run and
+                    # did not. A resume built from your own bullets is a fine
+                    # outcome when you chose it and a thing you would want to
+                    # know about when you did not (R47).
+                    "degraded": tailored.get("_verbatim_reason"),
                     "validation": {
                         "valid": validation.valid,
                         "errors": validation.errors,
@@ -972,7 +977,11 @@ class GenerationAgent:
             Dict with tailored experiences and projects
         """
         if self.mock_mode or self.llm_backend == "none":
-            return self._verbatim_tailor(job, selected_components, bullet_budgets)
+            # `downgrade_reason` is empty when `none` was genuinely chosen,
+            # which is the case that should stay quiet.
+            return self._verbatim_tailor(
+                job, selected_components, bullet_budgets,
+                reason=getattr(self, "downgrade_reason", ""))
         if self.llm_backend in ("openai", "ollama"):
             return self._chat_tailor(job, selected_components, bullet_budgets)
         return self._gemini_tailor(job, selected_components, bullet_budgets)
@@ -1180,7 +1189,17 @@ Source bullets:
             logger.debug(f"   📋 Projects: {', '.join(proj_ids)}")
 
     def _resolve_backend(self, api_key) -> str:
-        """Pick a rung, and say which one out loud (R33)."""
+        """
+        Pick a rung, say which one out loud (R33), and remember if we fell.
+
+        A rung that was configured and could not be used is downgraded to
+        `none` here, which makes the rest of the run indistinguishable from a
+        deliberately keyless one. That is A4's shape surviving inside R42's
+        fix: the log warned, and the *result* recorded nothing, so the summary
+        and the UI stayed silent about a backend the user had asked for.
+
+        `self.downgrade_reason` carries it to `_verbatim_tailor`.
+        """
         from config import LLM_BACKEND, OLLAMA_API_URL, OLLAMA_MODEL, OPENAI_MODEL
         from tools.generation import llm_backends
 
@@ -1200,8 +1219,10 @@ Source bullets:
             self.ollama_model = llm_backends.resolve_ollama_model(
                 OLLAMA_API_URL, OLLAMA_MODEL)
             if not self.ollama_model:
-                logger.warning("Ollama is up but has no model pulled; using "
-                               "your bullets as written instead")
+                self.downgrade_reason = (
+                    "Ollama was selected but has no model pulled — "
+                    "run `ollama pull llama3.1`, or any model you prefer")
+                logger.warning(f"   {self.downgrade_reason}")
                 choice = "none"
 
         model = {"ollama": getattr(self, "ollama_model", ""),
@@ -1235,9 +1256,16 @@ Source bullets:
         return scaled
 
     def _verbatim_tailor(self, job: Dict, selected: Dict,
-                         bullet_budgets: Dict = None) -> Dict:
+                         bullet_budgets: Dict = None, reason: str = "") -> Dict:
         """
         A resume with no model involved: your own bullets, correctly chosen.
+
+        `reason` says *why* there was no model, and it is not decoration. This
+        floor is reached two ways that produce byte-identical output: because
+        you chose to run without one, and because the one you configured did
+        not answer. Until R47 both logged the same line, so a broken key and a
+        deliberate keyless run looked the same from the outside — which is how
+        an unloaded `.env` shipped a resume with zero experiences (R41).
 
         This is the floor of the ladder and it is genuinely useful, which is
         why it is no longer called "mock". Component selection, the project
@@ -1249,13 +1277,22 @@ Source bullets:
         deterministic fitter the model path uses (R6), so the result fits a
         page instead of overflowing it.
         """
-        logger.info("   Using your bullets as written (no model)")
+        if reason:
+            logger.warning(f"   Using your bullets as written — {reason}")
+        else:
+            logger.info("   Using your bullets as written (no model configured)")
 
         budgets = (bullet_budgets or {})
         exp_budget = budgets.get("experiences", {})
         proj_budget = budgets.get("projects", {})
 
         tailored = {"experiences": [], "projects": []}
+        # Carried on the payload rather than returned alongside it, because
+        # every caller of this already threads a single dict through fitting,
+        # validation and the result record. An out-of-band value would be
+        # dropped by the first one that forgot it.
+        if reason:
+            tailored["_verbatim_reason"] = reason
 
         for exp_id in selected.get("experiences", []):
             exp = self.resume_parser.get_experience_by_id(exp_id)
@@ -1331,7 +1368,9 @@ Source bullets:
         except Exception as exc:
             logger.warning(f"   {self.llm_backend} rewriting failed ({exc}); "
                            "falling back to your bullets as written")
-            return self._verbatim_tailor(job, selected, bullet_budgets)
+            return self._verbatim_tailor(
+                job, selected, bullet_budgets,
+                reason=f"the {self.llm_backend} backend failed ({exc})")
 
         self.last_model_used = model
         self.llm_cache.set(prompt, parsed, model)
@@ -1455,9 +1494,16 @@ Source bullets:
             return repaired
 
         except Exception as e:
+            # The verbatim floor, not `_mock_tailor`. R37 built the floor and
+            # said why it is "no longer called mock": it produces a real
+            # resume in the user's own words, correctly selected. This path
+            # was never moved over, so a genuine Gemini outage told the user
+            # their run had gone to "mock tailoring" — which sounds like test
+            # output and gives them nothing to act on.
             logger.error(f"   ❌ Gemini API error: {e}")
-            logger.warning("   ⚠️  Falling back to mock tailoring")
-            return self._mock_tailor(job, selected)
+            return self._verbatim_tailor(
+                job, selected, bullet_budgets,
+                reason=f"Gemini could not be reached ({e})")
 
     def _generate_filename(self, company: str, title: str, apply_url: str = "") -> str:
         """

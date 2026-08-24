@@ -41,6 +41,23 @@ TIMEOUT_SECONDS = 120
 # the floor rather than a preference.
 LADDER = ("gemini", "openai", "ollama", "none")
 
+class BackendFailure(RuntimeError):
+    """
+    A rung that should have answered did not.
+
+    Distinct from *having* no rung, which is `none` and is a legitimate state
+    rather than an error. Keeping the two apart is the whole point: for most
+    of this project's life both produced a bare `None`, so a machine with a
+    perfectly good key in `.env` and a machine deliberately running keyless
+    were indistinguishable from the caller's side — and the first of those
+    shipped a resume with zero experiences before anyone noticed (R41).
+
+    Callers still fall back. They can now say why in the log, and tell the
+    user, which is the difference between a graceful degradation and a silent
+    one.
+    """
+
+
 DESCRIPTIONS = {
     "gemini": "Google Gemini — the backend every measurement in this project used",
     "openai": "an OpenAI-compatible API",
@@ -198,9 +215,13 @@ def complete_json(prompt: str, gemini_key: str = None) -> dict:
     because resume import needs the same ladder without needing a profile or
     a parsed resume to exist yet — at import time neither does.
 
-    Returns None when no backend can answer, which callers treat as "fall back
-    to heuristics" rather than as an error. The `none` rung is a legitimate
-    state, not a failure.
+    Returns None when there is deliberately no backend — the `none` rung, a
+    legitimate state. Raises `BackendFailure` when a rung that should have
+    answered did not.
+
+    Those were the same return value until R47, which meant "you chose to run
+    without a model" and "your model is misconfigured or down" reached the
+    caller identically, and every caller guessed the friendlier of the two.
     """
     from config import (LLM_BACKEND, OLLAMA_API_URL, OLLAMA_BASE_URL,
                         OLLAMA_MODEL, OPENAI_BASE_URL, OPENAI_MODEL,
@@ -214,6 +235,7 @@ def complete_json(prompt: str, gemini_key: str = None) -> dict:
                         ollama_url=OLLAMA_API_URL)
 
     if choice == "none":
+        # Chosen, not failed. The only path that returns None.
         return None
 
     if choice == "gemini":
@@ -228,8 +250,8 @@ def complete_json(prompt: str, gemini_key: str = None) -> dict:
                 return json.loads(_strip_code_fence(response.text.strip()))
             except Exception as exc:      # quota, retirement, bad JSON
                 last_error = exc
-        logger.warning(f"Every Gemini model failed: {last_error}")
-        return None
+        raise BackendFailure(
+            f"every Gemini model failed ({last_error})") from last_error
 
     base_url = OLLAMA_BASE_URL if choice == "ollama" else OPENAI_BASE_URL
     api_key = None if choice == "ollama" else env_openai_key()
@@ -238,15 +260,15 @@ def complete_json(prompt: str, gemini_key: str = None) -> dict:
         # default is pulled. Empty means it has nothing to answer with.
         model = resolve_ollama_model(OLLAMA_API_URL, OLLAMA_MODEL)
         if not model:
-            logger.warning("Ollama is up but has no usable model pulled")
-            return None
+            raise BackendFailure(
+                "Ollama is running but has no model pulled — "
+                "run `ollama pull llama3.1` or any model you prefer")
     else:
         model = OPENAI_MODEL
     try:
         return call_chat_json(prompt, base_url, model, api_key)
     except Exception as exc:
-        logger.warning(f"{choice} completion failed: {exc}")
-        return None
+        raise BackendFailure(f"{choice} ({model}) failed: {exc}") from exc
 
 
 def _strip_code_fence(text: str) -> str:

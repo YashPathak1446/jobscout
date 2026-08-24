@@ -227,9 +227,16 @@ class TestTheWholeRungEndToEnd(_ServedTest):
         llm_backends.complete_json("extract this")
         self.assertEqual(_Handler.last_request["model"], PULLED)
 
-    def test_a_server_with_no_models_falls_to_the_floor_instead_of_calling(self):
+    def test_a_server_with_no_models_says_so_rather_than_going_quiet(self):
+        """
+        R47: this used to return None, which is what a deliberately keyless
+        run returns. An Ollama that is up with nothing pulled is a
+        misconfiguration the user can fix, and it now says which.
+        """
         _Handler.models = []
-        self.assertIsNone(llm_backends.complete_json("extract this"))
+        with self.assertRaises(llm_backends.BackendFailure) as caught:
+            llm_backends.complete_json("extract this")
+        self.assertIn("no model pulled", str(caught.exception))
 
     def test_resume_extraction_runs_on_this_rung(self):
         """
