@@ -1359,9 +1359,19 @@ Two questions, and they are not the same:
 
 Worth measuring together, and after a fresh baseline rather than before.
 
-## Q21. One skills slot changes between resumes, and picks the wrong thing
+## Q21. One skills slot changes between resumes, and picks the wrong thing — RESOLVED (R59)
 
-**Status:** Open. Surfaced 2026-08-25 by reading eight resumes from one run.
+**Status:** Resolved 2026-08-25 — see R59. Both halves this entry called
+tangled turned out to be one thing: nothing ranked a skill by whether the page
+supports it. The instability was a symptom, not a second problem — a line
+ordered by the master's listing and then truncated by a character cap changes
+with whatever else lands on the line.
+
+The entry guessed that "within a category the order looks like master order
+rather than match count", and asked for that to be confirmed before assuming.
+Confirmed: non-JD-matching skills filled in master order exactly.
+
+The original entry follows.
 
 The `AI / ML & Data` category has thirteen entries in the master and six slots
 in the output, so eight of the thirteen are dropped every time. On five of the
@@ -4839,6 +4849,77 @@ asserts a size your resume states as a number — 0.2%, 0.71 vs 0.56, 15-point �
 and that number is not in the output"* — checked end to end against the real
 master resume through `GenerationAgent._master_bullets`. The always-firing
 warning is gone (0 of 8). 19 new tests, 586 pass, baselines clean.
+
+---
+
+## R59. The skills line advertised work the page did not show
+
+**Decision:** (August 2026) A skill is ranked by what backs it: the posting
+asked for it, a bullet on this page demonstrates it, nothing in particular owns
+it, or its only evidence is a component left off this resume.
+
+**The inversion.** `AI / ML & Data` holds thirteen entries and about seven fit
+on a line. `OpenAI Gym` took the last slot on three resumes from the
+2026-08-25 run, and which three is the finding:
+
+    Scale AI    RL project NOT on the page      OpenAI Gym listed
+    Experian    RL project NOT on the page      OpenAI Gym listed  (x2)
+    Elastic     RL project ON the page          OpenAI Gym absent
+
+Exactly backwards, in both directions. `OpenAI Gym` comes from one
+reinforcement-learning project; a recruiter reading Scale AI's skills line
+finds nothing about RL anywhere else on the page, and the one resume that could
+have justified the claim did not make it.
+
+### Two mechanisms, and only one of them was suspected
+
+Everything that did not match the JD filled in **the order the master resume
+happens to list it**, and that order clusters `stable-baselines3, OpenAI Gym,
+MineRL` ahead of `Pandas, NumPy`. Q21 guessed this and asked for it to be
+confirmed rather than assumed; it was right.
+
+The second was not suspected. The character cap **skips rather than stops** — a
+skill that does not fit is passed over and filling continues — so
+`stable-baselines3` (17 characters) missed the line and `OpenAI Gym` (10) took
+the slot behind it. The tail of every skills line was being selected by length.
+
+The skip is kept. Stopping at the first miss wastes the rest of the line. What
+changes is that priority now decides the order those skips happen in, so what
+falls off the end is the least-supported claim rather than the longest word.
+
+### The evidence was already computed
+
+`select_components` returns `skills` — the union of the selected components'
+keywords, 52 to 59 entries per job — and `_build_skills_section` never looked
+at it. Same shape as R57: the answer sitting in the return value of a function
+nobody asked.
+
+The version used here is derived from the *tailored* output rather than the
+selection, because that is what is actually on the page after generation drops
+a component.
+
+### The tier that needed a tiebreak
+
+Ranking by evidence alone made one resume worse before it made them all better.
+`MineRL` displaced `NumPy` on Databricks, because the keyword extractor tags
+widely-used terms to components too — so `numpy` and `minerl` both landed in
+the "evidence is elsewhere" tier, and inside that tier the master's order put
+the RL stack first again.
+
+So the last tier is ordered by **breadth**: how many components use the term at
+all. One absent project's library is a weaker claim than a library running
+through four. That is what puts `NumPy` back and leaves `MineRL` off.
+
+### Verified
+
+Across the five resumes in the run that show the category, **no resume
+advertises an RL library without the RL project on the page** — measured by
+re-rendering each one through `_build_skills_section` against its real
+selection and JD. Databricks keeps `NumPy` and gains `Biopython`, which its
+antibiotic project earns. The improvement is not confined to that category:
+Scale AI's frontend line now leads `React, jQuery, Vega-Lite` — the RunKeeper
+project is on that page — instead of `React, Angular, Next.js`, whose mobile
+project is not. 22 new tests, 608 pass, baselines clean.
 
 ---
 

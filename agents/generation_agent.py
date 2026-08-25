@@ -1728,13 +1728,15 @@ Source bullets:
         # compacted to max_skill_categories from the profile.
         # JD-relevant skills are prioritised within each category.
         jd_text = job.get('full_jd', job.get('short_description', ''))
-        latex_content += self._build_skills_section(master_latex, jd_text=jd_text)
+        latex_content += self._build_skills_section(
+            master_latex, jd_text=jd_text, on_page=tailored)
 
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(latex_content)
             
 
-    def _build_skills_section(self, master_latex: str, jd_text: str = "") -> str:
+    def _build_skills_section(self, master_latex: str, jd_text: str = "",
+                              on_page: dict = None) -> str:
         """
         Build a JD-aware Technical Skills section.
 
@@ -1773,6 +1775,8 @@ Source bullets:
         )
 
         jd_lower = jd_text.lower() if jd_text else ""
+        shown, elsewhere = self._skill_evidence(on_page)
+        breadth = self._skill_breadth()
 
         # Clean category values and split into individual skills
         parsed_categories = []
@@ -1793,6 +1797,9 @@ Source bullets:
                 skills=skills,
                 jd_lower=jd_lower,
                 max_line_chars=MAX_SKILL_LINE_CHARS,
+                shown=shown,
+                elsewhere=elsewhere,
+                breadth=breadth,
             )
             jd_match_count = sum(
                 1 for s in selected
@@ -1878,6 +1885,55 @@ Source bullets:
 
         return skills
 
+    def _component_keywords(self, components) -> set:
+        """Every keyword and tech term the given components carry, lowercased."""
+        terms = set()
+        for component in components or []:
+            for keyword in getattr(component, "keywords", None) or []:
+                terms.add(str(keyword).lower())
+            tech = getattr(component, "tech", "") or ""
+            for part in re.split(r"[,/]", tech):
+                part = part.strip().lower()
+                if part:
+                    terms.add(part)
+        return terms
+
+    def _skill_breadth(self) -> dict:
+        """How many components use each term. Breadth of use, not depth."""
+        parsed = self.resume_parser.parsed_resume
+        counts = {}
+        for component in list(parsed.experiences) + list(parsed.projects):
+            for term in self._component_keywords([component]):
+                counts[term] = counts.get(term, 0) + 1
+        return counts
+
+    def _skill_evidence(self, on_page) -> tuple:
+        """
+        Which skills this page evidences, and which belong to work left off it.
+
+        Returns (shown, elsewhere). A term in `shown` is demonstrated by a
+        bullet the reader can see. A term in `elsewhere` belongs to a component
+        of this resume's owner that did not make this particular resume — so
+        listing it advertises work the page does not show.
+
+        Terms in neither set are general: the master's skills section names
+        them and no single component owns them. Pandas and NumPy are that, and
+        they are not weakened by it.
+        """
+        parsed = self.resume_parser.parsed_resume
+        all_components = list(parsed.experiences) + list(parsed.projects)
+
+        ids_on_page = set()
+        for section in ("experiences", "projects"):
+            for entry in (on_page or {}).get(section) or []:
+                if isinstance(entry, dict) and entry.get("id"):
+                    ids_on_page.add(entry["id"])
+
+        shown_components = [c for c in all_components if c.id in ids_on_page]
+        shown = self._component_keywords(shown_components)
+        everywhere = self._component_keywords(all_components)
+        return shown, everywhere - shown
+
     def _skill_in_jd(self, skill: str, jd_lower: str) -> bool:
         """
         Check if a skill appears in the JD text.
@@ -1917,17 +1973,72 @@ Source bullets:
         skills: List[str],
         jd_lower: str,
         max_line_chars: int,
+        shown: set = None,
+        elsewhere: set = None,
+        breadth: dict = None,
     ) -> List[str]:
         """
-        Select skills for one category, prioritising JD matches.
+        Select skills for one category, in order of what backs them.
 
-        1. JD-matching skills come first.
-        2. Non-matching skills fill remaining space.
-        3. Total line length (label + ": " + values) is capped.
+        1. Skills the job description asks for.
+        2. Skills a bullet on this page demonstrates.
+        3. Skills no single component owns — the general ones.
+        4. Skills whose only evidence is a component left off this resume.
+
+        Tier 4 is R59, and the run of 2026-08-25 is why. `OpenAI Gym` comes
+        from one reinforcement-learning project. It appeared on the Scale AI
+        and Experian resumes, neither of which includes that project, and was
+        **absent from the Elastic resume, the only one that does** — the
+        selection was exactly inverted. A recruiter reading Scale AI's skills
+        line finds nothing about RL anywhere on the page.
+
+        Before this, tiers 2-4 did not exist: everything that did not match the
+        JD filled in the order the master resume happens to list it, and that
+        order clusters `stable-baselines3, OpenAI Gym, MineRL` ahead of
+        `Pandas, NumPy`.
+
+        The cap then made it worse. Filling *skips* an item that does not fit
+        and keeps going, so a short low-priority skill leapfrogs a long
+        high-priority one — `stable-baselines3` (17 chars) did not fit, and
+        `OpenAI Gym` (10) took the slot. The skip is kept, because stopping at
+        the first miss wastes the rest of the line, but it means the ordering
+        below is what decides the outcome rather than a tiebreak.
         """
-        # Partition into JD matches and non-matches
-        jd_matches = [s for s in skills if self._skill_in_jd(s, jd_lower)]
-        non_matches = [s for s in skills if not self._skill_in_jd(s, jd_lower)]
+        shown = shown or set()
+        elsewhere = elsewhere or set()
+        breadth = breadth or {}
+
+        def tier(skill: str) -> int:
+            if self._skill_in_jd(skill, jd_lower):
+                return 0
+            terms = self._skill_terms(skill)
+            if terms & shown:
+                return 1
+            if terms & elsewhere:
+                return 3
+            return 2
+
+        def rank(skill: str) -> tuple:
+            level = tier(skill)
+            if level < 3:
+                # Stable within a tier: the master's own order is a real
+                # signal about what its author considers central, and nothing
+                # beats it except evidence.
+                return (level, 0)
+
+            # Inside tier 3, how many components use the term at all. A skill
+            # one absent project owns is a weaker claim than one that runs
+            # through several — and without this the tier is decided by the
+            # master's listing order, which clusters the whole reinforcement
+            # -learning stack together and hands it the last slot.
+            #
+            # Measured: without it, `MineRL` displaced `NumPy` on the
+            # Databricks resume, trading one absent project's library for a
+            # library used across four.
+            terms = self._skill_terms(skill)
+            return (level, -max((breadth.get(t, 0) for t in terms), default=0))
+
+        ordered = sorted(skills, key=rank)
 
         # Build the line incrementally, respecting the char cap
         selected = []
@@ -1938,18 +2049,7 @@ Source bullets:
                 return label_overhead
             return label_overhead + len(", ".join(selected))
 
-        # Add JD matches first
-        for skill in jd_matches:
-            test_len = current_line_length()
-            if selected:
-                test_len += len(", ") + len(skill)
-            else:
-                test_len += len(skill)
-            if test_len <= max_line_chars:
-                selected.append(skill)
-
-        # Fill with non-matches
-        for skill in non_matches:
+        for skill in ordered:
             test_len = current_line_length()
             if selected:
                 test_len += len(", ") + len(skill)
@@ -1959,6 +2059,30 @@ Source bullets:
                 selected.append(skill)
 
         return selected
+
+    @staticmethod
+    def _skill_terms(skill: str) -> set:
+        """
+        A skill as the terms a component keyword list might name it by.
+
+        "SQL (MySQL, PostgreSQL)" has to match a component that knows only
+        `mysql`, and "AWS (EC2, S3, Lambda)" one that knows only `s3`.
+        """
+        lower = skill.lower().strip()
+        terms = {lower}
+
+        main = re.sub(r"\s*\([^)]*\)", "", lower).strip()
+        if main:
+            terms.add(main)
+
+        inner = re.search(r"\(([^)]*)\)", lower)
+        if inner:
+            for part in inner.group(1).split(","):
+                part = part.strip()
+                if part:
+                    terms.add(part)
+
+        return {t for t in terms if t}
 
     def _validate_selected_ids(self, tailored: Dict, selected: Dict, validation) -> None:
         """
