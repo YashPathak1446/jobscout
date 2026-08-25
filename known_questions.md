@@ -4373,6 +4373,67 @@ is the shape this project keeps regretting when it is missing.
 
 ---
 
+## R55. The country that never parsed, and two cities that parsed wrong
+
+**Decision:** (August 2026) The location matcher reads ISO country codes,
+matches indicators as terms rather than substrings, and lets a named US state
+settle the question before any city name is consulted.
+
+**The report.** A São Paulo posting scored 54% and reached the top of the
+funnel, while the profile lists `countries: ["United States"]` and the same
+run excluded jobs in the UK, Ireland, Canada, Poland, India, Israel, China,
+France and South Korea. Two hypotheses were offered: location scores rather
+than gates, or the country never parses.
+
+**The second, exactly.** `"São Paulo, BR"` produced `country=None`. The gate is
+a hard exclusion and always was — it simply had nothing to compare, because
+`BR` is an ISO code and the vocabulary held only full names. The countries
+that were correctly excluded all spell themselves out.
+
+### Codes, and why US states win
+
+`COUNTRY_CODES` maps alpha-2 codes to names, and **every code that is also a
+US state abbreviation is removed from it outright** rather than merely ordered
+after the state check. The collisions are not exotic: CA is California and
+Canada, IN is Indiana and India, DE is Delaware and Germany, and PA, LA, MT,
+ID, AL, MS, SC, VA, WA, MO and OK all collide too. Reading "Los Angeles, CA"
+as Canada would be a worse bug than the one being fixed. Those countries stay
+reachable by name.
+
+Codes are matched only as a **trailing token** — `BR` sits inside "Brooklyn"
+and `IT` inside "Detroit".
+
+### Two bugs the fix uncovered, both R18 again
+
+**`"india"` matched inside "Indianapolis".** The indicator loop used plain
+substring containment, so an Indiana posting was read as Indian and excluded.
+That is R18's finding — a substring credited as a term — in a module that
+never got the fix. Indicators are now matched with boundaries on their
+alphanumeric ends, which leaves entries like `", bc"` and `"(uk)"` working.
+
+**`"dublin"` matched "Dublin, Ohio".** Boundaries do not help here: it is a
+real city name shared by two countries, and "Birmingham, Alabama" would have
+become the United Kingdom the same way. So a spelled-out state or trailing
+state abbreviation is now checked *first*, as much stronger evidence than a
+city name. That also settles "Ontario, California" in favour of California
+while leaving "London, Ontario" Canadian.
+
+### The vocabulary was too small to be a filter
+
+`"Reykjavik, Iceland"` spelled its country out and was still invisible,
+because the curated list held nineteen countries. **An unknown country is not
+neutral** — it silently passes a filter whose entire job is to exclude it. The
+list is now derived from the code map as well, 73 countries, so adding a code
+adds a name for free.
+
+### Verified
+
+The Experian posting is now excluded with *"Location country 'Brazil' not in
+preferred countries ['United States']"*. San Francisco, Dublin Ohio and
+Indianapolis are all kept. 24 new tests, 514 pass, baselines clean.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

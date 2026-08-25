@@ -121,12 +121,127 @@ US_STATES = {
 # Reverse map: abbreviation -> full name
 US_STATE_BY_ABBREV = {v: k for k, v in US_STATES.items()}
 
+# ISO 3166-1 alpha-2 codes, for boards that write them instead of names.
+#
+# The gap this closes: "São Paulo, BR" parsed to country=None, so the
+# exclude-countries check had nothing to compare and a Brazilian posting scored
+# 54% and reached the top of the funnel (R55). "London, United Kingdom" was
+# excluded correctly the same run, because that one spells the country out.
+#
+# **US state abbreviations are removed from this map, not merely ordered after
+# it.** The collisions are not exotic: CA is California and Canada, IN is
+# Indiana and India, DE is Delaware and Germany, PA is Pennsylvania and Panama,
+# LA, MT, ID, AL, MS, SC, VA, WA, MO, OK all collide too. "Los Angeles, CA"
+# becoming Canada would be a far worse bug than the one being fixed, so the
+# ambiguous codes are simply not treated as countries at all — a posting that
+# writes only "IN" for India is rarer than one that writes "IN" for Indiana.
+_AMBIGUOUS_WITH_US_STATES = set(US_STATE_BY_ABBREV)
+
+COUNTRY_CODES = {
+    code: name for code, name in {
+        "BR": "Brazil", "MX": "Mexico", "AR": "Argentina", "CL": "Chile",
+        "CO": "Colombia", "PE": "Peru", "UY": "Uruguay",
+        "GB": "United Kingdom", "UK": "United Kingdom", "IE": "Ireland",
+        "FR": "France", "ES": "Spain", "PT": "Portugal", "IT": "Italy",
+        "NL": "Netherlands", "BE": "Belgium", "CH": "Switzerland",
+        "AT": "Austria", "SE": "Sweden", "NO": "Norway", "DK": "Denmark",
+        "FI": "Finland", "PL": "Poland", "CZ": "Czechia", "RO": "Romania",
+        "GR": "Greece", "TR": "Turkey", "UA": "Ukraine",
+        "JP": "Japan", "CN": "China", "KR": "South Korea", "TW": "Taiwan",
+        "HK": "Hong Kong", "SG": "Singapore", "TH": "Thailand",
+        "VN": "Vietnam", "PH": "Philippines", "MY": "Malaysia",
+        "AU": "Australia", "NZ": "New Zealand",
+        "ZA": "South Africa", "NG": "Nigeria", "EG": "Egypt", "KE": "Kenya",
+        "AE": "United Arab Emirates", "IL": "Israel", "SA": "Saudi Arabia",
+        "IS": "Iceland", "HU": "Hungary", "BG": "Bulgaria", "HR": "Croatia",
+        "RS": "Serbia", "SK": "Slovakia", "EE": "Estonia", "LV": "Latvia",
+        "LT": "Lithuania", "LU": "Luxembourg", "CY": "Cyprus",
+        "CR": "Costa Rica", "EC": "Ecuador", "GT": "Guatemala",
+        "PK": "Pakistan", "BD": "Bangladesh", "LK": "Sri Lanka",
+        "QA": "Qatar", "KW": "Kuwait", "JO": "Jordan", "MA": "Morocco",
+        "GH": "Ghana", "TZ": "Tanzania", "UG": "Uganda",
+        # Deliberately absent because their codes are US state abbreviations
+        # and would be stripped by the guard below anyway: IN (India), ID
+        # (Indonesia), DE (Germany), IT (Italy), PA (Panama), MT (Malta),
+        # CA (Canada), AL (Albania), MS, SC, VA, WA, MO, OK, LA. Those
+        # countries are still recognised by name through COUNTRY_INDICATORS.
+    }.items() if code not in _AMBIGUOUS_WITH_US_STATES
+}
+
+# Every country the code map names is also recognised by its own name, so the
+# vocabulary does not have to be curated twice. This closes the same gap the
+# codes did, one step further out: "Reykjavik, Iceland" spells the country out
+# and was still invisible, because `COUNTRY_INDICATORS` lists nineteen
+# countries by hand and Iceland is not one of them. An unknown country is not
+# neutral — it silently passes a filter meant to exclude it.
+for _code, _name in COUNTRY_CODES.items():
+    COUNTRY_INDICATORS.setdefault(_name, []).append(_name.lower())
+
+# Matched only as a whole trailing token — "..., BR" — never as a substring.
+# `BR` appears inside "Brooklyn" and `IT` inside "Detroit"; a substring match
+# would relocate half the United States.
+_TRAILING_CODE = re.compile(r"[,\s(]\s*([A-Za-z]{2})\s*\)?\s*$")
+
+
+def country_from_code(raw_location: str):
+    """
+    The country a trailing two-letter code names, or None.
+
+    Deliberately strict: the code has to be the last thing in the string and
+    preceded by a comma, space or bracket, which is how every board that uses
+    them writes them — "São Paulo, BR", "Paris (FR)".
+    """
+    match = _TRAILING_CODE.search(raw_location or "")
+    if not match:
+        return None
+    return COUNTRY_CODES.get(match.group(1).upper())
+
+
 # Remote indicators
 REMOTE_INDICATORS = [
     "remote", "work from home", "wfh", "fully remote",
     "remote-first", "remote first", "distributed", "anywhere",
     "virtual", "telecommute",
 ]
+
+
+def _names_a_us_state(loc_lower: str, raw_location: str) -> bool:
+    """
+    Does this string name a US state outright, by name or trailing abbrev?
+
+    Deliberately narrow. A full state name is unambiguous, and a trailing
+    two-letter abbreviation is the standard American form — anything vaguer
+    would start claiming foreign cities for the United States, which is the
+    mirror image of the bug this fixes.
+    """
+    for state_name in US_STATES:
+        if _indicator_matches(state_name.lower(), loc_lower):
+            return True
+
+    match = _TRAILING_CODE.search(raw_location or "")
+    return bool(match and match.group(1).upper() in US_STATE_BY_ABBREV)
+
+
+def _indicator_matches(indicator: str, text: str) -> bool:
+    """
+    Does this country indicator appear as a *term* rather than a substring?
+
+    Plain `in` matched "india" inside "Indianapolis", so an Indiana posting was
+    read as Indian and excluded by the country filter (R55). That is R18's
+    finding — keyword matching crediting substrings rather than terms —
+    reappearing in the location matcher, which never got the fix.
+
+    Boundaries are applied only to the alphanumeric ends of the indicator.
+    Several are written with their own punctuation, like `", bc"` and
+    `"(uk)"`, and demanding a word boundary before a comma would stop those
+    matching anything at all.
+    """
+    pattern = re.escape(indicator)
+    if indicator[:1].isalnum():
+        pattern = r"(?<![a-z0-9])" + pattern
+    if indicator[-1:].isalnum():
+        pattern = pattern + r"(?![a-z0-9])"
+    return re.search(pattern, text) is not None
 
 
 def parse_location(raw_location: str) -> LocationResult:
@@ -176,15 +291,44 @@ def parse_location(raw_location: str) -> LocationResult:
             return result
 
     # -----------------------------------------------------------------------
+    # Step 1b: A named US state settles it before any city name is consulted
+    # -----------------------------------------------------------------------
+    # City names are not unique between countries. "Dublin, Ohio" matched the
+    # Ireland indicator `dublin`; "Birmingham, Alabama" would have matched the
+    # United Kingdom. Both are real US cities, and both would have been
+    # excluded by the country filter.
+    #
+    # A spelled-out state or a trailing state abbreviation is far stronger
+    # evidence than a city name shared with another country, so it is checked
+    # first. This also settles "Ontario, California" — a Canadian province
+    # name and a Californian city — in favour of California.
+    if _names_a_us_state(loc_lower, raw_location):
+        result.country = "United States"
+        result.confidence = "high"
+        _enrich_us(result, loc_lower)
+        return result
+
+    # -----------------------------------------------------------------------
     # Step 2: Detect non-US country
     # -----------------------------------------------------------------------
     for country_name, indicators in COUNTRY_INDICATORS.items():
-        if any(ind in loc_lower for ind in indicators):
+        if any(_indicator_matches(ind, loc_lower) for ind in indicators):
             result.country = country_name
             result.confidence = "high"
             # Try to extract city/state
             _enrich_non_us(result, loc_lower, country_name)
             return result
+
+    # A trailing ISO code, for boards that write "São Paulo, BR" rather than
+    # spelling the country out. Checked after the named indicators so a string
+    # carrying both agrees with the name, and before the US step so a genuine
+    # country code is not swept up as American by default.
+    coded = country_from_code(raw_location)
+    if coded:
+        result.country = coded
+        result.confidence = "high"
+        _enrich_non_us(result, loc_lower, coded)
+        return result
 
     # -----------------------------------------------------------------------
     # Step 3: Detect United States
