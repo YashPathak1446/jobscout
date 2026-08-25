@@ -167,7 +167,22 @@ class GenerationAgent:
         return self._escape_latex_impl(text)
 
     def _escape_latex_impl(self, text: str) -> str:
-        """Escape special LaTeX characters using a single-pass regex."""
+        """
+        Escape special LaTeX characters using a single-pass regex.
+
+        `<` and `>` are the subtle ones and were missing until R53. They are
+        not *errors* in LaTeX — nothing warns, the file compiles, the PDF is
+        one page — but in the default OT1 font encoding a bare `<` renders as
+        an inverted exclamation mark. "p99 query latency of <5ms" shipped as
+        "p99 query latency of ¡5ms" in three resumes before anyone opened the
+        PDF and read it.
+
+        That is why they are easy to miss: every other character here fails
+        loudly. `%` eats the line, `&` breaks alignment, `#` is a parameter.
+        These two fail silently and only in the render, so no test that checks
+        compilation or page count can see them. Found by a human reading the
+        output.
+        """
         if not text:
             return ""
         replacements = {
@@ -181,6 +196,8 @@ class GenerationAgent:
             '~': r'\textasciitilde{}',
             '^': r'\textasciicircum{}',
             '\\': r'\textbackslash{}',
+            '<': r'\textless{}',
+            '>': r'\textgreater{}',
         }
         pattern = re.compile('|'.join(re.escape(key) for key in replacements.keys()))
         return pattern.sub(lambda match: replacements[match.group()], str(text))

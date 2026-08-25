@@ -4254,6 +4254,55 @@ original reasons.
 
 ---
 
+## R53. The two characters that fail silently
+
+**Decision:** (August 2026) `<` and `>` are escaped to `\textless{}` and
+`\textgreater{}`. Found by a human reading a shipped PDF, which is the only
+way it could have been found.
+
+**Why it survived every guard this project has.** Each of the other nine
+characters in the escape map fails *loudly*: `%` comments out the rest of the
+line, `&` breaks table alignment, `#` is a macro parameter. `<` and `>` are
+not errors at all. The file compiles, the PDF is one page, validation passes,
+the page-count gate passes — and in the default OT1 font encoding a bare `<`
+renders as an inverted exclamation mark.
+
+Three resumes went out reading **"p99 query latency of ¡5ms"**.
+
+Demonstrated rather than argued, by compiling the real bullet both ways and
+reading the text back out of each PDF:
+
+    BEFORE (raw <)         p99 query latency of ¡5ms at million-scale
+    AFTER  (\textless{})   p99 query latency of<5ms at million-scale
+
+Both compiled. Both were one page. That is the whole problem: **no test that
+checks compilation, page count or validation can see this defect**, so the new
+test renders a PDF and reads the glyph back.
+
+### What the audit found, and did not
+
+Seven unescaped `<` across every run ever generated — three in the latest one
+(Elastic, Baseten, Modal). No `>`, and **no `~` anywhere**: not raw, not as
+`\sim`. The floating tildes seen in the PDFs are a text-extraction artifact of
+the reader, not something in the document. The reviewer flagged that
+possibility themselves and it turned out to be the case.
+
+Worth recording because the instinct was to fix both. One was real.
+
+### An environment trap in the test itself
+
+The rendered-glyph test could not compile anything at first: Python's
+temporary directory on this machine lives under the 8.3 short name
+`C:\Users\YASHPA~1\...`, and **pdflatex treats `~` as special in a filename**,
+truncating the path at it and stopping before reading a byte. Fixed by running
+with `cwd` set to the folder and passing a relative filename, which is more
+portable anyway.
+
+17 new tests, 464 pass, baselines clean. The eight resumes of 2026-08-25 were
+regenerated and verified clean.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format
