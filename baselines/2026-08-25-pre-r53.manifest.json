@@ -1,0 +1,57 @@
+{
+  "baseline": "2026-08-25-pre-r53",
+  "recorded": "2026-08-25",
+  "note": "Frozen measurement set. Contents are gitignored; this manifest is committed so a lost or altered baseline is detectable.",
+  "files": {
+    "analysis_results.json": {
+      "sha256": "e4ccc8eb17b008965db48524bedc3e5ebf6b295a60af36b295055667282044d7",
+      "bytes": 515263,
+      "records": 35
+    },
+    "enriched_jobs.json": {
+      "sha256": "30ed3b935f0ccfa9256f6ea0ba9aa60fb1019be2d60474b3949da7e299d2ae90",
+      "bytes": 207910,
+      "records": 35
+    },
+    "state.json": {
+      "sha256": "c07068204248246f027cda9e8abd6278726a4d03d796b668d886d318cdcd364d",
+      "bytes": 852010
+    },
+    "summary.md": {
+      "sha256": "81ca22e96efdbb8df405430c046d792f6fad3b9beca3d7d132fc229f4ffa0d25",
+      "bytes": 7271
+    },
+    "Yash_Pathak_Baseten_Software_Engineer__291a91be.tex": {
+      "sha256": "bb2ed924c6b02478bddd84c780608c1e62d67dec8e29d48a00536a901be1b294",
+      "bytes": 9643
+    },
+    "Yash_Pathak_Databricks_AI_Engineer__28c4ef2c.tex": {
+      "sha256": "c675dfe73a8078b800e8e9f83572625e67a51ea1cabcb8946233e20db06c58aa",
+      "bytes": 9618
+    },
+    "Yash_Pathak_Elastic_Agentic_AI_Engineer_da2735ef.tex": {
+      "sha256": "1648472138b856b7e42422bdc1ab400eaee9082aa34c78f33276b36e1bd9aea6",
+      "bytes": 8964
+    },
+    "Yash_Pathak_Experian_Analista_S\u00eanior_de_64b9f568.tex": {
+      "sha256": "b2de0f064ff90c262b4cf7958398d2466270ac6622cb386382e274947906cdb4",
+      "bytes": 9586
+    },
+    "Yash_Pathak_Experian_Analista_S\u00eanior_de_bd754d7f.tex": {
+      "sha256": "b2de0f064ff90c262b4cf7958398d2466270ac6622cb386382e274947906cdb4",
+      "bytes": 9586
+    },
+    "Yash_Pathak_Modal_Developer_Relations_Engineer_8c19c344.tex": {
+      "sha256": "92e0957f21720c476d29ac87bc71192e5532912a5ed62cc30efbcf440d5fed60",
+      "bytes": 9482
+    },
+    "Yash_Pathak_Samsara_Finance__Strategy_424cacdf.tex": {
+      "sha256": "a86e192695708705ebd1f65c680405abdcf6e609d8ddf09dfc691e5ad08fe1bb",
+      "bytes": 9533
+    },
+    "Yash_Pathak_Scale_AI_Forward_Deployed_Software_27f742d2.tex": {
+      "sha256": "74880e214e919d3a8055f154c35caf6c0a943c0e671b7643dad92a1dc76df9e7",
+      "bytes": 9483
+    }
+  }
+}

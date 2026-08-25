@@ -902,6 +902,27 @@ class JobScoutOrchestrator:
         
         self._save_state()
     
+    @staticmethod
+    def _split_unreadable(results):
+        """
+        Separate jobs whose description was never actually read (R61).
+
+        Returns (readable, unreadable). A job is unreadable when enrichment
+        set `scraped_successfully` false — it still has whatever short
+        description discovery found, which is honest but thin.
+
+        Absent flags count as readable, so a replayed run or a hand-built
+        fixture from before this existed behaves as it always did.
+        """
+        readable, unreadable = [], []
+        for result in results or []:
+            job = result.get('job', {}) if isinstance(result, dict) else {}
+            if job.get('scraped_successfully') is False:
+                unreadable.append(result)
+            else:
+                readable.append(result)
+        return readable, unreadable
+
     def _run_generation(self):
         """Stage 4: Generate tailored resumes for the top-K best-fit jobs."""
         logger.info("\n" + "=" * 80)
@@ -918,6 +939,29 @@ class JobScoutOrchestrator:
         # we pay for it only on the highest-scoring jobs. K is set per-run via
         # --max-resumes, falling back to profile.agent_preferences.max_jobs_to_generate.
         max_resumes = self.max_resumes or self.profile.agent_preferences.max_jobs_to_generate
+
+        # A resume tailored to a posting nobody could read is tailored to
+        # nothing (R61). Enrichment marks a job it could not scrape, and this
+        # is the first thing that has ever read the mark — the flag was
+        # written since the agent existed and consulted by no one, which is
+        # how a fabricated JD reached eight resumes.
+        #
+        # Scoring such a job is still fine: a short description is thin, not
+        # false, and the job belongs on the board. Spending a model call to
+        # tailor against it is not.
+        analysis_results, unreadable = self._split_unreadable(analysis_results)
+        if unreadable:
+            logger.info(f"📄 {len(unreadable)} job(s) kept on the board but not "
+                        f"given a resume — no description could be read:")
+            for result in unreadable[:5]:
+                job = result.get('job', {})
+                logger.info(f"      {job.get('company', '?')} — "
+                            f"{str(job.get('title', ''))[:48]}")
+
+        if not analysis_results:
+            logger.warning("⚠️  No jobs with a readable description to generate for")
+            return
+
         ranked = sorted(
             analysis_results,
             key=lambda r: r.get('score', {}).get('overall', 0),

@@ -1415,6 +1415,54 @@ Two questions, and they are not the same:
 
 Worth measuring together, and after a fresh baseline rather than before.
 
+## Q22. The board accumulates; the gates only run once
+
+**Status:** Open. Surfaced 2026-08-25 while cleaning up after R61, and it
+blocks the public board.
+
+Every gate this project has built — R54's experience floor, R55's country
+check, R56's eligibility — runs **between enrichment and analysis**. That is
+the right place for a pipeline and the wrong place for a board, because the
+board is a store that accumulates and the gates fire once, at the moment a job
+is first scored.
+
+So a gate shipped on Tuesday never sees a job scored on Monday.
+
+**Measured, immediately after R61's purge:** of 69 scored jobs in the store,
+**26 (38%) would be excluded by the gates as they stand today** — and they hold
+the entire top of the board:
+
+    55.8  Samsara       People Analytics AI Engineer     8+ years
+    55.3  Samsara       Finance & Strategy AI Engineer   8+ years
+    54.6  Databricks    AI Engineer - FDE                excludes new grads
+    54.5  Scale AI      Forward Deployed SWE, Public     5+ years
+    54.3  Affirm        Software Engineer II, Fullstack  5+ years
+
+Every one of those is a posting R54 was written to remove, sitting at the top
+of the board because it was scored before R54 existed.
+
+**The options, none obviously right:**
+
+- **Gate at read time.** Always current, no migration, and the store already
+  holds `full_jd` so the gate has what it needs. Costs a regex pass per row
+  per page load — free at 107 rows, not free at the scale a public board
+  implies.
+- **Sweep on demand.** Cheap reads, one pass after each gate change. Goes
+  stale again the moment the next gate ships, which on this project's history
+  is roughly weekly.
+- **Store the verdict with a gate version**, recompute only when the version
+  moves. Correct and the most machinery.
+
+**What it must not do:** reuse `status`. That column is what the *user*
+decided, and R47 exists because conflating a system decision with a human one
+is a mistake this project already made once.
+
+**Related:** the same shape as the R61 purge — code improvements do not reach
+data already on disk. Worth asking, when the next gate is written, how it
+reaches the rows that already exist.
+
+---
+
 ## Q21. One skills slot changes between resumes, and picks the wrong thing — RESOLVED (R59)
 
 **Status:** Resolved 2026-08-25 — see R59. Both halves this entry called
@@ -5137,6 +5185,88 @@ None of them block the board; all of them decide the shape of what follows.
 
 Deliberately not a build plan. The architecture document is worth writing when
 phase two starts and the WASM spike has reported.
+
+---
+
+## R61. The pipeline invented job descriptions, and scored them
+
+**Decision:** (2026-08-25) A failed scrape is recorded as failed. The mock is
+reachable only when a person asks for it.
+
+**What was happening.** When `scrape_jd` failed, enrichment called
+`mock_scrape_jd` and returned its output as if it were the posting. That mock
+writes invented boilerplate — *"a leading technology company building
+innovative solutions that impact millions of users"*, *"an entry-level position
+perfect for new graduates or those with 0-2 years of experience"* — and
+hard-codes `scraped_successfully: True`.
+
+R44 and R45 are about a model inventing. This is the *pipeline* inventing, and
+it was invisible for three reasons at once:
+
+- `scraper_used` said `mock_fallback`, and **nothing anywhere read it**.
+- `scraped_successfully` was written by every path and **read by none**.
+- The result was cached, and a cache hit hard-coded `scraped_successfully:
+  True` as well — so on every subsequent run the invention came back *without
+  even the warning*, because the warning happens at scrape time and a cache hit
+  never scrapes. Each re-run made it quieter.
+
+### Measured on real data
+
+    cached JDs that were fabricated       36 of 178   (20%)
+    scored jobs derived from one          34 of 103   (33%)
+    of those, with a generated resume      8
+
+And they were not scattered through the middle of the board — they **held the
+top of it**: 55.8, 55.3, 55.0, 54.4, 54.1. Generic flattering prose matches
+every query, which makes it an ideal embedding target. The invented text also
+reads *"perfect for new graduates"*, which is exactly the phrasing R54's body
+gate reasons about, so the fabrication **guaranteed its own pass** through the
+gate built to catch bad fits.
+
+The Elastic posting at 55.0 was the second-ranked job of the run this session
+spent its first half analysing.
+
+### The fix is three lines and a principle
+
+A failed scrape returns the short description discovery already found — real
+text, merely thin — with `scraped_successfully: False` and `scraper_used:
+"failed"`. Cache hits carry their origin instead of asserting success.
+
+The mock itself is untouched and stays. `--mock` is a thing a person asks for;
+using it when nobody asked is R47's distinction exactly — "you chose this" has
+to look different from "this broke".
+
+Then something finally reads the flag: generation skips jobs whose description
+was never read. Scoring them is still fine — a short description is thin, not
+false, and the job belongs on the board — but spending a model call to tailor
+against it produces a resume tailored to nothing. A missing flag counts as
+readable, so replayed runs and older fixtures behave as they always did.
+
+### Fixing the code does not clean the disk
+
+`scripts/purge_fabricated.py` removes the fabricated cache entries and clears
+the scores taken against them, keeping the jobs themselves — they are real
+postings, and only what was concluded about them is worthless. Clearing
+`scored_at` also returns them to `unprocessed_urls()`, so the next run scores
+them against real text.
+
+Run on the author's data: 36 cache entries removed, 34 scores cleared, cache
+now holds zero fabricated descriptions. The eight resumes already on disk are
+left alone and reported, because deleting someone's files is their call.
+
+### Found by running the thing
+
+None of this was visible from the tests, the board, or the summary — every one
+of them reported success. It surfaced because a fresh run was made before
+styling a board on top of stale artifacts, and one line of the log said
+`using mock fallback`.
+
+### Verified
+
+20 new tests, 628 pass, baselines clean. The four test classes that read a real
+run were also repointed at `baselines/2026-08-25-pre-r53/` rather than
+`outputs/`, since a live output directory is overwritten by the next run — this
+one silently cost three tests their fixture an hour before it was noticed.
 
 ---
 

@@ -335,7 +335,10 @@ class TestAgainstTheRealRun(unittest.TestCase):
     """Skipped on a clean clone."""
 
     def setUp(self):
-        path = ROOT / "outputs" / "2026-08-25" / "analysis_results.json"
+        # The frozen copy, not `outputs/` — a live output directory is
+        # overwritten by the next run, and these assert facts about one
+        # specific run. Verified by `scripts/baseline.py verify --all`.
+        path = ROOT / "baselines" / "2026-08-25-pre-r53" / "analysis_results.json"
         if not path.exists():
             self.skipTest("needs a real analysis run")
         self.results = json.loads(path.read_text(encoding="utf-8"))

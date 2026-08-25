@@ -90,11 +90,18 @@ class EnrichmentAgent:
                     # Check JD cache first
                     cached = job_cache.get_jd(job.apply_url) if job_cache else None
                     if cached:
+                        # Provenance survives the round trip (R61). This said
+                        # `True` unconditionally, so a fabricated JD written
+                        # by the old mock fallback came back from cache
+                        # claiming to be a successful scrape — and without
+                        # even the warning, since the warning happens at
+                        # scrape time and a cache hit never scrapes.
+                        origin = cached.get("scraper_used", "unknown")
                         scrape_result = {
                             "full_jd": cached["full_jd"],
                             "requirements": cached["requirements"],
-                            "scraped_successfully": True,
-                            "scraper_used": f"cache ({cached['scraper_used']})",
+                            "scraped_successfully": "mock" not in str(origin).lower(),
+                            "scraper_used": f"cache ({origin})",
                         }
                     else:
                         scrape_result = self._real_scrape(job)
@@ -195,11 +202,31 @@ class EnrichmentAgent:
                        f"({len(result['full_jd'])} chars)")
             return result
 
-        # Fall back to mock if scraping failed
-        logger.warning(f"   ⚠️  Real scrape failed, using mock fallback")
-        mock_result = mock_scrape_jd(job.apply_url, job.title, job.company)
-        mock_result["scraper_used"] = "mock_fallback"
-        return mock_result
+        # A failed scrape is a failed scrape (R61).
+        #
+        # This used to fall back to `mock_scrape_jd`, which returns invented
+        # boilerplate — "a leading technology company building innovative
+        # solutions", "perfect for new graduates or those with 0-2 years" —
+        # and hard-codes `scraped_successfully: True`. Nothing downstream
+        # reads `scraper_used`, so the invention was indistinguishable from a
+        # real posting: it was scored, cached, ranked and turned into resumes.
+        #
+        # Measured when it was found: 36 of 178 cached JDs were fabricated,
+        # 34 of 103 scored jobs in the store came from one, and they held the
+        # top of the board — generic flattering prose is an ideal embedding
+        # target, so the fabrication outranked every real posting.
+        #
+        # The mock itself is fine and stays; `--mock` is a thing a person asks
+        # for. Using it when nobody asked is R47's distinction exactly: "you
+        # chose this" has to look different from "this broke".
+        logger.warning("   ⚠️  Scrape failed — keeping the short description, "
+                       "not inventing one")
+        return {
+            "full_jd": job.description or "",
+            "requirements": {"must_have": [], "nice_to_have": []},
+            "scraped_successfully": False,
+            "scraper_used": "failed",
+        }
 
 
 def main():

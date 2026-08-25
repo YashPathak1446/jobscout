@@ -282,7 +282,10 @@ class TestAgainstTheRealRun(unittest.TestCase):
     def setUp(self):
         import json
 
-        self.analysis = ROOT / "outputs" / "2026-08-25" / "analysis_results.json"
+        # The frozen copy, not `outputs/` — a live output directory is
+        # overwritten by the next run, and these assert facts about one
+        # specific run. Verified by `scripts/baseline.py verify --all`.
+        self.analysis = ROOT / "baselines" / "2026-08-25-pre-r53" / "analysis_results.json"
         master = ROOT / "data" / "master_resumes" / "yash_pathak.tex"
         if not self.analysis.exists() or not master.exists():
             self.skipTest("needs a real run and master resume")
