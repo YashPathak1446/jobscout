@@ -10,6 +10,7 @@ Location: jobscout_v3/tools/jobs/job_filter.py
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Optional, List
 
@@ -102,6 +103,140 @@ def accepted_seniority_terms(levels) -> list:
         terms.append(key)
         terms.extend(SENIORITY_SYNONYMS.get(key, []))
     return sorted(set(terms))
+
+
+# ---------------------------------------------------------------------------
+# The body gate (R54)
+#
+# `evaluate()` above reads the *title*, and that is deliberate: it runs before
+# enrichment, so it must not need a JD, which protects the scraping budget.
+# The cost is that it cannot see a clean title over a disqualifying body, and
+# three of eight resumes in one run went to jobs that ruled the candidate out
+# in their second paragraph:
+#
+#   Samsara     "Finance & Strategy AI Engineer"        8+ years experience
+#   Scale AI    "Forward Deployed Software Engineer"    5+ years experience
+#   Databricks  "AI Engineer - FDE (ALL LEVELS)"        "not intended for
+#                                                        new graduate ...
+#                                                        applicants"
+#
+# Databricks is the sharpest: the title advertises all levels and the body
+# excludes new graduates by name.
+#
+# So this is a second pass, after enrichment and before generation. It reads
+# the JD and costs nothing — no model, no network, just regex — which is what
+# lets it sit downstream of the cheap gate without undoing that gate's point.
+# ---------------------------------------------------------------------------
+
+# How many years of experience a candidate at each level can credibly claim.
+# The gate compares a JD's *floor* against the top of the profile's range, so
+# a profile of [new grad, entry level, junior] tolerates a floor of 3 and is
+# ruled out by 5.
+YEARS_BY_LEVEL = {
+    "new grad": 0, "entry level": 2, "junior": 3,
+    "mid": 5, "senior": 8, "staff": 10, "lead": 10,
+}
+
+# A requirement, not an anecdote. "5+ years" and "3-5 years" are floors; the
+# nearby word "experience" is what separates them from "grew 40% in 3 years".
+_YEARS_PATTERNS = (
+    re.compile(r"(\d{1,2})\s*\+\s*years?", re.I),
+    # The `\+?` on the upper bound matters more than it looks. A real posting
+    # read "3-5+ years of QA automation experience": without it only the "5+"
+    # matched, the floor was read as 5 rather than 3, and a job the candidate
+    # qualifies for was dropped. A gate's false positives are invisible —
+    # nobody sees the job that was never shown — so the range form has to win.
+    re.compile(r"(\d{1,2})\s*(?:-|–|to)\s*\d{1,2}\s*\+?\s*years?", re.I),
+    re.compile(r"(?:at least|minimum(?:\s+of)?|min\.?)\s*(\d{1,2})\s*years?", re.I),
+)
+
+_EXPERIENCE_NEARBY = re.compile(
+    r"experience|building|engineering|professional|industry|working", re.I)
+
+# Terms that describe the candidate this profile is.
+_ENTRY_TERMS = re.compile(
+    r"new\s+grad(?:uate)?s?|entry[-\s]?level|recent\s+graduates?|"
+    r"university\s+graduates?|early\s+career", re.I)
+
+# Phrases that turn a mention of those terms into an exclusion. Without this
+# the gate would reject the very jobs it exists to keep: Elastic's JD reads
+# "an entry-level position perfect for new graduates", which contains every
+# term above and means the opposite.
+_EXCLUSION_CUES = re.compile(
+    r"not\s+intended\s+for|not\s+(?:open|available|suitable)\s+(?:to|for)|"
+    r"is\s+not\s+an?\s|does\s+not\s+(?:accept|consider)|"
+    r"no\s+(?:new\s+grad|entry[-\s]?level)|unfortunately[^.]{0,40}not|"
+    r"cannot\s+(?:accept|consider)|ineligible", re.I)
+
+
+def _tolerated_years(profile) -> int:
+    """The highest experience floor this profile's seniority range can meet."""
+    levels = getattr(profile.job_preferences, "seniority", None) or []
+    known = [YEARS_BY_LEVEL[level.strip().lower()]
+             for level in levels if level.strip().lower() in YEARS_BY_LEVEL]
+    # An unrecognised range should not silently reject everything, so an empty
+    # result means "no opinion" rather than "zero years tolerated".
+    return max(known) if known else max(YEARS_BY_LEVEL.values())
+
+
+def required_years(text: str):
+    """
+    The lowest experience floor the JD states, or None if it states none.
+
+    The *lowest* because a posting often lists several — "5+ years backend,
+    2+ years with Go" — and the smallest is the one a candidate has to clear
+    to be considered at all. Taking the largest would reject jobs over a
+    nice-to-have.
+    """
+    floors = []
+    for pattern in _YEARS_PATTERNS:
+        for match in pattern.finditer(text or ""):
+            window = text[max(0, match.start() - 60):match.end() + 60]
+            if _EXPERIENCE_NEARBY.search(window):
+                floors.append(int(match.group(1)))
+    return min(floors) if floors else None
+
+
+def excludes_entry_level(text: str) -> bool:
+    """
+    Does the body rule out early-career applicants *by name*?
+
+    Presence of "new graduate" proves nothing on its own — the jobs worth
+    keeping say it too. What matters is an exclusion cue shortly before it,
+    which is how "not intended for internship, new graduate, or entry-level
+    applicants" is told apart from "perfect for new graduates".
+    """
+    for term in _ENTRY_TERMS.finditer(text or ""):
+        before = text[max(0, term.start() - 120):term.start()]
+        if _EXCLUSION_CUES.search(before):
+            return True
+    return False
+
+
+def body_disqualifiers(text: str, profile) -> list:
+    """
+    Reasons this JD's body rules the profile out. Empty means keep.
+
+    Deterministic and offline by design: it runs on every enriched job, and a
+    gate that cost an API call per posting would be a gate nobody could afford
+    to leave on.
+    """
+    if not text:
+        return []
+
+    reasons = []
+
+    floor = required_years(text)
+    tolerated = _tolerated_years(profile)
+    if floor is not None and floor > tolerated:
+        reasons.append(
+            f"asks for {floor}+ years of experience; this profile's range "
+            f"tops out around {tolerated}")
+
+    if excludes_entry_level(text):
+        reasons.append("states that early-career applicants are not eligible")
+
+    return reasons
 
 
 def evaluate(job, profile) -> FilterDecision:

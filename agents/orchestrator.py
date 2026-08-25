@@ -796,13 +796,54 @@ class JobScoutOrchestrator:
 
         self._save_state()
 
+    def _apply_body_gate(self, jobs):
+        """
+        Drop jobs whose *body* rules this profile out, before scoring them.
+
+        Discovery's filter reads the title, deliberately: it runs before
+        enrichment so it needs no JD, which is what protects the scraping
+        budget. The cost is that a clean title can hide a disqualifying body,
+        and in one real run three of eight generated resumes went to postings
+        that excluded the candidate in their second paragraph — including one
+        whose title advertised "ALL LEVELS" while the body said it was "not
+        intended for ... new graduate ... applicants".
+
+        Here rather than in discovery because it needs the JD, and after
+        enrichment rather than during it because enrichment is scraping: this
+        pass costs no model call and no request, so it can run on everything.
+
+        Non-fatal by construction. A job that survives is scored as before; a
+        job that does not is logged with the reason, because a filter that
+        silently removes things is the shape this project keeps regretting.
+        """
+        from tools.jobs.job_filter import body_disqualifiers
+
+        kept, dropped = [], []
+        for job in jobs or []:
+            reasons = body_disqualifiers(job.get("full_jd", ""), self.profile)
+            if reasons:
+                dropped.append((job, reasons))
+            else:
+                kept.append(job)
+
+        if dropped:
+            logger.info(f"🚫 Body gate dropped {len(dropped)} of {len(jobs)} "
+                        f"job(s) whose description rules you out:")
+            for job, reasons in dropped:
+                logger.info(f"   {job.get('company', '?')} — "
+                            f"{str(job.get('title', ''))[:48]}")
+                for reason in reasons:
+                    logger.info(f"      {reason}")
+
+        return kept
+
     def _run_analysis(self):
         """Stage 3: Analyze jobs and select components."""
         logger.info("\n" + "=" * 80)
         logger.info("📊 STAGE 3: ANALYSIS")
         logger.info("=" * 80)
         
-        jobs = self.state['enriched_jobs']
+        jobs = self._apply_body_gate(self.state['enriched_jobs'])
         if not jobs:
             logger.warning("⚠️  No jobs to analyze")
             return

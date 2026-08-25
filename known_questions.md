@@ -4303,6 +4303,76 @@ regenerated and verified clean.
 
 ---
 
+## R54. The requirement the title hides
+
+**Decision:** (August 2026) A second deterministic gate, after enrichment and
+before analysis, reading the JD body for requirements the title cannot show.
+
+**The failure.** Three of eight resumes in one run went to postings that ruled
+the candidate out in their second paragraph, all with clean titles:
+
+| | title says | body says |
+|---|---|---|
+| Samsara | "Finance & Strategy AI Engineer" | 8+ years relevant experience |
+| Scale AI | "Forward Deployed Software Engineer" | 5+ years experience |
+| Databricks | "AI Engineer - FDE (**ALL LEVELS**)" | "not intended for internship, new graduate, or entry-level applicants" |
+
+Databricks is the sharpest: the title advertises every level while the body
+excludes new graduates by name. No `exclude_keywords` entry can fire on any of
+these, because the discovery filter is title-scoped.
+
+**Why title-scoped was right, and still is.** That filter runs *before*
+enrichment so it needs no JD, which is what protects the scraping budget. The
+answer is not to move it but to add a second pass downstream — and the reason
+that is affordable is that enrichment is scraping, not inference. This gate
+costs no model call and no request, just regex, so it can run on everything.
+
+### The hard part is not finding the words
+
+It is telling the disqualifying use from the identical words in a job worth
+keeping. Elastic's JD — a genuinely good match — reads *"an entry-level
+position perfect for new graduates or those with 0-2 years of experience"*. It
+contains "entry-level", "new graduates" and a years figure, and means the
+opposite of Databricks.
+
+So:
+
+- **Years are read as a floor, and the lowest floor wins.** A posting listing
+  "5+ years backend, 2+ years Go" requires 2 to apply; taking the largest
+  would reject on a nice-to-have. The floor is compared against the *profile's*
+  range rather than a constant, so a senior candidate is not excluded by 8+.
+- **A years figure only counts near an experience word.** "grew revenue 40% in
+  3 years" is an achievement, not a bar.
+- **Entry-level terms need a nearby negation to disqualify.** "not intended
+  for", "not open to", "cannot consider" — within ~120 characters, so a "not"
+  three paragraphs earlier about visa sponsorship does not govern it.
+
+### A false positive it caught on the way
+
+Discord's QA role asks for **"3-5+ years"**. The first version read that as a
+floor of 5 and dropped it: the range pattern required the upper bound to be
+followed directly by "years", so only the "5+" matched. The true floor is 3,
+which the profile clears.
+
+Worth fixing carefully because **a gate's false positives are invisible** —
+nobody ever sees the job that was never shown. That asymmetry is the argument
+for making the range form win.
+
+### Measured
+
+Against the 35 enriched jobs of the reviewed run: **4 dropped, 31 kept.** The
+three above plus one genuine Okta posting with an 8-year floor — and *not* the
+second Okta posting, which asks for 3. The top five for generation became
+Elastic, Baseten, Experian ×2 and Modal; the first two are the ones a human
+review called good matches for the right reasons.
+
+Dropped jobs are logged with their reason rather than silently removed, which
+is the shape this project keeps regretting when it is missing.
+
+26 new tests, 490 pass, baselines clean.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format
