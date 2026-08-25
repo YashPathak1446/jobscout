@@ -471,12 +471,16 @@ before designing around any of them.
 
 ## 14. The React frontend — screens settled first (2026-08-23)
 
-**All four screens exist, in Streamlit — see R40 and R41.** The board, the
-backend explanation, the seniority controls and the import confirmation
-screen all landed, along with the facades they need, a bug that let the
-wizard destroy a profile, and a `.env` that only some entry points loaded.
-Still missing: runs as background jobs, which is a FastAPI concern rather
-than a Streamlit one.
+**All four R33 decisions are now built — see R40, R41 and R51.** The board,
+the backend explanation, the seniority controls, the import confirmation
+screen, and runs that outlive the tab that started them. What remains of this
+item is the React port itself, which is a re-skin over facades that all exist:
+`start_run` returns an id, progress is a row in `data/runs.db`, and the
+polling loop reads exactly what an SSE endpoint would push.
+
+The open question is not technical. **Local tool or hosted product?** Only the
+second needs auth and per-user storage (Q1/Q15), and only the second makes the
+port worth its cost — a React frontend reaches nobody new on its own.
 
 Doing this in Streamlit first was the cheap order. Item 14 predicted items
 9-13 would change what the screens must show, and they did — settling that in
@@ -4138,6 +4142,54 @@ builds and `pip install --dry-run` resolves.
 Python and a terminal. A real installer for people who have neither is a
 different project, and the doctor is what makes the terminal version
 survivable in the meantime.
+
+---
+
+## R51. Runs that outlive the tab
+
+**Decision:** (August 2026) `start_run()` returns an id immediately and the
+work continues in a background thread; progress goes to `data/runs.db`, and
+any screen can ask about it afterwards.
+
+This is the last of R33's four decisions, and the reason is narrow. The
+pipeline takes minutes, it ran inside the request that asked for it, and a
+browser reload therefore lost the progress bar and every way of telling
+whether the work was still going.
+
+**Progress lives on disk, not in a session.** That is the whole design. Anything
+held in `session_state` survives exactly as badly as the thing it replaces, so
+the registry is SQLite next to the job store, and `active_runs()` finds a run
+with no id at all — which is what a reloaded tab has.
+
+**A thread, not a subprocess.** The requirement is that closing the tab does not
+cancel the run, and the server outlives the tab. A subprocess would also survive
+the *server* restarting, which is worth having and is not what was asked for.
+Callers only ever see an id, so swapping it later changes nothing above.
+
+**Checkpoints stay in the foreground, deliberately.** R26's review checkpoint
+resolves through a callback that waits for an answer; in a background worker
+there is nobody to ask, and waiting on a browser that may have closed would
+hang the thread forever. So "show me the jobs before writing resumes" runs the
+old way and says so in its help text. Two paths is worse than one, and a
+checkpoint nobody can answer is worse than two paths.
+
+### Why this is the shape FastAPI needs
+
+R33 specified `POST /runs` returning an id, with progress over SSE. What is
+here is that minus the transport: the id exists, the progress is a row, and
+the polling loop reads exactly what an SSE endpoint would push. The React port
+inherits the registry rather than replacing it.
+
+### Verified in the browser, which is the only place the claim means anything
+
+Started a run from the app, then **navigated away and loaded the page fresh**
+— no session state, never pressed Run — and the new page found run
+`089dc8a0d8dc` still going and adopted it. It then finished on its own and
+reported *2 valid resumes from 20 scored jobs*.
+
+14 new tests, 436 pass, baselines clean. Every test throws away its handle on
+the run and asks the registry cold, because "a thread was started" is not the
+guarantee — "the answer comes from disk" is.
 
 ---
 

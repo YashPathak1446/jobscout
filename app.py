@@ -25,6 +25,7 @@ import streamlit as st
 
 from agents.orchestrator import (
     JobScoutOrchestrator,
+    active_runs,
     available_profiles,
     backend_status,
     board_filters,
@@ -38,7 +39,9 @@ from agents.orchestrator import (
     load_run,
     pdflatex_available,
     previous_runs,
+    run_status,
     score_bands,
+    start_run,
     seniority_levels,
     set_job_status,
 )
@@ -100,6 +103,9 @@ def _init_state():
     # read it from, and what the profile will be called. Nothing is written
     # while this is set (R33).
     st.session_state.setdefault("pending_import", None)
+    # The background run this tab is watching. Only a hint — the truth is in
+    # data/runs.db, so a reload re-finds the run rather than losing it (R51).
+    st.session_state.setdefault("run_id", None)
 
 
 def _goto(step: int):
@@ -634,20 +640,106 @@ def screen_run():
         _render_review(has_latex)
         return
 
+    # A run already going takes over too — including one this browser has
+    # never heard of, because the answer comes from disk rather than from
+    # session state (R51). Reloading the page used to lose the run entirely.
+    running = st.session_state.run_id or _adopt_running()
+    if running:
+        _render_running(running, has_latex)
+        return
+
     left, right = st.columns(2)
     max_jobs = left.slider("Jobs to search for", 5, 50, 20, step=5)
     max_resumes = right.slider("Resumes to generate", 1, 10, 3)
     review = st.checkbox(
         "Show me the jobs before writing resumes",
         help="Stops after scoring so you can see what was found. Generation is "
-             "the expensive step, so this is where to spend a moment.",
+             "the expensive step, so this is where to spend a moment. Runs "
+             "this way stay in the foreground, because a paused run needs "
+             "somebody present to answer it.",
     )
 
     if st.button("Run", type="primary"):
-        _execute(max_jobs, max_resumes, has_latex, review)
+        if review:
+            # Foreground: a checkpoint has nobody to ask in a background
+            # worker, and blocking one on a browser that may have closed
+            # would hang it forever.
+            _execute(max_jobs, max_resumes, has_latex, review)
+        else:
+            st.session_state.run_id = start_run(
+                profile_name=st.session_state.profile_name,
+                api_key=st.session_state.api_key,
+                max_jobs=max_jobs, max_resumes=max_resumes,
+                generate_pdf=has_latex,
+            )
+            st.rerun()
 
     if st.session_state.results is not None:
         _render_results(st.session_state.results, has_latex)
+
+
+def _adopt_running():
+    """
+    A run this session did not start, found on disk.
+
+    The case that matters is a reload: the tab has no memory of pressing Run,
+    the work is still going, and without this the screen would offer to start
+    a second one.
+    """
+    for run in active_runs():
+        if run["profile"] == st.session_state.profile_name:
+            st.session_state.run_id = run["id"]
+            return run["id"]
+    return None
+
+
+def _render_running(run_id, has_latex):
+    """
+    Progress for a run that owns itself.
+
+    Polled rather than streamed, because the worker writes to SQLite and this
+    process only reads it — which is the same shape SSE would consume, so the
+    eventual FastAPI version reads the same rows.
+    """
+    status = run_status(run_id)
+    if not status:
+        st.session_state.run_id = None
+        st.rerun()
+
+    if status["active"]:
+        st.info("This run keeps going if you close the tab. "
+                "Come back to this screen to see where it got to.", icon="⏳")
+        stage = (status["stage"] or "starting").title()
+        label = f"{stage} — {status['message']}" if status["message"] else stage
+        st.progress(status["fraction"], text=label)
+
+        left, right = st.columns([1, 4])
+        if left.button("Refresh"):
+            st.rerun()
+        right.caption(f"Run `{run_id}` · started {_since(status['started_at']).replace('found ', '')}")
+        return
+
+    if status["state"] == "failed":
+        st.error(f"The run stopped: {status['error']}")
+        if st.button("Start another"):
+            st.session_state.run_id = None
+            st.rerun()
+        return
+
+    result = status["result"]
+    st.success(f"Done — {result.get('valid', 0)} valid resume(s) from "
+               f"{result.get('analysed', 0)} scored jobs.")
+    for reason in result.get("degraded") or []:
+        st.warning(f"Bullets were not rewritten: {reason}", icon="✍️")
+
+    a, b = st.columns([1, 3])
+    if a.button("Start another"):
+        st.session_state.run_id = None
+        st.rerun()
+    if b.button("See all your jobs"):
+        st.session_state.run_id = None
+        st.session_state.view = "board"
+        st.rerun()
 
 
 def _execute(max_jobs, max_resumes, has_latex, review):

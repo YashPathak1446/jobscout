@@ -238,6 +238,106 @@ def job_history(url: str) -> list:
         store.close()
 
 
+def start_run(profile_name, api_key="", max_jobs=20, max_resumes=3,
+              generate_pdf=True, output_dir="outputs") -> str:
+    """
+    Begin a run in the background and return its id immediately (R33).
+
+    The pipeline takes minutes, and until now it ran inside the request that
+    asked for it — so the browser had to stay open and a reload lost both the
+    progress bar and any way of knowing whether the run was still going.
+
+    Progress goes to `data/runs.db` rather than to the caller, because the
+    caller may not exist by the time the run ends. Poll `run_status(id)`.
+
+    Checkpoints are deliberately not offered here. A background run has nobody
+    to ask, and R26's checkpoint resolves through a callback that would block
+    the worker forever waiting for a browser that may have closed. Reviewing
+    before generation stays a foreground feature.
+    """
+    import threading
+
+    from tools.jobs.run_registry import RunRegistry
+
+    registry = RunRegistry()
+    run_id = registry.create(profile_name)
+
+    def worker():
+        try:
+            orchestrator = JobScoutOrchestrator(
+                profile_name=profile_name,
+                api_key=api_key or None,
+                output_dir=output_dir,
+                max_resumes=max_resumes,
+                generate_pdf=generate_pdf,
+                checkpoint=False,
+            )
+            state = orchestrator.run(
+                max_jobs=max_jobs,
+                on_progress=lambda tick: registry.progress(
+                    run_id, tick.stage, tick.done, tick.total, tick.message),
+            )
+            results = (state or {}).get("generation_results") or []
+            registry.finish(run_id, {
+                "analysed": len((state or {}).get("analysis_results") or []),
+                "generated": len(results),
+                "valid": sum(1 for r in results if r.get("status") == "valid"),
+                # Carried out of the run so a reloaded page can say why the
+                # bullets are the user's own without reopening state.json.
+                "degraded": sorted({r["degraded"] for r in results
+                                    if r.get("degraded")}),
+            }, output_dir=getattr(orchestrator, "output_path", ""))
+        except Exception as exc:                      # the worker owns nothing else
+            logger.exception("Background run failed")
+            registry.fail(run_id, f"{type(exc).__name__}: {exc}")
+        finally:
+            registry.close()
+
+    # Daemon, so a stuck run cannot keep the interpreter alive after the
+    # server is told to stop.
+    threading.Thread(target=worker, name=f"jobscout-run-{run_id}",
+                     daemon=True).start()
+    return run_id
+
+
+def run_status(run_id: str):
+    """Where a background run has got to, or None if there is no such run."""
+    from tools.jobs.run_registry import RunRegistry
+
+    registry = RunRegistry()
+    try:
+        return registry.get(run_id)
+    finally:
+        registry.close()
+
+
+def active_runs() -> list:
+    """
+    Runs still going, read from disk.
+
+    What a reloaded page asks: it has no memory of starting anything, so the
+    answer cannot come from session state.
+    """
+    from tools.jobs.run_registry import RunRegistry
+
+    registry = RunRegistry()
+    try:
+        return registry.active()
+    finally:
+        registry.close()
+
+
+def recent_runs(limit: int = 10) -> list:
+    """The last few runs, newest first, whatever became of them."""
+    from tools.jobs.run_registry import RunRegistry
+
+    registry = RunRegistry()
+    try:
+        return registry.recent(limit)
+    finally:
+        registry.close()
+
+
 def score_bands() -> dict:
     """
     Where your scored jobs' quartiles fall, for labelling a match.
