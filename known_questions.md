@@ -1415,10 +1415,15 @@ Two questions, and they are not the same:
 
 Worth measuring together, and after a fresh baseline rather than before.
 
-## Q22. The board accumulates; the gates only run once
+## Q22. The board accumulates; the gates only run once — RESOLVED (R62)
 
-**Status:** Open. Surfaced 2026-08-25 while cleaning up after R61, and it
-blocks the public board.
+**Status:** Resolved 2026-08-25 — see R62. The third option below, with one
+change: the version is **derived from the gate's own source plus the profile
+fields it reads**, rather than a constant somebody bumps. A version you have to
+remember to update is the same shape as the field nobody read (R31) and the
+flag nobody consulted (R61), and this project has now shipped that bug twice.
+
+The original entry follows.
 
 Every gate this project has built — R54's experience floor, R55's country
 check, R56's eligibility — runs **between enrichment and analysis**. That is
@@ -5267,6 +5272,77 @@ styling a board on top of stale artifacts, and one line of the log said
 run were also repointed at `baselines/2026-08-25-pre-r53/` rather than
 `outputs/`, since a live output directory is overwritten by the next run — this
 one silently cost three tests their fixture an hour before it was noticed.
+
+---
+
+## R62. A gate that only ever ran once
+
+**Decision:** (2026-08-25) The board stores each job's gate verdict and
+recomputes it when the gate's code or the profile it reads has changed.
+
+**The gap.** Every gate — R54's experience floor, R55's country check, R56's
+eligibility — runs between enrichment and analysis. Right for a pipeline, which
+is a pass over new work. Wrong for a board, which accumulates: the gate fires
+once, when a job is first scored, and a gate shipped on Tuesday never sees a
+job scored on Monday.
+
+Measured immediately after R61's purge: of 69 scored jobs, **26 (38%) would be
+excluded by the gates as they stood**, and they held the entire top of the
+board — Samsara's 8+ years role at 55.8, Databricks at 54.6, Scale AI at 54.5.
+Every one a posting R54 was written to remove, sitting at the top because it
+was scored before R54 was written.
+
+### Stored, not recomputed per read
+
+Read-time gating is tempting and wrong here for a boring reason: **the board is
+paged.** Filtering a page the database already sliced turns a page of twenty
+into a page of twelve, and the count in "showing 1-25 of 68" stops meaning
+anything. So the verdict lives in a column and the filter is SQL.
+
+Two columns, added through R57's migration mechanism: the reason, and the
+fingerprint it was judged under.
+
+### The fingerprint is derived, not declared
+
+The obvious design is `GATE_VERSION = 3`, bumped by hand. This project has
+shipped that bug twice already — a field computed and never read (R31), a flag
+written by every path and consulted by none (R61) — and a version somebody must
+remember to bump is the same thing waiting to happen a third time.
+
+So the fingerprint is a hash of **this module's own source** plus the profile
+fields the gates read. The only way to change a gate without invalidating the
+stored verdicts is to not change it. Editing a comment in `job_filter.py`
+re-runs the gate over the store, which costs milliseconds and is the right side
+to err on.
+
+The profile half matters as much as the code half: R52 lets someone change
+their seniority range or preferred countries from the UI, and a verdict
+computed against the old answer is wrong the moment they do. A test pins each
+of those fields.
+
+`refresh_board_gate` is called before each render. After the first pass it is
+an indexed comparison matching nothing, which is what makes that affordable.
+
+### Hidden, and said out loud
+
+The gated jobs are not deleted and not silently dropped. The board shows a
+count — *"Also show 39 job(s) that rule you out"* — and revealing them marks
+each with the posting's own words: *"asks for 8+ years of experience; this
+profile's range tops out around 3"*.
+
+Silent removal is the shape this project keeps regretting, and `_apply_body_
+gate`'s own docstring says so about the pipeline half of the same gate.
+
+An unjudged row counts as eligible, so an unrun gate cannot empty a board.
+
+### Verified
+
+On the real store: 107 rows judged, **68 shown and 39 hidden**. The board's top
+five went from *Samsara People Analytics (8+ years), Samsara Finance &
+Strategy (8+ years), Databricks FDE (excludes new grads)* to *Software Engineer
+I, AI Engineer, AI Engineer Product* — entry-level roles, which is what the
+profile asks for. Checked end to end through `AppTest`: 68 shown, toggle on,
+107 shown with reasons attached. 24 new tests, 652 pass, baselines clean.
 
 ---
 

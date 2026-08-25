@@ -40,6 +40,7 @@ from agents.orchestrator import (
     load_run,
     pdflatex_available,
     previous_runs,
+    refresh_board_gate,
     run_status,
     score_bands,
     start_run,
@@ -1063,6 +1064,12 @@ def screen_board(has_latex):
     """
     st.subheader("Your jobs")
 
+    # Gates run once, when a job is scored; the board accumulates forever, so
+    # a gate shipped today never saw a job scored yesterday. This re-judges
+    # anything stale before the screen reads it, and does nothing at all once
+    # everything is current (R62).
+    refresh_board_gate(st.session_state.profile_name)
+
     stats = board_stats()
     if not stats["total"]:
         st.info(
@@ -1107,6 +1114,22 @@ def screen_board(has_latex):
         min_score = middle.slider("Minimum score", 0, 100, 0, step=5)
         only_resumes = right.checkbox("Only with a resume")
 
+        # Hidden, and said out loud. These postings rule this profile out in
+        # their own words — years of experience, an excluded country, a
+        # clearance — and the gates that catch them were written after most of
+        # these rows were scored. Removing them without a word would be the
+        # silent-truncation shape this project keeps finding, so the count is
+        # always visible and the toggle always available.
+        ineligible = board_total(include_ineligible=True) - board_total()
+        show_ineligible = False
+        if ineligible:
+            show_ineligible = st.checkbox(
+                f"Also show {ineligible} job(s) that rule you out",
+                help="Postings whose own description excludes this profile — "
+                     "too many years required, wrong country, or a clearance "
+                     "you do not hold.",
+            )
+
         # Company and source were filterable in the store from the day it was
         # written and had never been offered here. They matter more since R46:
         # the board went from three employers to forty-nine.
@@ -1131,6 +1154,7 @@ def screen_board(has_latex):
         "company": companies or None,
         "source": sources or None,
         "search": search or None,
+        "include_ineligible": show_ineligible,
     }
 
     matching = board_total(**criteria)
@@ -1241,6 +1265,11 @@ def _board_row(row, statuses, has_latex, bands=None):
         if row.get("scored_at") is None:
             meta.append("not scored yet")
         heading.caption("  ·  ".join(m for m in meta if m))
+
+        # Only reachable when the user asked to see these, so it explains
+        # rather than nags — and the reason is the posting's own words.
+        if row.get("gate_reason"):
+            heading.caption(f"⛔ Rules you out — {_plain(row['gate_reason'])}")
 
         # Writing only on a real change keeps a render from re-recording the
         # status a row already has.

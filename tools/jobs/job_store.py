@@ -62,7 +62,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     resume_tex  TEXT,
     resume_pdf  TEXT,
     run_date    TEXT,
-    selection   TEXT
+    selection   TEXT,
+    gate_reason  TEXT,
+    gate_checked TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_score  ON jobs(score);
@@ -158,7 +160,9 @@ class JobStore:
     # nobody who has been using the tool — which is everybody the store was
     # built for. Adding one is `ALTER TABLE` or it does not happen.
     _ADDED_COLUMNS = (
-        ("selection", "TEXT"),   # R57: why this resume looks like this
+        ("selection", "TEXT"),         # R57: why this resume looks like this
+        ("gate_reason", "TEXT"),       # R62: why the board would not show it
+        ("gate_checked", "TEXT"),      # R62: the fingerprint it was judged under
     )
 
     def _migrate(self) -> None:
@@ -193,6 +197,35 @@ class JobStore:
                 " WHERE url = ?",
                 (float(score), _now(), json.dumps(selection), url))
         self._db.commit()
+
+    def refresh_gate(self, fingerprint: str, evaluate) -> int:
+        """
+        Re-judge every row whose verdict predates the current gate (R62).
+
+        `evaluate(row) -> str` returns why the job would be hidden, or "" if it
+        would be shown. `fingerprint` covers both the gate's code and the parts
+        of the profile it reads, so a row is stale exactly when either changed.
+
+        Returns how many rows were re-judged. After the first pass this is a
+        cheap indexed comparison that matches nothing, which is what lets the
+        board call it before every read without thinking about it.
+        """
+        stale = self._db.execute(
+            "SELECT * FROM jobs WHERE gate_checked IS NULL OR gate_checked != ?",
+            (fingerprint,)).fetchall()
+
+        for row in stale:
+            self._db.execute(
+                "UPDATE jobs SET gate_reason = ?, gate_checked = ? WHERE url = ?",
+                (evaluate(dict(row)) or "", fingerprint, row["url"]))
+
+        if stale:
+            self._db.commit()
+            hidden = sum(1 for row in self._db.execute(
+                "SELECT gate_reason FROM jobs WHERE gate_reason != ''"))
+            logger.info(f"Board gate: re-judged {len(stale)} job(s), "
+                        f"{hidden} now hidden")
+        return len(stale)
 
     def selection(self, url: str):
         """The stored selection report, or None. Unreadable JSON reads as absent."""
@@ -286,7 +319,7 @@ class JobStore:
 
     def query(self, status=None, min_score=None, company=None, source=None,
               unscored=False, has_resume=None, search=None, sort="best",
-              limit=200, offset=0) -> list:
+              limit=200, offset=0, eligible=None) -> list:
         """
         The board's read path: filter, then order.
 
@@ -303,8 +336,19 @@ class JobStore:
             limit / offset: Page window. The board reached ~11,600 discovered
                 roles once discovery stopped stopping early (R46), so a fixed
                 cap silently hid most of the store.
+            eligible: True for jobs the gates would show, False for the ones
+                they would hide, None for both. Applied in SQL rather than
+                after the fact, because filtering a page that SQL already
+                sliced turns a page of twenty into a page of twelve (R62).
+                A row never judged counts as eligible — an unrun gate must not
+                empty the board.
         """
         where, params = [], []
+
+        if eligible is True:
+            where.append("(gate_reason IS NULL OR gate_reason = '')")
+        elif eligible is False:
+            where.append("(gate_reason IS NOT NULL AND gate_reason != '')")
 
         if status:
             wanted = [status] if isinstance(status, str) else list(status)

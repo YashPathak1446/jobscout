@@ -150,7 +150,8 @@ def job_statuses() -> tuple:
 
 
 def board_jobs(status=None, min_score=None, has_resume=None, company=None,
-               source=None, search=None, sort="best", limit=50, offset=0) -> list:
+               source=None, search=None, sort="best", limit=50, offset=0,
+               include_ineligible=False) -> list:
     """
     The board's rows: every job ever discovered, ordered as asked.
 
@@ -162,6 +163,11 @@ def board_jobs(status=None, min_score=None, has_resume=None, company=None,
     been offered to a screen. `limit` defaults small because it is now paged —
     see `board_total`, without which a page cap looks exactly like running out
     of jobs.
+
+    Jobs the gates would hide are excluded by default (R62). Not deleted and
+    not silently dropped: `include_ineligible=True` returns them, and the
+    screen says how many there are, because a filter that removes things
+    without saying so is the shape this project keeps regretting.
     """
     from tools.jobs.job_store import JobStore
 
@@ -170,13 +176,14 @@ def board_jobs(status=None, min_score=None, has_resume=None, company=None,
         return store.query(status=status, min_score=min_score,
                            has_resume=has_resume, company=company,
                            source=source, search=search, sort=sort,
-                           limit=limit, offset=offset)
+                           limit=limit, offset=offset,
+                           eligible=None if include_ineligible else True)
     finally:
         store.close()
 
 
 def board_total(status=None, min_score=None, has_resume=None, company=None,
-                source=None, search=None) -> int:
+                source=None, search=None, include_ineligible=False) -> int:
     """How many jobs match, ignoring the page window."""
     from tools.jobs.job_store import JobStore
 
@@ -184,9 +191,45 @@ def board_total(status=None, min_score=None, has_resume=None, company=None,
     try:
         return store.count(status=status, min_score=min_score,
                            has_resume=has_resume, company=company,
-                           source=source, search=search)
+                           source=source, search=search,
+                           eligible=None if include_ineligible else True)
     finally:
         store.close()
+
+
+def refresh_board_gate(profile_name: str) -> int:
+    """
+    Bring every stored verdict up to date with the current gates (R62).
+
+    Cheap to call before each render: a row is re-judged only when the gate's
+    own code or the profile fields it reads have changed, so after the first
+    pass this matches nothing. Returns how many rows were re-judged.
+
+    Non-fatal. A board that cannot re-judge should show what it has rather than
+    refuse to render, so a failure here is logged and the stale verdicts stand.
+    """
+    from tools.jobs.job_filter import gate_fingerprint, gate_reason
+    from tools.jobs.job_store import JobStore
+
+    try:
+        profile = load_profile(profile_name)
+    except Exception as exc:
+        logger.warning(f"Board gate not refreshed: {exc}")
+        return 0
+
+    store = None
+    try:
+        store = JobStore()
+        return store.refresh_gate(
+            gate_fingerprint(profile),
+            lambda row: gate_reason(row, profile),
+        )
+    except Exception as exc:
+        logger.warning(f"Board gate not refreshed: {exc}")
+        return 0
+    finally:
+        if store is not None:
+            store.close()
 
 
 def board_filters() -> dict:

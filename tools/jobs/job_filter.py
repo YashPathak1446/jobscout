@@ -9,8 +9,11 @@ This module is the "how" of filtering — the profile is the "what."
 Location: jobscout_v3/tools/jobs/job_filter.py
 """
 
+import hashlib
+import json
 import logging
 import re
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, List
 
@@ -562,3 +565,87 @@ def _score_us_location(loc_result: LocationResult, location_prefs) -> int:
             return 2
 
     return 0
+
+# ---------------------------------------------------------------------------
+# Keeping a stored verdict current (R62 / Q22)
+#
+# Every gate above runs between enrichment and analysis, which is right for a
+# pipeline and wrong for a board. A pipeline is a pass over new work; a board
+# accumulates. So a gate shipped on Tuesday never saw a job scored on Monday,
+# and after R61's purge 26 of the 69 scored jobs in the store — 38%, holding
+# the entire top of the board — were postings the gates as they stand would
+# have removed.
+#
+# The verdict is therefore stored per row, and recomputed when it goes stale.
+# What makes it stale is not a date: it is a change to the gate's own code, or
+# a change to the parts of the profile the gate reads. Both are folded into one
+# fingerprint.
+#
+# **Derived rather than declared, deliberately.** The obvious design is a
+# `GATE_VERSION = 3` constant bumped by hand when a gate changes. This project
+# has been bitten repeatedly by exactly that shape — a field written and never
+# read (R31), a flag set by every path and consulted by none (R61) — and a
+# version somebody must remember to bump is the same bug waiting to happen.
+# Hashing the source means the only way to change a gate without invalidating
+# the verdicts is to not change it. The cost is that editing a comment in this
+# file re-runs the gate over the store, which is milliseconds.
+# ---------------------------------------------------------------------------
+
+def _gate_source() -> str:
+    """This module's own text. Any edit to a gate changes it."""
+    try:
+        return Path(__file__).read_text(encoding="utf-8")
+    except OSError:  # pragma: no cover - only if the source is unreadable
+        return __name__
+
+
+def gate_fingerprint(profile) -> str:
+    """
+    A short hash of everything a stored verdict depends on.
+
+    The profile half matters as much as the code half: R52 lets someone change
+    their seniority range or preferred countries from the UI, and a verdict
+    computed against the old answer is wrong the moment they do.
+    """
+    prefs = getattr(profile, "job_preferences", None)
+    locations = getattr(prefs, "locations", None)
+    personal = getattr(profile, "personal_info", None)
+
+    relevant = json.dumps({
+        "seniority": sorted(getattr(prefs, "seniority", None) or []),
+        "exclude_keywords": sorted(getattr(prefs, "exclude_keywords", None) or []),
+        "countries": sorted(getattr(locations, "countries", None) or []),
+        "us_citizen": bool(getattr(personal, "us_citizen", False)),
+        "permanent_resident": bool(getattr(personal, "permanent_resident", False)),
+        "clearance": bool(getattr(personal, "holds_security_clearance", False)),
+    }, sort_keys=True)
+
+    digest = hashlib.sha256()
+    digest.update(_gate_source().encode("utf-8"))
+    digest.update(relevant.encode("utf-8"))
+    return digest.hexdigest()[:16]
+
+
+def gate_reason(row, profile) -> str:
+    """
+    Why this stored job would not be shown, or "" if it would.
+
+    Takes a store row rather than a `JobListing`, because this runs over what
+    the board already holds rather than over what discovery just found. Both
+    of the gates that can be re-checked from a stored row are applied: the body
+    gate (R54, R56) and the country gate (R55).
+    """
+    reasons = body_disqualifiers((row.get("full_jd") or ""), profile)
+    if reasons:
+        return reasons[0]
+
+    preferred = getattr(
+        getattr(getattr(profile, "job_preferences", None), "locations", None),
+        "countries", None) or []
+    if preferred:
+        location = parse_location(row.get("location") or "")
+        if location.country and location.country not in preferred:
+            return (f"Location country '{location.country}' not in preferred "
+                    f"countries {preferred}")
+
+    return ""
