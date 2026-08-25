@@ -33,6 +33,18 @@ everything below, so it is recorded first.
 
 ## The decision, and why
 
+**Superseded 2026-08-25 for the hosted path — see R60.** The reasoning below
+is sound and its arithmetic still holds; what changed is the premise. Every
+line of it assumes *free-tier* quota, because a hard no-spend rule (OOS5) made
+that the only kind available. Once revenue is on the table a paid key costs
+about 1.5 cents per resume, and "twenty users exhaust the cap before noon"
+stops being a constraint.
+
+Local-first remains correct for the local app, which is now the free tier.
+Nothing below is retracted.
+
+The original follows.
+
 Free-tier Gemini quota is per key, not per user. A hosted app routes every
 user's generation through one key; twenty active users would exhaust the
 daily cap before noon, and the LLM cache cannot help because every user's
@@ -316,8 +328,9 @@ release; a doctor's does not. It also gives item 7's detection a home.
   this asked for was one grep over the corpus: the JDs state it themselves.
 - **Q3** — page headroom. Measurable, but wants live-run data on how often
   headroom appears before spending LLM output on bullets that may be trimmed.
-- **Q2** — PDF and DOCX resume input. Large, and the architectural choice is
-  still open.
+- **Q2** — PDF and DOCX resume input. **Done (item 10, 2026-08-23).** This
+  line described it as open until 2026-08-25; it had shipped two days before
+  the line was written.
 - **USER-INPUT fields** — **done (R40, R52)**. The debt list in
   `migration_plan.md` has no open rows left.
 
@@ -466,7 +479,26 @@ item 11's goal of needing no keys. Keyless general sources worth evaluating:
 Arbeitnow, Remotive (remote only), USAJOBS (US federal). Terms change — verify
 before designing around any of them.
 
-## 14. The React frontend — screens settled first (2026-08-23)
+## 14. The React frontend — now the public board (rewritten 2026-08-25)
+
+**Rewritten by R60.** This item spent its life unable to answer "why bother",
+because a React re-skin of a local Streamlit app reaches nobody. It has an
+answer now: **the React frontend is the public job board**, which is the half
+of the system with no auth, no key and no PII in it, and the first thing
+strangers ever see.
+
+That also resolves the local-vs-hosted question this item was blocked on. The
+answer is both, split along the seam the pipeline already has:
+
+    shared, public, no PII    discovery — 86 companies, ~11,600 roles, keyless
+    personal, expensive       resume, embeddings, generation, LaTeX
+
+The first half is hosted. The second half stays local and free, and becomes
+paid convenience later. See R60 for the sequence and what gates it.
+
+The original entry follows.
+
+### Original (2026-08-23)
 
 **All four R33 decisions are now built — see R40, R41 and R51.** The board,
 the backend explanation, the seniority controls, the import confirmation
@@ -677,14 +709,21 @@ gated on Phase 1 (Step 7 in the master plan).
 
 ---
 
-## Q2. How do we handle PDF and DOCX as input formats?
+## Q2. How do we handle PDF and DOCX as input formats? — RESOLVED
 
-**Status:** Architecture decided 2026-08-23 — see Phase 2 item 10. Neither
-of the three options below: extract to a structured schema, then render
-the known template deterministically. The deciding fact was that
+**Status:** Resolved. Architecture decided 2026-08-23 and **built the same
+day** — see Phase 2 item 10. `tools/resume/resume_import.py` accepts `.pdf`,
+`.docx`, `.txt` and `.tex`; `tools/resume/tex_renderer.py` renders the schema
+into the template; R41 added the confirmation screen extraction makes
+necessary. This entry read "Not yet built" until 2026-08-25, and the deferred
+list still called the architecture open — both were stale, and both were being
+used to scope work.
+
+Neither of the three options below: extract to a structured schema, then
+render the known template deterministically. The deciding fact was that
 generation *splices* the master .tex rather than only parsing it, so the
-master file is the output template and cannot simply be replaced by a
-parsed data model. Not yet built.
+master file is the output template and cannot simply be replaced by a parsed
+data model.
 
 The original entry follows.
 
@@ -931,7 +970,16 @@ looks for in JDs.
 
 ## Q8b. Where does pdflatex run once this is a web app?
 
-**Status:** Open, but not urgent — local compilation works (R8).
+**Status:** Open and now gating (R60). Phase two cannot be designed until the
+third option below is tried, because the answer decides whether a hosted
+product needs a TeX container and the PII custody that comes with it.
+
+**The third option is now the preferred one, untested.** Client-side WASM
+compiles in the visitor's browser, which costs nothing per compile *and* means
+the rendered resume never touches the server. The tentative direction below
+(containerised) was recorded before there was a reason to care about either.
+Compile one real Jake-template `.tex` in a browser before designing around it;
+if it fails, the container comes back and phase two changes shape.
 
 R8 solved PDF generation for the local CLI by shelling out to a locally
 installed pdflatex. That doesn't survive the move to a hosted app: you can't
@@ -1159,9 +1207,11 @@ not from memory.
 
 5. **`pdflatex` is a local binary.** Already tracked as Q8b.
 
-6. **Conditional triggers are still hand-authored** — the single largest
-   onboarding blocker, and Q14 shows the mechanism needs fixing before it
-   can be automated.
+6. ~~**Conditional triggers are still hand-authored**~~ — **derived since
+   R21**, from the tech stack plus bullet keywords. This was called the single
+   largest onboarding blocker and it is no longer a blocker at all. R21's own
+   caveat stands: shipping it did not measurably close the gap to a hand-tuned
+   profile.
 
 7. **The LLM cache is content-addressed on prompt text**, so keys will not
    collide between users (resume content is in the prompt). But the store is
@@ -1230,6 +1280,12 @@ for explanation text, never for scoring. See R17.
 ---
 
 ## Q17. Embeddings reward vocabulary overlap, not role type
+
+**Scheduled by R60**, between the board and hosted generation. The board is
+forgiving of an imperfect ranker; a paid product is not, and there is direct
+evidence the scorer rewards shared vocabulary over role type — a *Finance &
+Strategy* posting topped the 2026-08-25 run at 55.3%. Solving it during the
+free phase is solving it where being wrong is cheap.
 
 **Status:** Open — but its *app* half is built (R57), and the scoring half is
 unchanged. The entry closed by arguing that a near-tie "should be a *choice*
@@ -4923,6 +4979,124 @@ project is not. 22 new tests, 608 pass, baselines clean.
 
 ---
 
+## R60. Where this is going, and the order it happens in
+
+**Decision:** (2026-08-25) The destination is a hosted product with paid
+tiers. The first thing built is the public job board, and hosted generation is
+gated behind three verification items. The local app becomes the free tier.
+
+### What changed
+
+Not the architecture — the constraint. Every previous decision here was made
+under OOS5's "no money spent on this project", and that rule is what made
+free-tier Gemini the only option, which is what made "twenty active users
+exhaust the daily cap before noon" decisive. Willingness to spend against
+revenue removes the premise.
+
+**Measured, because the whole argument rests on it.** The real generation
+prompt across the eight jobs of the 2026-08-25 run is a median of **6,200
+input tokens and about 600 output**. At `gemini-3.5-flash`'s published rates
+that is roughly **1.5 cents per resume**, or 3 cents through a repair pass:
+
+    3 free resumes        ~5-9 cents per signup
+    $5/mo for 50          $0.75-1.50 of inference, 70-85% gross margin
+
+Those figures come from third-party pricing trackers and are **unverified
+against Google's own pricing page**, which is one of the three gates below.
+
+### Ollama's role inverts, and it is not a hosting rung
+
+`config.py` points the Ollama rung at `http://localhost:11434`, so it runs on
+whatever machine the process runs on. That is the whole point of it locally —
+free, private, the user's own CPU. Hosted, `localhost` becomes the server, and
+the rung built to avoid cost becomes the only one that needs a GPU instance
+running continuously. At 1.5 cents a resume, a few hundred dollars a month of
+GPU is what roughly twenty thousand Flash resumes cost.
+
+R44 settles the rest: `llama3.1:8b` was measured and did not work — rewrites
+failed to parse, resumes fell back to the user's own bullets, and the replies
+that parsed invented metrics. Hosting it would buy the `none` rung at GPU
+prices.
+
+**So: Ollama stays, local only.** Hosted users get the paid Gemini key. There
+is also a privacy reason the hosted path must use a paid key rather than a
+free one — free-tier content is used to improve Google's products, which is
+disqualifying for strangers' resumes.
+
+### The seam
+
+The pipeline already splits where the hosting question does:
+
+    shared, public, zero PII    discovery: 86 companies, ~11,600 roles, keyless
+    personal, expensive         resume, embeddings, generation, LaTeX
+
+Hosting the first half needs no auth, no key, no LaTeX and no resume. It is a
+scheduled crawl writing static output, plus a site that renders it — with the
+R56 eligibility gate applied, so postings that rule the reader out never
+appear. That is a real product and it is most of the way built.
+
+### The free tier is the local app
+
+"Three free resumes, then pay" needs identity to enforce, which means auth,
+email verification, an abuse surface, and a bill for everyone who never
+converts — from an audience defined by not having income.
+
+The cleaner structure was already sitting there: **the local app is the free
+tier.** Unlimited, on the user's machine, their key or no key at all. Hosted
+generation is purely paid convenience — no install, no LaTeX, no key. Free
+users cost nothing but the static board, paid users are gated at the door, and
+no metering system ever has to tell a free user from a fresh browser profile.
+
+The funnel is then honest: board → run it locally → pay if you would rather
+not run anything.
+
+### Redistribution: nobody says
+
+The question was whether the ATS feeds may be republished. **Checked, and the
+answer is that the documentation is silent** — Greenhouse's API overview, its
+developer portal and Ashby's public posting API docs state no terms, no
+licence, no attribution requirement, no rate limit and no prohibition. Ashby
+says only that "if you host your own careers page, you can use this data to
+populate it". There is no permission to rely on and no rule to breach.
+
+Since it cannot be settled by reading, it is designed around: **link out, do
+not mirror.** The board serves title, company, location, posted date, source,
+apply URL and JobScout's own score and labels. It never serves the scraped
+`full_jd`, which stays server-side as scoring input. Facts about a job carry
+thin copyright; the job description's prose is the part somebody owns. The
+link sends traffic to the original posting, which is what these feeds exist
+for.
+
+This is a risk judgement rather than legal advice, and it is worth a real
+opinion before there is revenue attached.
+
+### Phase two is gated on three things
+
+None of them block the board; all of them decide the shape of what follows.
+
+1. **Confirm Gemini pricing** against Google's official page. Every unit
+   economic above is downstream of a number from a third-party tracker.
+2. **Spike LaTeX in the browser.** Compile one real Jake-template `.tex` with
+   SwiftLaTeX or texlive.js. If it works, the server never touches a resume;
+   if it does not, a TeX container and PII custody come back and phase two
+   changes shape. See Q8b.
+3. **A cost/quality measurement on `gemini-3.1-flash-lite`** against the
+   frozen baselines. Lite tiers have historically run an order of magnitude
+   cheaper; if quality holds, per-resume cost drops roughly tenfold.
+
+### Sequence
+
+    R56  the eligibility gate            done (924a601) — the board must not
+                                         surface roles that rule the reader out
+    ->   the public board                React, the design work, the deploy
+    ->   Q17  role type vs vocabulary    solved while being wrong is still free
+    ->   hosted generation + billing     once the three gates are answered
+
+Deliberately not a build plan. The architecture document is worth writing when
+phase two starts and the WASM spike has reported.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format
@@ -4955,6 +5129,13 @@ custom flows that are outside this project's scope.
 ---
 
 ## OOS5. Claude API integration
+
+**The no-spend constraint is superseded for the hosted path (R60, 2026-08-25);
+the decision about Claude specifically still stands.** Spend is now allowed
+where revenue justifies it, which changes the *reason* this entry gives rather
+than its conclusion — Gemini Flash at roughly 1.5 cents per resume is the
+cheap rung, and nothing about paying for it argues for adding a second
+provider. The speculative-generality point below is the durable half.
 
 **Decision:** No (August 2026). Hard constraint: no money spent on this
 project.
