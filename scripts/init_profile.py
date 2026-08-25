@@ -319,7 +319,7 @@ def read_preferences(name: str) -> dict:
 
 def read_personal(name: str) -> dict:
     """
-    The two answers the "about you" screen asks for, as already stored.
+    The answers the "about you" screen asks for, as already stored.
 
     Same reason as `read_preferences`: a form that renders blanks and then
     saves them overwrites whatever was there. Location and work authorisation
@@ -335,6 +335,8 @@ def read_personal(name: str) -> dict:
     return {
         "location": personal.get("location", "") or "",
         "visa_status": personal.get("visa_status", "") or "",
+        "holds_security_clearance": bool(
+            personal.get("holds_security_clearance", False)),
     }
 
 

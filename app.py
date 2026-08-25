@@ -457,7 +457,7 @@ def _backend_panel():
 def screen_about_you():
     st.subheader("2. About you")
     st.caption(
-        "Two things a resume cannot reliably tell us. An address line says "
+        "Things a resume cannot reliably tell us. An address line says "
         "where you live, not where you are allowed to work."
     )
 
@@ -466,7 +466,8 @@ def screen_about_you():
     try:
         stored = read_personal(st.session_state.profile_name)
     except Exception:
-        stored = {"location": "", "visa_status": ""}
+        stored = {"location": "", "visa_status": "",
+                  "holds_security_clearance": False}
 
     location = st.text_input("Where are you based?", value=stored["location"],
                              placeholder="City, State")
@@ -474,6 +475,17 @@ def screen_about_you():
         "Work authorisation", VISA_OPTIONS,
         index=VISA_OPTIONS.index(stored["visa_status"])
         if stored["visa_status"] in VISA_OPTIONS else 0,
+    )
+
+    # Asked rather than assumed, because it is the difference between two
+    # postings that read almost identically: one wants a clearance you can
+    # apply to get, the other wants one you already have (R56).
+    clearance = st.checkbox(
+        "I currently hold an active security clearance",
+        value=bool(stored.get("holds_security_clearance", False)),
+        help="Leave this unchecked unless a clearance is active today. "
+             "Postings that require one screen out everyone else, so they "
+             "are filtered out rather than shown and wasted on.",
     )
 
     key = _backend_panel()
@@ -491,6 +503,7 @@ def screen_about_you():
                 "visa_status": visa,
                 "us_citizen": visa == "US Citizen",
                 "permanent_resident": visa == "Green Card",
+                "holds_security_clearance": clearance,
             },
         })
         _goto(2)

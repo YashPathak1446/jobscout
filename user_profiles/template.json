@@ -15,7 +15,8 @@
     "degree": "Bachelor of Science in Computer Science",
     "visa_status": "US Citizen | Green Card | F1 OPT | H1B",
     "us_citizen": true,
-    "permanent_resident": false
+    "permanent_resident": false,
+    "holds_security_clearance": false
   },
   "job_preferences": {
     "target_roles": [

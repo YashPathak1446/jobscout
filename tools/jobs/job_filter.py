@@ -213,6 +213,187 @@ def excludes_entry_level(text: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Eligibility the JD states outright (R56 / Q10)
+#
+# R54 gates on how much experience a posting asks for. This gates on *who is
+# allowed to hold the job at all* — a different failure class, and the one R2's
+# bet explicitly does not cover. A wrong-level job scores low against a new-grad
+# profile and falls out of the funnel on its own; a clearance-gated job can be a
+# genuinely excellent semantic match and score high on merit. Scale AI's
+# "DevOps Engineer, Infrastructure & Security" cleared R54 (2 years) and R55
+# (Washington, DC) and sat in the pool with this in its Must-have list:
+#
+#   "candidates will not be considered who do not hold at least a TS/SCI
+#    clearance"
+#
+# Q10 asked whether this needed an employer denylist. It does not: the postings
+# say so themselves, and reading the text generalises where a list of defense
+# primes would only encode one user's guess about who does cleared work.
+#
+# The candidate facts already exist and the UI already collects them —
+# `personal_info.us_citizen`, `.permanent_resident` and `.visa_status` have been
+# on every profile since R16 and were read by nothing. The only genuinely new
+# one is whether the user holds a clearance, which no resume could imply.
+# ---------------------------------------------------------------------------
+
+# Held vs obtainable is the whole design. A posting that demands an *active*
+# clearance rules out everyone who does not have one: clearances take months and
+# need an employer to sponsor the investigation, so it is not something an
+# applicant can go and get. A posting asking only for *eligibility* to obtain
+# one rules out nobody who is a US person, because that is all eligibility
+# means.
+#
+# Scale AI wrote both, one in each posting, and the difference decides whether a
+# US citizen without a clearance should ever see the job:
+#
+#   FDE, Public Sector:  "An active TS/SCI clearance, or eligibility to
+#                         obtain one."                          -> obtainable
+#   DevOps, Infra:       "will not be considered who do not hold at least a
+#                         TS/SCI clearance"                     -> held
+#
+# So when one sentence carries both cues the weaker one wins — the same rule
+# `required_years` uses for "5+ years backend, 2+ years Go". Reading that
+# disjunction as a hard requirement would hide a job the candidate may apply
+# for, and a gate's false positives are invisible: nobody sees the job that was
+# never shown.
+_CLEARANCE_WORDS = r"clearance|ts/sci|top\s+secret|secret\s+level|polygraph|poly\b"
+
+_CLEARANCE_HELD = re.compile(
+    r"(?:active|current|existing|must\s+(?:possess|hold|have)|do\s+not\s+hold|"
+    r"already\s+hold|in\s+possession\s+of)[^.]{0,60}?(?:" + _CLEARANCE_WORDS + r")|"
+    r"(?:" + _CLEARANCE_WORDS + r")[^.]{0,40}?(?:is\s+required|required\s+to\s+start)",
+    re.I)
+
+_CLEARANCE_OBTAINABLE = re.compile(
+    r"(?:ability|able|eligibility|eligible|willing(?:ness)?|qualify)\s+to\s+"
+    r"(?:obtain|acquire|be\s+granted)|"
+    r"(?:obtain|acquire)\s+(?:and\s+maintain\s+)?(?:an?\s+)?[^.]{0,30}?"
+    r"(?:" + _CLEARANCE_WORDS + r")",
+    re.I)
+
+# "U.S. Person" is the ITAR term and it means citizen *or* lawful permanent
+# resident, which is why green-card holders are checked alongside citizens
+# rather than being lumped in with people who need sponsorship.
+_US_PERSON_REQUIRED = re.compile(
+    r"u\.?\s?s\.?\s*(?:citizen(?:ship)?|person)|united\s+states\s+citizen|"
+    r"\bitar\b|export[-\s]control|public\s+trust|"
+    r"must\s+be\s+a\s+(?:u\.?s\.?|united\s+states)",
+    re.I)
+
+_NO_SPONSORSHIP = re.compile(
+    r"(?:not|unable|cannot|can\s?not|do(?:es)?\s+not)\s+"
+    # Every optional word here is a phrasing seen in the wild: "unable to
+    # provide", "not be able to offer", "does not currently sponsor". The
+    # first draft required the verb immediately after the negation and matched
+    # none of them.
+    r"(?:be\s+)?(?:able\s+)?(?:to\s+)?(?:currently\s+)?"
+    r"(?:offer|provide|support|sponsor)[^.]{0,40}?(?:sponsor|visa)|"
+    r"no\s+h-?1b|without\s+(?:visa\s+)?sponsorship|"
+    r"not\s+require\s+(?:visa\s+)?sponsorship|"
+    r"sponsorship\s+is\s+not\s+(?:available|offered|provided)",
+    re.I)
+
+# The trap this gate had to be built around. Equal-opportunity boilerplate sits
+# at the bottom of a large share of postings and it is *made of* the words
+# above — Stripe's reads "military and veteran status" and "protected by US
+# federal, state or local laws". It is the opposite of an eligibility
+# restriction: it is a promise not to restrict. A sentence carrying any of these
+# cues is not read at all.
+_EEO_CUES = re.compile(
+    r"equal\s+(?:employment\s+)?opportunit|without\s+regard\s+to|regardless\s+of|"
+    r"protected\s+(?:by|veteran|characteristic|class)|discriminat|"
+    r"affirmative\s+action|all\s+qualified\s+applicants|"
+    r"reasonable\s+accommodation|fair\s+chance",
+    re.I)
+
+_BLOCK_END = re.compile(r"</(?:li|p|div|h\d|tr|ul|ol)>|<br\s*/?>", re.I)
+_TAG = re.compile(r"<[^>]+>")
+
+# The abbreviation that breaks sentence splitting in exactly the domain where
+# it matters most. Collins Aerospace writes "The ability to obtain and maintain
+# a U.S. government issued security clearance is required" — one sentence, and
+# splitting on every period turned it into three, stranding "ability to obtain"
+# away from the requirement it qualifies. The gate then read a job open to any
+# US citizen as one demanding a clearance already in hand.
+_US_ABBREV = re.compile(r"\bU\.\s?S\.(?:\s?A\.)?", re.I)
+_ENTITIES = (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+             ("&quot;", '"'), ("&#39;", "'"), ("&rsquo;", "'"))
+
+
+def _plain(text: str) -> str:
+    """
+    HTML down to sentences, because the JD arrives as markup.
+
+    `full_jd` is whatever enrichment scraped, and for every ATS source that is
+    HTML. Stripping tags to nothing would run adjacent list items together, and
+    this gate reasons one sentence at a time: an "or eligibility to obtain one"
+    three bullets below a hard requirement must not soften it. So block-level
+    tags become sentence breaks rather than vanishing.
+    """
+    text = _BLOCK_END.sub(". ", text or "")
+    text = _TAG.sub(" ", text)
+    for entity, char in _ENTITIES:
+        text = text.replace(entity, char)
+    text = _US_ABBREV.sub("US", text)
+    return re.sub(r"\s+", " ", text)
+
+
+def _is_us_person(profile) -> bool:
+    """Citizen or permanent resident — the ITAR sense of the term."""
+    personal = getattr(profile, "personal_info", None)
+    return bool(getattr(personal, "us_citizen", False)
+                or getattr(personal, "permanent_resident", False))
+
+
+def eligibility_disqualifiers(text: str, profile) -> list:
+    """
+    Reasons the posting's stated eligibility rules this candidate out.
+
+    Sentence by sentence, skipping equal-opportunity boilerplate, and taking the
+    weakest reading when one sentence states both an active-clearance
+    requirement and an obtainable one.
+    """
+    if not text:
+        return []
+
+    personal = getattr(profile, "personal_info", None)
+    holds_clearance = bool(getattr(personal, "holds_security_clearance", False))
+    us_person = _is_us_person(profile)
+
+    wants_held = wants_us_person = bars_sponsorship = False
+
+    for sentence in re.split(r"[.;!?]\s+|\n", _plain(text)):
+        if not sentence.strip() or _EEO_CUES.search(sentence):
+            continue
+
+        obtainable = _CLEARANCE_OBTAINABLE.search(sentence)
+        if _CLEARANCE_HELD.search(sentence) and not obtainable:
+            wants_held = True
+        if obtainable:
+            # Eligibility to obtain a clearance is US-person status and nothing
+            # more, so it lands in the same bucket as ITAR rather than its own.
+            wants_us_person = True
+        if _US_PERSON_REQUIRED.search(sentence):
+            wants_us_person = True
+        if _NO_SPONSORSHIP.search(sentence):
+            bars_sponsorship = True
+
+    reasons = []
+    if wants_held and not holds_clearance:
+        reasons.append(
+            "requires a security clearance you already hold; this profile "
+            "does not list one")
+    if wants_us_person and not us_person:
+        reasons.append(
+            "is restricted to US citizens or permanent residents "
+            "(clearance, ITAR or export-control work)")
+    if bars_sponsorship and not us_person:
+        reasons.append(
+            "states it does not sponsor visas, and this profile needs "
+            "sponsorship")
+    return reasons
+
 def body_disqualifiers(text: str, profile) -> list:
     """
     Reasons this JD's body rules the profile out. Empty means keep.
@@ -235,6 +416,8 @@ def body_disqualifiers(text: str, profile) -> list:
 
     if excludes_entry_level(text):
         reasons.append("states that early-career applicants are not eligible")
+
+    reasons.extend(eligibility_disqualifiers(text, profile))
 
     return reasons
 

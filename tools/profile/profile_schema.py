@@ -26,6 +26,12 @@ class PersonalInfo(BaseModel):
     visa_status: str
     us_citizen: bool
     permanent_resident: bool
+    # The one eligibility fact no resume implies (R56). Defaulting to False is
+    # the safe direction here even though defaults that hide jobs are usually
+    # the wrong ones: a profile that says nothing about a clearance almost
+    # certainly does not have one, and the postings this excludes say in their
+    # own words that an applicant without one will not be considered.
+    holds_security_clearance: bool = False
 
 
 class LocationPreferences(BaseModel):

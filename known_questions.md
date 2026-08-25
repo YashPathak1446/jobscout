@@ -312,8 +312,8 @@ release; a doctor's does not. It also gives item 7's detection a home.
   than five. The template lost sixteen; the rest already had schema defaults.
 - **Q9** — `gemini-embedding-001` is past its shutdown date and still
   serving. R11 made the cache model-aware, so the dangerous part is handled.
-- **Q10** — clearance-gated employers. Needs investigation before
-  implementation; it is not yet known whether the JD stated the restriction.
+- **Q10** — clearance-gated employers. **Done (R56).** The investigation
+  this asked for was one grep over the corpus: the JDs state it themselves.
 - **Q3** — page headroom. Measurable, but wants live-run data on how often
   headroom appears before spending LLM output on bullets that may be trimmed.
 - **Q2** — PDF and DOCX resume input. Large, and the architectural choice is
@@ -323,12 +323,12 @@ release; a doctor's does not. It also gives item 7's detection a home.
 
 ## Not scheduled
 
-**Q6** — long master bullets. **Answered by R45 for the fabrication half.**
-`find_invented_metrics` now checks the direction that matters — a figure in
-the output that is nowhere in the master — and it is wired, calibrated against
-16 real resumes, and an error rather than a warning. What remains of Q6 is the
-original narrow question about metric survival when a *long* master bullet is
-compressed, which is still unmeasured and still has no observed failure.
+**Q6** — long master bullets. **Answered by R45 for the fabrication half**,
+and **the other half now has its first observed failure** (2026-08-25, below).
+`find_invented_metrics` checks the direction that matters — a figure in the
+output that is nowhere in the master — and it is wired, calibrated against 16
+real resumes, and an error rather than a warning. It cannot see the opposite
+direction, which is what the observation below is.
 
 ---
 
@@ -812,7 +812,32 @@ the page is full.
 
 ## Q6. How does the system handle very long master bullets?
 
-**Status:** Working but fragile.
+**Status:** Working but fragile. **First observed failure 2026-08-25** — see
+below; until then this was a suspicion with no example.
+
+### The observed case
+
+The antibiotic-resistance project's master bullet is 386 characters and reads:
+
+> ... with XGBoost achieving 94.2\% accuracy ($\pm$0.2\%) and a 15-point
+> macro-F1 lift over Random Forest (0.71 vs 0.56) - driven by recall gains on
+> critical minority classes (carbapenem 0.17→1.00, aminoglycoside 0.42→0.89).
+
+It came out of generation for Samsara as:
+
+> ... achieving 94.2\% accuracy and significant macro-F1 gains over baseline
+> models.
+
+Four numbers survived as one. That is the compression loss this question
+predicted, and it is worse than loss alone: **"significant" is a claim the
+master never makes.** R45 cannot catch it, because R45 looks for figures in the
+output that are absent from the master, and this is the reverse — a figure
+present in the master replaced by a vague intensifier in the output.
+
+The first sub-question below ("preserve these metrics: [...]") is now the
+obvious thing to try, and there is finally a case to measure it against. Worth
+noting that `find_invented_metrics` already extracts the master's figures for
+its own check, so the list the prompt would need is already computed.
 
 The new master resume has bullets up to ~500 chars. Gemini compresses
 these well (compression is easier than expansion), but occasionally drops
@@ -965,9 +990,19 @@ Fixed alongside R11; the constant is now actually wired through.
 
 ---
 
-## Q10. Should Discovery filter out clearance-gated employers?
+## Q10. Should Discovery filter out clearance-gated employers? — RESOLVED (R56)
 
-**Status:** Open. Surfaced 2026-08-20.
+**Status:** Resolved 2026-08-25 — see R56. **No, not employers: postings.** The
+third case below is the one that was feared and it did not happen. Every
+clearance-gated posting the corpus contains states the restriction in its own
+text, so a denylist of defense primes was never needed, and reading the text
+generalises where a list would have encoded one user's guess about who does
+cleared work. The sub-question about overfitting to one visa status is answered
+the same way: the gate compares the posting against
+`personal_info.{us_citizen, permanent_resident}`, which the UI has collected
+since R16 and nothing read.
+
+The original entry follows.
 
 A generation run replaying May analysis put "Associate Software Engineer" at
 Innovative Defense Technologies (IDT) in the top 2. IDT is a defense
@@ -1304,6 +1339,36 @@ Two questions, and they are not the same:
    firing three times is the system saying this particular employer disagrees.
 
 Worth measuring together, and after a fresh baseline rather than before.
+
+## Q21. One skills slot changes between resumes, and picks the wrong thing
+
+**Status:** Open. Surfaced 2026-08-25 by reading eight resumes from one run.
+
+The `AI / ML & Data` category has thirteen entries in the master and six slots
+in the output, so eight of the thirteen are dropped every time. On five of the
+eight resumes the line ends `scikit-learn, XGBoost, NumPy`; on three — both
+Experian postings and Scale AI — it ends `scikit-learn, XGBoost, OpenAI Gym`.
+
+`OpenAI Gym` is real: it comes from a reinforcement-learning project in the
+master. But none of those three JDs mention reinforcement learning, and the
+skills it displaced (`Pandas`, `NumPy`) are named in most of them. So the last
+slot is being spent on the least relevant candidate available, and it moves
+between resumes for reasons the JD does not explain.
+
+Two things are tangled here and only one is a bug:
+
+- **The selection.** Categories are ordered by JD match count (R-era code in
+  `_build_skills_section`), but *within* a category the order looks like master
+  order rather than match count. Worth confirming before assuming.
+- **The instability.** Even a correct selection that changes per JD is a
+  feature, not a defect — the section is supposed to be tailored. What makes
+  this read as wrong is that it changed *towards* the less relevant item.
+
+Small, and visible on every resume, which is the argument for doing it: a
+recruiter reading two of these side by side sees one inconsistency and it is
+this one.
+
+---
 
 ## Q19. Template defaults are stricter than the only tuned profile — RESOLVED (R24)
 
@@ -4431,6 +4496,130 @@ adds a name for free.
 The Experian posting is now excluded with *"Location country 'Brazil' not in
 preferred countries ['United States']"*. San Francisco, Dublin Ohio and
 Indianapolis are all kept. 24 new tests, 514 pass, baselines clean.
+
+---
+
+## R56. The clearance you hold and the clearance you could get
+
+**Decision:** (August 2026) A deterministic eligibility gate reads what a
+posting says about who may hold the job, and compares it against citizenship
+facts the profile has carried since R16 plus one new field for a clearance.
+
+**What was left.** The run of 2026-08-25 produced eight resumes and a review
+named four postings that should not have been among them. Three were already
+gone before the review was written: Samsara (8+ years) and Databricks ("not
+intended for ... new graduate") fell to R54, Experian's two São Paulo listings
+to R55. Replaying the run confirms it — five of thirty-five dropped, four of
+them by gates that shipped that afternoon.
+
+One survived, and it is the interesting one:
+
+    Scale AI — DevOps Engineer, Infrastructure & Security
+      years=2      passes R54
+      country=US   passes R55
+      "candidates will not be considered who do not hold at least a
+       TS/SCI clearance"
+
+R2's bet was that a wide pool plus funnel filtering removes the need for
+hand-tuned exclusions. Q10 recorded where that bet does not hold, and this is
+it: a wrong-*level* job scores low against a new-grad profile and leaves on its
+own, but a clearance-gated job can be an excellent semantic match and score
+high on merit. Different failure class, and it needed its own mechanism. The
+profile's `exclude_keywords` did in fact list `security clearance required` and
+`top secret clearance` — neither phrase appears in the posting.
+
+### Postings, not employers
+
+Q10's open sub-question was whether this wanted an employer denylist, and
+worried that a list of defense primes would overfit to one user's visa status.
+It does not want one. Every clearance-gated posting in the corpus states the
+restriction in its own text — Scale AI twice, Accenture Federal ("Security
+Clearance Required ... US Citizen Only"), Collins Aerospace ("U.S. citizenship
+is required"). The third case Q10 feared, where the restriction is merely
+implied by the employer, did not appear.
+
+### Held or obtainable, which is the whole design
+
+Scale AI wrote both sentences, one in each of two postings, and they differ by
+a single clause:
+
+    FDE, Public Sector   "An active TS/SCI clearance, or eligibility to
+                          obtain one."                          obtainable
+    DevOps, Infra        "will not be considered who do not hold at least
+                          a TS/SCI clearance"                   held
+
+A clearance takes months and an employer willing to sponsor the investigation,
+so "must already hold one" excludes everyone who does not. "Able to obtain one"
+excludes nobody who is a US person, because that is all eligibility means. Read
+the same way, one of these two verdicts is wrong: either a citizen is shown a
+job that will not consider them, or is never shown a job they could have had.
+
+So when one sentence carries both cues the weaker one wins — the same rule
+`required_years` uses for "5+ years backend, 2+ years Go", and for the same
+reason: a gate's false positives are invisible, because nobody sees the job
+that was never shown.
+
+The cost of that rule is locality. `_plain` turns block-level tags into
+sentence breaks rather than spaces, so an "able to obtain a corporate travel
+card" three bullets below a hard requirement cannot soften it.
+
+### The candidate facts already existed
+
+`personal_info.us_citizen`, `.permanent_resident` and `.visa_status` have been
+on every profile since R16, collected by the "about you" screen, and read by
+nothing — the same dead-field shape as `rarely_include` (R31) and
+`job_preferences.seniority` before R54. Wiring them was most of the work.
+
+`personal_info.holds_security_clearance` is new, defaults to False, and is a
+checkbox next to work authorisation. It is the one fact no resume implies. The
+default hides jobs, which is normally the wrong direction, but the postings it
+hides say in their own words that an applicant without a clearance will not be
+considered.
+
+`job_preferences.citizenship_restrictions` was **not** used and is still dead.
+Its three booleans (`us_citizenship_required`, `green_card_acceptable`,
+`h1b_sponsorship_ok`) describe what a *job* demands, not what a candidate can
+clear, so there is nothing in them to compare a posting against. Left alone
+rather than deleted, because deleting a field is a schema change and this
+change did not need one.
+
+### Two bugs the tests found
+
+**"unable to provide visa sponsorship" did not match**, which is the commonest
+phrasing there is. The pattern required the verb immediately after the
+negation and so matched none of "unable to provide", "not be able to offer",
+"does not currently sponsor".
+
+**"U.S." ended a sentence three times.** Collins Aerospace writes "The ability
+to obtain and maintain a U.S. government issued security clearance is
+required" — one sentence, split on every period into three, which stranded
+"ability to obtain" away from the requirement it qualifies. The gate then read
+a job open to any US citizen as one demanding a clearance already in hand: the
+exact false positive the held/obtainable rule exists to prevent, reintroduced
+by punctuation. `_plain` now normalises the abbreviation before splitting.
+
+### The boilerplate this had to be built around
+
+Equal-opportunity footers are *made of* the vocabulary this gate matches on
+and mean the opposite of it. Stripe's reads "military and veteran status
+(including military spouse status), or any other characteristic protected by US
+federal, state or local laws". Sentences carrying an EEO cue are not read at
+all — and the skip is per sentence rather than per posting, so a footer cannot
+launder a requirement stated in the body.
+
+Without that guard the gate would have quietly emptied the board for every
+candidate who is not a US citizen, and the symptom would have been "the tool
+finds nothing", which is not a symptom anyone traces back to a footer.
+
+### Verified
+
+Scale AI's DevOps posting is excluded with *"requires a security clearance you
+already hold; this profile does not list one"*. Its Forward Deployed posting is
+**not** excluded by this gate — R54's years floor removes it, and a test pins
+that, because the day this one starts firing the disjunction rule has broken.
+Thirty of thirty-five jobs survive the whole body gate. Accenture Federal's
+Pega role is dropped from the 2026-08-21 baseline, which is the Q10 case the
+question was opened for. 28 new tests, 542 pass, baselines clean.
 
 ---
 
