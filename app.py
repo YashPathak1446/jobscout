@@ -35,6 +35,7 @@ from agents.orchestrator import (
     board_total,
     ghosted_jobs,
     job_history,
+    job_selection,
     job_statuses,
     load_run,
     pdflatex_available,
@@ -1271,6 +1272,54 @@ def _board_row(row, statuses, has_latex, bands=None):
                     when = _since(entry["changed_at"]).replace("found ", "")
                     st.caption(f"{STATUS_LABELS.get(entry['status'], entry['status'])}"
                                f" — {when or entry['changed_at'][:10]}")
+
+        # Only where there is something to explain. A row whose selection
+        # predates R57 has no report, and an empty expander that promises an
+        # answer is worse than no expander.
+        if row.get("selection"):
+            _why_panel(url)
+
+
+def _why_panel(url):
+    """
+    What went into this resume, and what would have had to change.
+
+    The numbers behind this were always computed and only ever logged, so the
+    question "why is my tutoring job on a backend resume" had no answer short
+    of re-running with the terminal open. See R57.
+    """
+    with st.expander("Why this resume"):
+        report = job_selection(url)
+        if not report:
+            st.caption("No explanation was recorded for this one.")
+            return
+
+        keywords = report.get("keywords_matched") or report.get("jd_keywords")
+        if keywords:
+            st.caption("Matched in the posting: " + ", ".join(keywords[:12]))
+
+        for kind, heading in (("experience", "Experience"), ("project", "Projects")):
+            entries = [e for e in report["picked"] if e.get("kind") == kind]
+            if not entries:
+                continue
+            st.markdown(f"**{heading}**")
+            for entry in entries:
+                label = _plain(entry.get("label") or entry.get("id"))
+                flag = "  ·  near-tie" if entry.get("near_tie") else ""
+                st.markdown(f"- {label}{flag}")
+                st.caption(entry.get("sentence") or "")
+
+        missed = report.get("passed_over") or []
+        if missed:
+            st.markdown("**Passed over**")
+            for entry in missed:
+                label = _plain(entry.get("label") or entry.get("id"))
+                short = entry.get("short_by", 0.0)
+                if entry.get("near_tie"):
+                    st.caption(f"{label} — short by {short:.2f}, close enough "
+                               f"that either would have been defensible.")
+                else:
+                    st.caption(f"{label} — short by {short:.2f}.")
 
 
 # ------------------------------------------------------------------ main ----

@@ -238,6 +238,32 @@ def job_history(url: str) -> list:
         store.close()
 
 
+def job_selection(url: str):
+    """
+    Why one job's resume contains what it contains, or None (R57).
+
+    The sentence is attached here rather than in the view because forming it
+    needs `selection_report.describe`, and `app.py` may not import from
+    `tools/` — `test_ui_contract` fails the build if it does. The view gets
+    text and numbers and decides only how they look.
+    """
+    from tools.jobs.job_store import JobStore
+    from tools.resume.selection_report import describe
+
+    store = JobStore()
+    try:
+        report = store.selection(url)
+    finally:
+        store.close()
+
+    if not report or not report.get("picked"):
+        return None
+
+    for entry in report["picked"]:
+        entry["sentence"] = describe(entry)
+    return report
+
+
 def start_run(profile_name, api_key="", max_jobs=20, max_resumes=3,
               generate_pdf=True, output_dir="outputs") -> str:
     """
@@ -1040,7 +1066,8 @@ class JobScoutOrchestrator:
         """
         self._update_store(
             lambda store: [
-                store.set_score(r["job"]["apply_url"], r["score"]["overall"])
+                store.set_score(r["job"]["apply_url"], r["score"]["overall"],
+                                selection=r.get("selection_report"))
                 for r in results or []
                 if r.get("job", {}).get("apply_url")
             ],

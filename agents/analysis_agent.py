@@ -138,7 +138,11 @@ class AnalysisAgent:
                 reasoning = self._generate_reasoning(
                     job, score, selected
                 )
-                
+
+                # The same selection, explained by what would have had to
+                # change for it to come out differently (R57).
+                selection_report = self._build_selection_report(selected)
+
                 # Create analysis result
                 result = {
                     'job': job,
@@ -151,6 +155,7 @@ class AnalysisAgent:
                     },
                     'selected_components': selected,
                     'reasoning': reasoning,
+                    'selection_report': selection_report,
                 }
                 
                 results.append(result)
@@ -223,6 +228,38 @@ class AnalysisAgent:
 
         return resolved
 
+    @staticmethod
+    def _final_score(selected: Dict, comp_id: str, fallback: Dict) -> float:
+        """The composite score selection actually used, or the raw similarity."""
+        terms = ((selected or {}).get("score_breakdown") or {}).get(comp_id)
+        if isinstance(terms, dict) and "final" in terms:
+            return float(terms["final"])
+        return float((fallback or {}).get(comp_id, 0.0))
+
+    def _component_labels(self) -> Dict[str, str]:
+        """Every component id mapped to something a person recognises."""
+        labels = {}
+        for exp in self.resume_parser.parsed_resume.experiences:
+            labels[exp.id] = f"{exp.title} @ {exp.company}"
+        for proj in self.resume_parser.parsed_resume.projects:
+            labels[proj.id] = proj.name
+        return labels
+
+    def _build_selection_report(self, selected: Dict) -> Dict:
+        """
+        Why this resume looks like this, in a form the board can store (R57).
+
+        Non-fatal: an explanation that fails must not cost a resume. The
+        selection has already happened by the time this runs.
+        """
+        try:
+            from tools.resume.selection_report import build_selection_report
+
+            return build_selection_report(selected, self._component_labels())
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning(f"   ⚠️  Could not build selection report: {exc}")
+            return {}
+
     def _generate_reasoning(
         self,
         job: Dict,
@@ -262,7 +299,14 @@ class AnalysisAgent:
                     reason = f"Conditional match (JD keywords)"
                 # Otherwise it's score-based
                 else:
-                    exp_score = score.experience_scores.get(exp_id, 0)
+                    # The *composite* final, not `score.experience_scores`,
+                    # which is the raw embedding similarity. Selection has run
+                    # on the composite since the waterfall was replaced, so
+                    # quoting the embedding named a number that decided
+                    # nothing — the same defect the `high_priority` branch
+                    # below already carries a comment about (R57).
+                    exp_score = self._final_score(selected, exp_id,
+                                                  score.experience_scores)
                     reason = f"High relevance score ({exp_score:.2f})"
                 
                 exp_reasons.append(f"{exp.title} @ {exp.company}: {reason}")
@@ -282,7 +326,8 @@ class AnalysisAgent:
                     self.profile.resume_preferences.projects.high_priority
                 )
 
-                proj_score = score.project_scores.get(proj_id, 0)
+                proj_score = self._final_score(selected, proj_id,
+                                               score.project_scores)
 
                 if proj_id in always_include_proj_ids:
                     reason = f"Always included (profile rule)"

@@ -1224,7 +1224,19 @@ for explanation text, never for scoring. See R17.
 
 ## Q17. Embeddings reward vocabulary overlap, not role type
 
-**Status:** Open. Surfaced 2026-08-22 by the item-2 verification run.
+**Status:** Open — but its *app* half is built (R57), and the scoring half is
+unchanged. The entry closed by arguing that a near-tie "should be a *choice*
+rather than an artifact of a 0.033 distance", and that the fix argued for was
+surfacing "why was this chosen" rather than solving it in scoring. The board
+now says, in as many words, *"Chosen on semantic similarity alone, by 0.03. A
+near-tie: the next component behind it is a defensible substitute."*
+
+That does not make the embedding understand role type, and nothing here
+claims it does. What it removes is the part that made the outcome untellable
+from a verdict. Whether to also derive a role-type signal is still open, and
+the observation that argues hardest for it is still the tutor.com one below.
+
+Surfaced 2026-08-22 by the item-2 verification run.
 
 On the Uber *Software Engineer I* resume, the third experience slot went to
 **tutor.com** — a tutoring role — beating **AI Ensured**, an AI Engineer
@@ -4620,6 +4632,98 @@ that, because the day this one starts firing the disjunction rule has broken.
 Thirty of thirty-five jobs survive the whole body gate. Accenture Federal's
 Pega role is dropped from the 2026-08-21 baseline, which is the Q10 case the
 question was opened for. 28 new tests, 542 pass, baselines clean.
+
+---
+
+## R57. The explanation that was computed every run and thrown away
+
+**Decision:** (August 2026) The selection each resume was built from is stored
+with the job and shown on the board, explained by which term would have had to
+change rather than by which number was largest.
+
+**What already existed.** `_composite_score` has always returned all five terms
+— embedding, keyword, conditional, importance, always — for every component it
+scores, and `select_components` has always passed them up as `score_breakdown`
+alongside `jd_keywords` and `conditional_fired`. Its docstring calls them "for
+logging/debugging", and that is precisely where they went: one INFO line per
+run, gone with the scrollback, plus a copy in a per-date `analysis_results.json`
+that nothing ever opened.
+
+So the question "why is my tutoring job on a backend resume" had an answer
+sitting on disk and no way to reach it. The board reads a SQLite row keyed by
+URL, which outlives any one run's output directory; the explanation lived in a
+directory named after a date.
+
+### Numbers are not an explanation
+
+The obvious version — print the five terms — is the same debug line with better
+punctuation. Embedding similarity is around 0.6 for everything and dwarfs every
+other term, so "largest term" answers *semantic similarity* every time and
+tells nobody anything.
+
+What a person wants is which term **changed the outcome**: remove it, and does
+this component still beat the best one that was left out? That is computable
+here, because every scored component sits in the same dict and the cutoff is
+just the highest-scoring component that did not make it. **A term that can be
+removed without changing the selection did not decide anything, however large
+it is.**
+
+Each term is tested alone rather than in combination, because a rule that only
+matters in concert with another is not something a user can act on. When more
+than one is independently load-bearing the sentence says "without either"
+rather than "without it" — they were not measured together and must not read
+as though they were.
+
+### It immediately contradicted the old strings
+
+`_generate_reasoning` labelled 101gen.ai **"Always included (profile rule)"** on
+every job in the run. The counterfactual says otherwise: final 1.25 against a
+cutoff of 0.74, so dropping the +0.30 rule leaves it winning by half a point.
+The rule fired and decided nothing. A test pins this across every job in the
+real run.
+
+The same function had a second defect of the same family, and the file already
+carried a comment about a third. `"High relevance score (0.65)"` quoted
+`score.experience_scores` — the **raw embedding similarity** — while selection
+has run on the composite since the waterfall was replaced. The number in the
+explanation was not the number that decided the outcome. Both now read the
+composite.
+
+### What the board says
+
+Per job, behind "Why this resume": what was picked, one sentence each, what was
+passed over and by how much, and the JD keywords that matched. Near-ties are
+named as near-ties on both sides — the component that just got in, and the one
+that just missed.
+
+On the Samsara posting that means: `Outlier AI` got the third experience slot
+on shared tech terms and drops out without them; `AI Ensured` missed by 0.00;
+`Diagnosify` and two others each hold their slot on importance plus keywords
+alone.
+
+`describe()` lives beside the report and is called in the orchestrator facade,
+not the view — `app.py` may not import from `tools/` and `test_ui_contract`
+fails the build if it does. The view receives text and numbers and decides only
+how they look.
+
+### The migration this needed
+
+`CREATE TABLE IF NOT EXISTS` is a no-op against a database that already exists,
+which is every database the store was built for — 106 rows in the author's. A
+new column reaches nobody without an `ALTER TABLE`, so `JobStore` now runs one
+on open, driven by `PRAGMA table_info`. It is the first schema change `jobs.db`
+has had; the pattern is there for the second.
+
+Existing rows keep a null `selection` and simply show no panel, which is the
+right outcome: an expander that promises an answer and opens on nothing is
+worse than no expander. Reports appear as jobs are re-scored.
+
+### Verified
+
+The report round-trips through SQLite and renders on the board — checked with
+`AppTest` against a copy of the real 106-row store, and the panel reproduces
+the sentences above from the real run's data. Unreadable JSON in the column
+reads as absent rather than raising. 25 new tests, 567 pass, baselines clean.
 
 ---
 

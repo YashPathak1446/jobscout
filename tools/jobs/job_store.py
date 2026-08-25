@@ -25,6 +25,7 @@ state and touches only what discovery legitimately owns.
 Location: jobscout_v3/tools/jobs/job_store.py
 """
 
+import json
 import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -60,7 +61,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     scored_at   TEXT,
     resume_tex  TEXT,
     resume_pdf  TEXT,
-    run_date    TEXT
+    run_date    TEXT,
+    selection   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_score  ON jobs(score);
@@ -98,6 +100,7 @@ class JobStore:
         self._db = sqlite3.connect(str(self.path))
         self._db.row_factory = sqlite3.Row
         self._db.executescript(SCHEMA)
+        self._migrate()
         self._db.commit()
 
     # -- writing --------------------------------------------------------------
@@ -150,12 +153,57 @@ class JobStore:
         self._db.commit()
         return {"added": added, "updated": updated}
 
-    def set_score(self, url: str, score: float) -> None:
-        """Record what analysis thought of a job."""
-        self._db.execute(
-            "UPDATE jobs SET score = ?, scored_at = ? WHERE url = ?",
-            (float(score), _now(), url))
+    # Columns added after the first release. `CREATE TABLE IF NOT EXISTS` is a
+    # no-op against a database that already exists, so a new column reaches
+    # nobody who has been using the tool — which is everybody the store was
+    # built for. Adding one is `ALTER TABLE` or it does not happen.
+    _ADDED_COLUMNS = (
+        ("selection", "TEXT"),   # R57: why this resume looks like this
+    )
+
+    def _migrate(self) -> None:
+        existing = {row["name"] for row in
+                    self._db.execute("PRAGMA table_info(jobs)")}
+        for column, kind in self._ADDED_COLUMNS:
+            if column not in existing:
+                self._db.execute(f"ALTER TABLE jobs ADD COLUMN {column} {kind}")
+                logger.info(f"Job store: added column {column}")
+
+    def set_score(self, url: str, score: float, selection=None) -> None:
+        """
+        Record what analysis thought of a job, and why.
+
+        `selection` is the R57 report: which components went into the resume,
+        and which term would have had to change for that to come out
+        differently. It lives on the row rather than in the per-date
+        `analysis_results.json`, because the board is keyed by URL and outlives
+        any one run's output directory.
+
+        Written here rather than through its own method because a report
+        without a score is meaningless — the score is what put the job on the
+        board for anyone to ask about in the first place.
+        """
+        if selection is None:
+            self._db.execute(
+                "UPDATE jobs SET score = ?, scored_at = ? WHERE url = ?",
+                (float(score), _now(), url))
+        else:
+            self._db.execute(
+                "UPDATE jobs SET score = ?, scored_at = ?, selection = ?"
+                " WHERE url = ?",
+                (float(score), _now(), json.dumps(selection), url))
         self._db.commit()
+
+    def selection(self, url: str):
+        """The stored selection report, or None. Unreadable JSON reads as absent."""
+        row = self._db.execute(
+            "SELECT selection FROM jobs WHERE url = ?", (url,)).fetchone()
+        if not row or not row["selection"]:
+            return None
+        try:
+            return json.loads(row["selection"])
+        except (ValueError, TypeError):
+            return None
 
     def attach_resume(self, url: str, tex_path=None, pdf_path=None) -> None:
         """Point a job at the resume written for it."""
