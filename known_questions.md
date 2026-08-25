@@ -494,7 +494,16 @@ Deliberately after items 9-13, because each of them changes what the screens
 must show: a confirmation step for extraction, a backend picker, seniority
 controls, and a job list rather than a run log.
 
-## 15. Packaging
+## 15. Packaging — DONE (2026-08-24)
+
+**Done — see R50.** `pyproject.toml` plus `jobscout`, `jobscout-ui` and
+`jobscout-doctor`. The doctor is the part that matters: item 8 argued it
+outlives an install script, and it found a bug on its first run.
+
+The audience is still people who have Python and a terminal. An installer for
+people who have neither is a different project.
+
+### Original
 
 Last, because it packages whatever the above settles. Nothing packages this
 today; the audience is people willing to clone a repo and edit a `.env`.
@@ -4054,6 +4063,81 @@ change makes it one. The label says where a job stands among yours, which is
 the question you can actually act on. Making the absolute number meaningful
 across users is Q17's problem — embeddings reward vocabulary overlap rather
 than role type — and it is still open.
+
+---
+
+## R50. A doctor, and a package to put it in
+
+**Decision:** (August 2026) `scripts/doctor.py` reports whether this machine
+can run JobScout and what would fix it; `pyproject.toml` makes the project
+installable, with `jobscout`, `jobscout-ui` and `jobscout-doctor` as commands.
+
+Roadmap item 8 argued the doctor was worth more than an install script and the
+argument has held: **an installer has to know how to put a LaTeX distribution
+on six platforms; a doctor only has to notice one is missing and name it.**
+The first goes stale every OS release. The second does not.
+
+It also earns its keep against this project's own record. Three of the last
+week's bugs were setup problems wearing logic problems' clothes — a `.env` no
+entry point loaded (R41), an Ollama with no model pulled (R42), a rung nobody
+had run (R44). Each took hours. Each is now one line of a report.
+
+### Two rules, and they are the whole design
+
+**Say what to do, not just what is wrong.** "pdflatex not found" is a
+diagnosis. "install MiKTeX (Windows) or TeX Live (macOS/Linux)" is a fix.
+Every non-ok line carries one, and there is a test per check that it does.
+
+**Distinguish broken from absent.** Almost all of this pipeline is optional:
+no Gemini key, no LaTeX engine and no local embeddings are supported
+configurations that still produce real resumes. Reporting them as failures
+would teach someone to skim the report, and then the one line that matters —
+a profile that will not load — goes past unread.
+
+That is R47's finding pointed at a diagnostic tool. A warning that fires when
+nothing is wrong is worse than no warning, because it costs the ones that
+are real.
+
+So: **warnings for what is absent, failures only for what is broken**, and the
+exit code follows failures alone, which is what lets CI call it.
+
+### What it found on the first run
+
+Three profiles, where there is one. `list_available_profiles` globbed `*.json`
+and rebuilding a profile leaves a timestamped `.bak` beside it (R30) — so the
+listing offered yesterday's copy of your own profile as a separate choice, and
+the app's profile dropdown showed it. Small, invisible until something counted
+them out loud, and exactly the kind of thing a doctor is for.
+
+### The packaging
+
+`pip install -e ".[local]"` and three commands. The `local` extra carries
+`model2vec`, because R36's local embeddings are what make the tool work for
+someone with no API key — optional to the code, essential to the audience.
+
+`jobscout-ui` exists because `streamlit run app.py` stops being a usable
+instruction the moment the file lives in site-packages. It shells out rather
+than importing: Streamlit's entry point expects to own the process, and
+calling it in-process works until it does not.
+
+`requirements.txt` stays. It is the file people already know, and the
+dependency list is duplicated rather than generated because a build that reads
+a requirements file at install time is a build that breaks in ways nobody
+enjoys debugging.
+
+### Verified
+
+Doctor run on this machine reports nine checks, all ok. Forced each optional
+dependency to look missing and confirmed warnings with fixes rather than
+failures. Forced an unloadable profile and confirmed a failure. The wheel
+builds and `pip install --dry-run` resolves.
+
+14 new tests, 422 pass, baselines clean.
+
+**What packaging does not solve.** The audience is still people who have
+Python and a terminal. A real installer for people who have neither is a
+different project, and the doctor is what makes the terminal version
+survivable in the meantime.
 
 ---
 

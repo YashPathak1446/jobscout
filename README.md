@@ -58,8 +58,31 @@ git clone https://github.com/YashPathak1446/jobscout.git
 cd jobscout
 python -m venv venv
 source venv/bin/activate    # on Windows: venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e ".[local]"
 ```
+
+The `local` extra installs `model2vec`, which lets JobScout score jobs with no
+API key at all. Leave it off and scoring needs a Gemini key instead.
+
+That gives you three commands:
+
+| | |
+|---|---|
+| `jobscout-doctor` | checks this machine and says what to fix |
+| `jobscout-ui` | the local web app |
+| `jobscout` | the command-line pipeline |
+
+**Run `jobscout-doctor` first.** It checks the Python version, the
+dependencies, your `.env`, whether a model backend is reachable, whether a
+LaTeX engine is installed, and whether your profile and resume actually load —
+then tells you what to do about anything missing. Most of what has ever gone
+wrong in this project was setup rather than logic, and this is the fast way to
+see it.
+
+Optional things are reported as warnings rather than errors, because a run
+with no LaTeX engine and no API key still produces real resumes — it just
+produces `.tex` files using your own bullets. `pip install -r requirements.txt`
+still works if you would rather not install the package.
 
 ### 2. Configure environment
 

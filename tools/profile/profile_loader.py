@@ -111,9 +111,18 @@ def list_available_profiles(profiles_dir: Optional[str] = None) -> list[str]:
     
     profiles = []
     for file in profiles_dir.glob('*.json'):
-        if file.name != 'template.json':  # Exclude template
-            profiles.append(file.stem)
-    
+        if file.name == 'template.json':          # not a person
+            continue
+        # Rebuilding a profile keeps a timestamped backup beside it (R30), and
+        # this listed those as if they were profiles you could pick — so the
+        # app's "use an existing profile" dropdown offered yesterday's copy of
+        # your own profile as a separate choice. A backup is a safety net, not
+        # an option. Spotted by `scripts/doctor.py` reporting three profiles
+        # where there is one.
+        if '.bak' in file.suffixes or file.stem.endswith('.bak'):
+            continue
+        profiles.append(file.stem)
+
     return sorted(profiles)
 
 
