@@ -86,16 +86,22 @@ class ValidationResult:
         return "\n".join(output)
 
 
-def validate_resume_output(data: dict, master_resume_text: str = "", bullet_budgets: dict = None) -> ValidationResult:
+def validate_resume_output(data: dict, master_resume_text: str = "",
+                           bullet_budgets: dict = None,
+                           master_bullets: dict = None) -> ValidationResult:
     """
     Validate tailored resume output from Gemini.
 
     Args:
         data: The JSON output from Gemini.
-        master_resume_text: Original resume text for optional metric preservation check.
+        master_resume_text: Original resume text, for the invented-metric check.
         bullet_budgets: Optional per-component bullet budgets from score-based allocation.
                         If provided, enforces exact bullet counts per component and
                         total budget limits instead of generic min/max rules.
+        master_bullets: Optional {component_id: [source bullets]}. Lets the
+                        unsupported-claim check compare a rewrite against the
+                        bullets it was actually rewritten from, which the
+                        whole-file text cannot express.
 
     Returns:
         ValidationResult with errors, warnings, and metrics.
@@ -163,8 +169,13 @@ def validate_resume_output(data: dict, master_resume_text: str = "", bullet_budg
         _validate_skills(data.get("skills", {}), result)
 
     if master_resume_text:
-        _validate_metric_preservation(data, master_resume_text, result)
         _validate_no_invented_metrics(data, master_resume_text, result)
+
+    # Independent of `master_resume_text`: this one compares a component
+    # against its own source bullets, and the whole-file text cannot say which
+    # bullet a rewrite came from.
+    if master_bullets:
+        _validate_supported_claims(data, master_bullets, result)
 
     result.metrics = {
         "total_experiences": len(data.get("experiences", [])),
@@ -534,24 +545,23 @@ def _validate_skills(skills: dict, result: ValidationResult):
             result.add_error(f"Skill category '{category}' is empty")
 
 
-def _validate_metric_preservation(data: dict, master_text: str, result: ValidationResult):
-    """
-    Check if key metrics from master resume are preserved in output.
-
-    This is a heuristic check. It extracts numbers/percentages and verifies they appear.
-    """
-    master_metrics = extract_metrics(master_text)
-    output_text = str(data)
-
-    missing_metrics = []
-    for metric in master_metrics:
-        if is_significant_metric(metric) and metric not in output_text:
-            missing_metrics.append(metric)
-
-    if missing_metrics and len(missing_metrics) > 3:
-        result.add_warning(
-            f"Several metrics from master resume not found in output: {', '.join(missing_metrics[:5])}"
-        )
+# `_validate_metric_preservation` was removed in R58, not finished.
+#
+# It compared *every* metric in the whole master against one tailored resume
+# and warned when more than three were missing. A tailored resume contains
+# three experiences and four projects out of thirteen components, so most of
+# the master's figures are absent by construction — the check was measuring
+# selection working correctly. Measured before removing it: **8 of 8** resumes
+# in the 2026-08-25 run tripped it.
+#
+# A warning that fires every time is not a signal, and it sat directly beside
+# the one case that mattered, where four figures left a bullet and a word took
+# their place. That case is now `_validate_supported_claims`, which compares a
+# component against its own source bullets and only speaks when the output
+# asserts a magnitude it no longer states.
+#
+# Same disposal as `rarely_include` in R31: deleted rather than fixed, because
+# what it was reaching for is expressed properly elsewhere.
 
 
 def _normalise_for_metric_search(text: str) -> str:
@@ -613,10 +623,11 @@ def find_invented_metrics(data: dict, master_text: str) -> List[tuple]:
     """
     Numbers in the output that appear nowhere in the master resume.
 
-    The inverse of `_validate_metric_preservation`, and the direction that
-    matters. That function asks whether the master's metrics survived, which a
-    resume of pure invention passes trivially — every master metric is equally
-    absent whether the model dropped them or replaced them with new ones.
+    The direction that matters, and the one a preservation check cannot cover.
+    Asking whether the master's metrics survived is passed trivially by a resume
+    of pure invention — every master metric is equally absent whether the model
+    dropped them or replaced them with new ones. (The check that asked that
+    question was removed in R58; see the note above `find_invented_metrics`.)
 
     R44 is why this exists: llama3.1:8b returned "30% reduction in development
     time" and "25% increase in application performance" for work whose real
@@ -664,6 +675,111 @@ def _validate_no_invented_metrics(data: dict, master_text: str, result: Validati
         )
 
 
+# Words that assert a magnitude without stating one. The master resume
+# contains **none of them** — checked across every bullet — which is what makes
+# their appearance in generated output meaningful rather than stylistic. It is
+# also what the check rests on: this is not a style preference about hedging,
+# it is the observation that a figure the source states plainly came out as an
+# adjective.
+VAGUE_INTENSIFIERS = (
+    "significant", "significantly", "substantial", "substantially",
+    "considerable", "considerably", "dramatic", "dramatically",
+    "drastic", "drastically", "notable", "notably", "markedly",
+    "greatly", "vastly", "massively", "meaningful", "meaningfully",
+)
+
+_INTENSIFIER_PATTERN = re.compile(
+    r"\b(" + "|".join(VAGUE_INTENSIFIERS) + r")\b", re.I)
+
+
+def find_unsupported_claims(data: dict, master_bullets: dict) -> List[tuple]:
+    r"""
+    Claims of magnitude the source states as a number.
+
+    The mirror of `find_invented_metrics`, and the half R45 could not see. That
+    function asks whether a figure in the output appears in the master; this
+    asks whether a figure in the master survived into the output — and only
+    raises it when the output has put a *word* where the number was.
+
+    The observed case, from 2026-08-25. Master:
+
+        ... XGBoost achieving 94.2% accuracy ($\pm$0.2%) and a 15-point
+        macro-F1 lift over Random Forest (0.71 vs 0.56) ...
+
+    Output:
+
+        ... achieving 94.2% accuracy and significant macro-F1 gains over
+        baseline models.
+
+    Compression legitimately drops metrics — a 386-character master bullet
+    cannot keep six figures inside 213 — and dropping one is not an error. What
+    is an error is dropping it and asserting the magnitude anyway. "Significant"
+    is a claim the master never makes, which puts it in the same family as an
+    invented number rather than in the family of things a rewrite may do.
+
+    Returns (component_id, word, dropped, bullet). An empty `dropped` means the
+    intensifier is padding rather than a substitution, which the caller reports
+    as a warning instead.
+    """
+    findings = []
+
+    for section in ("experiences", "projects"):
+        for component in data.get(section) or []:
+            if not isinstance(component, dict):
+                continue
+            component_id = component.get("id") or component.get("name") or "?"
+
+            source = master_bullets.get(component_id) or []
+            if isinstance(source, str):
+                source = [source]
+            bullets = [b for b in (component.get("bullets") or [])
+                       if isinstance(b, str)]
+
+            # Per component, not per bullet: a rewrite may move a figure from
+            # the second bullet to the first, and that is not a loss.
+            produced = _normalise_for_metric_search(" ".join(bullets))
+            dropped = []
+            for metric in extract_metrics(" ".join(str(b) for b in source)):
+                if not is_significant_metric(metric):
+                    continue
+                if not any(v in produced for v in _metric_variants(metric)):
+                    dropped.append(metric)
+
+            for bullet in bullets:
+                for match in _INTENSIFIER_PATTERN.finditer(bullet):
+                    findings.append(
+                        (component_id, match.group(0), sorted(set(dropped)), bullet))
+
+    return findings
+
+
+def _validate_supported_claims(data: dict, master_bullets: dict,
+                               result: ValidationResult):
+    """
+    A dropped figure plus an asserted magnitude is an error; padding is a warning.
+
+    Split because they are different failures. "delivering a significant 3.6x
+    speedup" still carries its number and is merely wordy in a format that
+    charges by the character. "significant macro-F1 gains" is standing in for
+    figures that are no longer there.
+    """
+    for component_id, word, dropped, bullet in find_unsupported_claims(
+            data, master_bullets or {}):
+        if dropped:
+            result.add_error(
+                f"{component_id}: '{word}' asserts a size your resume states as "
+                f"a number — {', '.join(dropped[:3])} — and that number is not "
+                f"in the output. Keep the figure or drop the claim.\n"
+                f"    → {bullet[:120]}"
+            )
+        else:
+            result.add_warning(
+                f"{component_id}: '{word}' claims a magnitude without stating "
+                f"one, and costs characters a figure could use.\n"
+                f"    → {bullet[:120]}"
+            )
+
+
 def extract_metrics(text: str) -> List[str]:
     """
     Extract numbers, percentages, and metrics from text.
@@ -679,6 +795,18 @@ def extract_metrics(text: str) -> List[str]:
         r"\d+\.\d+x",  # Multipliers: 2.5x
         r"p\d+",  # Percentiles: p95, p99
         r"\d+k\+?\s+(?:records|requests|documents|users)",  # Counts with units
+        # A margin stated in points, and a before/after pair. Both were
+        # invisible here until R58, which is how "a 15-point macro-F1 lift
+        # over Random Forest (0.71 vs 0.56)" could leave the resume without
+        # anything noticing a number had gone.
+        #
+        # Bare decimals are deliberately *not* extracted. "0.71" on its own is
+        # indistinguishable from a version number, and a check that fires on
+        # "Python 3.11" is a check people learn to ignore (R45). A decimal
+        # earns its place here only when a comparison word puts it beside
+        # another one.
+        r"\d+[-\s]?point",
+        r"\d+\.\d+\s*(?:vs\.?|versus|→|->)\s*\d+\.\d+",
     ]
 
     for pattern in patterns:
@@ -691,6 +819,10 @@ def extract_metrics(text: str) -> List[str]:
 def is_significant_metric(metric: str) -> bool:
     """Determine if a metric is significant enough to require preservation."""
     if "%" in metric or "x" in metric or any(c in metric for c in ["K", "M", "B"]):
+        return True
+
+    # A margin or a before/after pair is the whole claim, not decoration.
+    if re.search(r"\d[-\s]?point|vs\.?|versus|→|->", metric.lower()):
         return True
 
     if any(unit in metric.lower() for unit in ["min", "sec", "ms", "hour", "day"]):

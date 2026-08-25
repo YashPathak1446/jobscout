@@ -280,8 +280,10 @@ class GenerationAgent:
 
                     continue
 
-                validation = validate_resume_output(tailored, master_resume_text=self._master_resume_text(),
-                                            bullet_budgets=bullet_budgets)
+                validation = validate_resume_output(
+                    tailored, master_resume_text=self._master_resume_text(),
+                    bullet_budgets=bullet_budgets,
+                    master_bullets=self._master_bullets(budgeted_components))
                 self._validate_selected_ids(tailored, budgeted_components, validation)
 
                 filename = self._generate_filename(
@@ -469,6 +471,24 @@ class GenerationAgent:
                 logger.warning(f"   Could not read master resume for validation: {exc}")
                 self._master_text_cache = ""
         return self._master_text_cache
+
+    def _master_bullets(self, selected: Dict) -> Dict:
+        """
+        The source bullets behind each selected component, keyed by id (R58).
+
+        `_master_resume_text` hands validation the whole file, which is right
+        for asking "does this number appear anywhere in my resume" and useless
+        for asking "did *this* component's numbers survive its rewrite" — every
+        figure is somewhere in the file by definition.
+        """
+        bullets = {}
+        for key, lookup in (("experiences", self.resume_parser.get_experience_by_id),
+                            ("projects", self.resume_parser.get_project_by_id)):
+            for component_id in (selected or {}).get(key, []) or []:
+                component = lookup(component_id)
+                if component and getattr(component, "bullets", None):
+                    bullets[component.id] = list(component.bullets)
+        return bullets
 
     def _restore_factual_fields(self, tailored: Dict) -> Dict:
         """
@@ -1467,7 +1487,8 @@ Source bullets:
             tailored = self._apply_bullet_fitting(tailored)
 
             validation = validate_resume_output(tailored, master_resume_text=self._master_resume_text(),
-                                            bullet_budgets=bullet_budgets)
+                                            bullet_budgets=bullet_budgets,
+                                            master_bullets=self._master_bullets(selected))
             self._validate_selected_ids(tailored, selected, validation)
 
             if validation.valid:
@@ -1495,7 +1516,8 @@ Source bullets:
             repaired = self._apply_bullet_fitting(repaired)
 
             repair_validation = validate_resume_output(repaired, master_resume_text=self._master_resume_text(),
-                                                   bullet_budgets=bullet_budgets)
+                                                   bullet_budgets=bullet_budgets,
+                                                   master_bullets=self._master_bullets(selected))
             self._validate_selected_ids(repaired, selected, repair_validation)
 
             if repair_validation.valid:

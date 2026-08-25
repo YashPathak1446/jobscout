@@ -323,12 +323,9 @@ release; a doctor's does not. It also gives item 7's detection a home.
 
 ## Not scheduled
 
-**Q6** — long master bullets. **Answered by R45 for the fabrication half**,
-and **the other half now has its first observed failure** (2026-08-25, below).
-`find_invented_metrics` checks the direction that matters — a figure in the
-output that is nowhere in the master — and it is wired, calibrated against 16
-real resumes, and an error rather than a warning. It cannot see the opposite
-direction, which is what the observation below is.
+**Q6** — long master bullets. **Done (R58).** R45 covered the fabrication
+half; R58 covers the other one, and reframed it on the way: the error is not a
+dropped figure but a dropped figure whose magnitude the output still asserts.
 
 ---
 
@@ -810,10 +807,20 @@ the page is full.
 
 ---
 
-## Q6. How does the system handle very long master bullets?
+## Q6. How does the system handle very long master bullets? — RESOLVED (R58)
 
-**Status:** Working but fragile. **First observed failure 2026-08-25** — see
-below; until then this was a suspicion with no example.
+**Status:** Resolved 2026-08-25 — see R58. The failure this question spent its
+life predicting was observed, and the answer turned out not to be "preserve
+every metric". Compression legitimately drops figures; a 386-character master
+bullet cannot keep six inside a 213-character budget, and a check that flags
+that is measuring the job being done correctly — which is exactly what the
+existing `_validate_metric_preservation` did, on 8 of 8 resumes.
+
+What is not legitimate is dropping a figure and asserting its magnitude anyway.
+The gate is now on that, and the first sub-question below is answered by the
+prompt rule R58 added rather than by a metric list.
+
+The original entry follows, with the case that closed it.
 
 ### The observed case
 
@@ -4724,6 +4731,114 @@ The report round-trips through SQLite and renders on the board — checked with
 `AppTest` against a copy of the real 106-row store, and the panel reproduces
 the sentences above from the real run's data. Unreadable JSON in the column
 reads as absent rather than raising. 25 new tests, 567 pass, baselines clean.
+
+---
+
+## R58. A figure replaced by a word
+
+**Decision:** (August 2026) Dropping a metric under compression is allowed.
+Dropping it and keeping the claim is an error, and the word that keeps the claim
+is what makes it detectable.
+
+**The case.** Q6 was opened as a suspicion — long master bullets lose metrics
+when compressed — and sat unscheduled for days because it had no example. It
+has one. Master:
+
+    ... XGBoost achieving 94.2\% accuracy ($\pm$0.2\%) and a 15-point macro-F1
+    lift over Random Forest (0.71 vs 0.56) - driven by recall gains on critical
+    minority classes ...
+
+Shipped on the Samsara resume:
+
+    ... achieving 94.2\% accuracy and significant macro-F1 gains over baseline
+    models.
+
+Four numbers left and one word arrived.
+
+### Why "preserve the metrics" is the wrong rule
+
+That master bullet is 386 characters and the project budget is 213. Six figures
+cannot fit. Compression is the job, and dropping a metric to do it is correct
+behaviour — so a check that flags a missing figure is flagging the system
+working.
+
+`_validate_metric_preservation` was that check, and it had been shipping since
+before R45. It compared *every* metric in the whole master against one tailored
+resume, warned above three misses, and a tailored resume carries three of
+thirteen components — so most of the master's figures are absent by
+construction. **Measured: 8 of 8 resumes in the 2026-08-25 run tripped it.** A
+warning that fires every time is not a signal, and this one sat directly beside
+the case that mattered.
+
+It is deleted rather than fixed, on R31's precedent: what it reached for is
+expressed properly elsewhere now.
+
+### The line that is checkable
+
+The error is asserting a magnitude the output no longer states. "Significant"
+is a claim the master never makes, which puts it in the same family as an
+invented number — reached from the other direction. R45 catches a figure in the
+output that is nowhere in the source; this catches a figure in the source that
+became an adjective in the output.
+
+`find_unsupported_claims` compares a component against **its own source
+bullets**, which is why `master_bullets` had to be threaded through
+`validate_resume_output` alongside the whole-file text. The whole file cannot
+answer "did this component's numbers survive its rewrite" — every figure is
+somewhere in the file by definition.
+
+Per component rather than per bullet, because a rewrite may legitimately move a
+figure from the second bullet to the first.
+
+### Two failures, two severities
+
+The word alone is not enough. Across every resume this repo has generated there
+are exactly three of these words, and they split cleanly:
+
+    "delivering a significant ~3.6x speedup (137s → 38s)"      padding, warning
+    "...speedup..., significantly reducing redundant compute"   padding, warning
+    "94.2\% accuracy and significant macro-F1 gains"            standing in, ERROR
+
+The discriminator is whether that component actually dropped a figure. Treating
+the first two as errors would push a resume into the repair loop over a style
+nit and teach someone to click past the error that matters — the trap R45 was
+calibrated against, and the reason it flagged 13 of 16 resumes on its first
+draft.
+
+### The premise, checked
+
+**The master resume contains none of these words.** Not one, across every
+bullet. That is what makes their appearance in output a signal rather than a
+style preference wearing a validator's clothes, and there is a test that fails
+if it ever stops being true.
+
+### Two metrics nothing could see
+
+`extract_metrics` had no pattern for either half of the lost claim: a margin
+stated in points (`15-point`) or a before/after pair (`0.71 vs 0.56`). Both are
+now extracted. Bare decimals deliberately are not — `0.71` alone cannot be told
+from a version number, and a check that fires on "Python 3.11" is one people
+learn to ignore. A decimal earns its place only when a comparison word puts it
+beside another one.
+
+Widening extraction also feeds R45's invented-metric **error** path, so its
+calibration was re-run: **0 false positives across 33 generated resumes.**
+
+### Before as well as after
+
+The tailoring prompt now carries the rule with the real example, and the repair
+prompt carries it too, since an error here routes straight into repair:
+
+    If a bullet is too long to keep a figure, DROP THE WHOLE CLAIM.
+    Never replace a number with a word that asserts its size.
+
+### Verified
+
+The Samsara bullet is now an error naming the figures it lost — *"'significant'
+asserts a size your resume states as a number — 0.2%, 0.71 vs 0.56, 15-point —
+and that number is not in the output"* — checked end to end against the real
+master resume through `GenerationAgent._master_bullets`. The always-firing
+warning is gone (0 of 8). 19 new tests, 586 pass, baselines clean.
 
 ---
 

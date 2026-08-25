@@ -161,6 +161,19 @@ Do not change the numeric value.
 Do not round up.
 Do not make weak numbers sound stronger.
 
+If a bullet is too long to keep a figure, DROP THE WHOLE CLAIM.
+Never replace a number with a word that asserts its size.
+
+  source:  a 15-point macro-F1 lift over Random Forest (0.71 vs 0.56)
+  WRONG:   significant macro-F1 gains over baseline models
+  RIGHT:   a 15-point macro-F1 lift over Random Forest
+  RIGHT:   (say nothing about macro-F1 and use the characters elsewhere)
+
+"Significant", "substantial", "dramatic", "notable" and "considerable" are
+claims about magnitude. The source states its magnitudes as numbers, so these
+words assert something it does not — the same problem as inventing a figure,
+reached from the other direction.
+
 =============================================================
 WRITING STYLE
 =============================================================
@@ -269,6 +282,7 @@ Before returning JSON, verify silently:
 3. Did each component get exactly the requested number of bullets?
 4. Did you preserve all component metadata?
 5. Did you avoid inventing metrics, tools, or claims?
+5b. Did you avoid replacing any dropped figure with "significant" or similar?
 6. Is every bullet either 60-110 chars (1 line) OR 180-213 chars (2 full lines)?
 7. Did you DEFAULT to 2-line bullets where the master content supported it?
 8. Did you ZERO bullets land in the orphan zones (111-179 or 214-282)?
@@ -381,6 +395,8 @@ STRICT REPAIR RULES
 5. Do not modify bullets that already passed validation.
 6. Do not add new metrics.
 7. Do not remove existing metrics unless absolutely required to meet length limits.
+7b. If length forces a metric out, remove the claim with it. Never leave
+    "significant"/"substantial"/"dramatic" standing where a number was.
 8. Do not invent tools, technologies, companies, or outcomes.
 9. Do not remove components.
 10. Do not add components.
