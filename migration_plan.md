@@ -262,13 +262,16 @@ These fields are USER-INPUT but currently hand-edited in JSON:
 - [~] `component_importance.{experiences,projects}` — **now derived from
       resume order (R15)**, so the UI form became an override rather than a
       requirement. Top-2 high, next-4 medium; explicit profile values win.
-- [ ] `experiences.always_include` / `never_include` — needs UI toggle
-- [ ] `projects.always_include` / `never_include` — needs UI toggle
+- [x] `experiences.always_include` / `never_include` — **done (R52)**, a pair
+      of toggles per component on the tuning screen. Both were read by the
+      parser already; there was simply no way to set them.
+- [x] `projects.always_include` / `never_include` — **done (R52)**, same
+      toggles.
 - [x] `job_preferences.exclude_keywords` — **done (R40)**, a multi-select on
       the preferences screen, seeded from the profile.
-- [~] `job_preferences.locations.*` — **cities and `remote_ok` done (R40)**.
-      The rest (countries, state priorities, relocation) are still JSON, but
-      the form no longer destroys them — see R40 on the merge bug.
+- [x] `job_preferences.locations.*` — **done (R52)**. Cities and `remote_ok`
+      landed in R40; countries, state priorities and relocation followed once
+      it was clear discovery searches the first priority state by name.
 - [x] `target_roles` — **done (R40)**, a multi-select that keeps roles the
       option list has never heard of.
 - [x] `job_preferences.seniority` — **done (R40)**, added once R34 made the

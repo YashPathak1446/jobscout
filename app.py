@@ -499,6 +499,11 @@ def screen_about_you():
 
 # ------------------------------------------------------------ screen: 3 ----
 
+def _split(text) -> list:
+    """A comma-separated field as a list, without the empties."""
+    return [part.strip() for part in (text or "").split(",") if part.strip()]
+
+
 def screen_preferences():
     st.subheader("3. What are you looking for?")
 
@@ -530,6 +535,24 @@ def screen_preferences():
                            value=", ".join(current["cities"]),
                            placeholder="San Francisco, New York")
     remote_ok = st.checkbox("Remote roles are fine", value=current["remote_ok"])
+
+    # Discovery searches the first priority state and the filter scores every
+    # posting against these, and until now they could only be set by editing
+    # JSON. R40 stopped the form wiping them; this is what lets you set them.
+    with st.expander("Where else would you work?"):
+        countries = st.text_input(
+            "Countries", value=", ".join(current["countries"]),
+            placeholder="United States",
+            help="Postings outside these score lower rather than being cut.")
+        states_priority = st.text_input(
+            "States you would most like", value=", ".join(current["states_priority"]),
+            placeholder="California, New York",
+            help="Discovery searches the first of these by name.")
+        states_acceptable = st.text_input(
+            "States you would accept", value=", ".join(current["states_acceptable"]),
+            placeholder="Texas, Washington")
+        relocate = st.checkbox("Willing to relocate",
+                               value=current["willing_to_relocate"])
     excludes = st.multiselect(
         "Skip postings mentioning",
         EXCLUDE_OPTIONS + [e for e in current["exclude_keywords"]
@@ -553,8 +576,12 @@ def screen_preferences():
                 "seniority": seniority,
                 "exclude_keywords": excludes,
                 "locations": {
-                    "cities": [c.strip() for c in cities.split(",") if c.strip()],
+                    "cities": _split(cities),
                     "remote_ok": remote_ok,
+                    "countries": _split(countries),
+                    "states_priority": _split(states_priority),
+                    "states_acceptable": _split(states_acceptable),
+                    "willing_to_relocate": relocate,
                 },
             },
         })
@@ -581,6 +608,7 @@ def screen_tuning():
         return
 
     edits_tier, edits_triggers = {}, {}
+    edits_always, edits_never = {}, {}
 
     for section, heading in (("experiences", "Experience"), ("projects", "Projects")):
         st.markdown(f"#### {heading}")
@@ -604,13 +632,37 @@ def screen_tuning():
                 )
                 edits_triggers[component["id"]] = [t for t in text.split(",")]
 
+                # Read by the parser since the day it was written — always
+                # boosts, never excludes outright — and until now editable
+                # only by opening the JSON.
+                always_col, never_col = st.columns(2)
+                always = always_col.checkbox(
+                    "Always show this", value=component.get("always", False),
+                    key=f"always-{component['id']}",
+                    help="Included in every resume, whatever the job asks for.")
+                never = never_col.checkbox(
+                    "Never show this", value=component.get("never", False),
+                    key=f"never-{component['id']}",
+                    help="Left out of every resume. Useful for work that is "
+                         "real but not what you want to be hired for.")
+
+                if always and never:
+                    st.warning("Always and never cannot both be true — "
+                               "**never** wins, which is what the pipeline "
+                               "does with the same conflict.", icon="⚠️")
+                    always = False
+
+                edits_always[component["id"]] = always
+                edits_never[component["id"]] = never
+
     back, forward = st.columns([1, 5])
     if back.button("Back"):
         _goto(2)
         st.rerun()
 
     if forward.button("Save and continue", type="primary"):
-        write_component_rules(st.session_state.profile_name, edits_tier, edits_triggers)
+        write_component_rules(st.session_state.profile_name, edits_tier,
+                              edits_triggers, edits_always, edits_never)
         st.success("Saved.")
         _goto(4)
         st.rerun()

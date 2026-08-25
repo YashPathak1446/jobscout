@@ -307,6 +307,13 @@ def read_preferences(name: str) -> dict:
         "exclude_keywords": prefs.get("exclude_keywords", []) or [],
         "cities": locations.get("cities", []) or [],
         "remote_ok": bool(locations.get("remote_ok", True)),
+        # The rest of `locations`, which discovery and the filter both read
+        # and no screen ever offered. R40 stopped the form destroying these;
+        # this is the half that lets you set them.
+        "countries": locations.get("countries", []) or [],
+        "states_priority": locations.get("states_priority", []) or [],
+        "states_acceptable": locations.get("states_acceptable", []) or [],
+        "willing_to_relocate": bool(locations.get("willing_to_relocate", True)),
     }
 
 
@@ -362,12 +369,19 @@ def read_component_rules(name: str) -> dict:
             parser.derived_importance.get(section, {}),
         )
         rules = rp[section].get("conditional_inclusion", {})
+        always = set(rp[section].get("always_include", []))
+        never = set(rp[section].get("never_include", []))
         return [
             {
                 "id": c.id,
                 "label": label_of(c),
                 "tier": tiers.get(c.id, "medium"),
                 "triggers": list(rules.get(c.id, {}).get("include_if_jd_contains", [])),
+                # Read by the parser since it was written — always_include
+                # boosts, never_include excludes outright — and editable only
+                # by hand until now.
+                "always": c.id in always,
+                "never": c.id in never,
             }
             for c in components
         ]
@@ -381,7 +395,8 @@ def read_component_rules(name: str) -> dict:
     }
 
 
-def write_component_rules(name: str, importance: dict, triggers: dict) -> Path:
+def write_component_rules(name: str, importance: dict, triggers: dict,
+                          always: dict = None, never: dict = None) -> Path:
     """
     Save edited tiers and trigger lists back to the profile.
 
@@ -422,6 +437,24 @@ def write_component_rules(name: str, importance: dict, triggers: dict) -> Path:
                 }
             else:
                 rules.pop(comp_id, None)
+
+        # always_include and never_include are stored as lists of ids, and the
+        # screen hands back a decision per component. Only ids on the screen
+        # are touched, so a rule for a component the resume no longer has is
+        # left alone rather than silently dropped (R17).
+        for field, decisions in (("always_include", always),
+                                 ("never_include", never)):
+            if decisions is None:
+                continue
+            current = set(rp[section].get(field, []))
+            for comp_id in ids:
+                if comp_id not in decisions:
+                    continue
+                if decisions[comp_id]:
+                    current.add(comp_id)
+                else:
+                    current.discard(comp_id)
+            rp[section][field] = sorted(current)
 
     path.write_text(json.dumps(profile, indent=2) + chr(10), encoding="utf-8")
     return path

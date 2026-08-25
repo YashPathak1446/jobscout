@@ -153,7 +153,12 @@ class ResumePreferences(BaseModel):
 
 class AgentPreferences(BaseModel):
     """Agent behavior preferences."""
-    discovery_sources: List[str]
+    # Every source the pipeline knows how to read, in the order it tries them.
+    # A default rather than a required field because it is a fact about the
+    # code, not a choice about the person — a new user has no basis to answer
+    # it and no reason to carry it in their profile (R52).
+    discovery_sources: List[str] = Field(
+        default_factory=lambda: ["ats", "github_newgrad", "serper", "adzuna"])
     discovery_source_priority: Optional[Dict[str, int]] = None
     # 40, not 50. Measured over the frozen 20-JD baseline, overall scores span
     # 44.8-57.7 with a median of 53.0 — a 13-point band, because embedding a
@@ -202,7 +207,11 @@ class UserProfile(BaseModel):
     user_id: str
     version: str = "1.0.0"
     created: str
-    description: str
+    # A developer's note about the file, not something a user chooses — so it
+    # defaults rather than being required. `ConditionalInclusion.description`
+    # is a different field with the same name and stays required: that one
+    # says why a rule exists, which is the whole reason R17 wanted it.
+    description: str = ""
     personal_info: PersonalInfo
     job_preferences: JobPreferences
     resume_preferences: ResumePreferences

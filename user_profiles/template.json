@@ -1,6 +1,5 @@
 {
   "user_id": "REPLACE_WITH_UNIQUE_ID",
-  "version": "1.0.0",
   "created": "YYYY-MM-DD",
   "description": "Template profile - copy and customize for each user",
   "personal_info": {
@@ -67,41 +66,20 @@
       "us_citizenship_required": false,
       "green_card_acceptable": true,
       "h1b_sponsorship_ok": true
-    },
-    "job_recency_hours": 168
+    }
   },
   "resume_preferences": {
     "master_resume_path": "data/master_resumes/YOUR_NAME.tex",
     "experiences": {
-      "max_count": 3,
-      "typical_count": 2,
-      "min_count": 2,
-      "selection_strategy": "jd_dependent",
       "always_include": [],
-      "priority_order": "auto",
       "conditional_inclusion": {},
-      "never_include": [],
-      "bullets_per_experience": {
-        "top_priority": 4,
-        "secondary": 3,
-        "conditional": 2
-      },
-      "comments": "Keyed by component IDs from your parsed resume, so these start empty. Run scripts/init_profile.py to see your real IDs, then fill these in. An ID that does not match a parsed component is ignored silently \u2014 scripts/init_profile.py and the orchestrator both warn about those."
+      "never_include": []
     },
     "projects": {
-      "max_count": 4,
-      "typical_count": 3,
-      "min_count": 2,
-      "selection_strategy": "jd_dependent",
       "always_include": [],
       "high_priority": [],
       "conditional_inclusion": {},
-      "bullets_per_project": {
-        "high_priority": 3,
-        "secondary": 2
-      },
-      "never_include": [],
-      "comments": "Keyed by component IDs from your parsed resume, so these start empty. Run scripts/init_profile.py to see your real IDs, then fill these in. An ID that does not match a parsed component is ignored silently \u2014 scripts/init_profile.py and the orchestrator both warn about those."
+      "never_include": []
     },
     "formatting": {
       "max_bullet_chars_experiences": 280,
@@ -115,12 +93,6 @@
     }
   },
   "agent_preferences": {
-    "discovery_sources": [
-      "ats",
-      "github_newgrad",
-      "serper",
-      "adzuna"
-    ],
     "max_jobs_to_discover": 30,
     "checkpoint_after_scoring": true,
     "use_mock_embeddings": false,

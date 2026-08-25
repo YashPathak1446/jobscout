@@ -126,3 +126,80 @@ class TestComponentEditor(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAlwaysAndNeverInclude(unittest.TestCase):
+    """
+    R52: the last two USER-INPUT fields that were hand-edited JSON.
+
+    Both have been read by the parser since it was written — `always_include`
+    boosts a component, `never_include` excludes it outright — so the rules
+    worked and there was simply no way to set them without opening the file.
+    """
+
+    def setUp(self):
+        if not SOURCE.exists():
+            self.skipTest("needs a real profile; skipped on a clean clone")
+        shutil.copy2(SOURCE, TEMP)
+
+    def tearDown(self):
+        TEMP.unlink(missing_ok=True)
+
+    def _first_project_id(self):
+        return read_component_rules("_editor_test")["projects"][0]["id"]
+
+    def _stored(self, section, field):
+        data = json.loads(TEMP.read_text(encoding="utf-8"))
+        return data["resume_preferences"][section].get(field, [])
+
+    def test_marking_always_include_persists(self):
+        component = self._first_project_id()
+        write_component_rules("_editor_test", {}, {}, {component: True}, {})
+        self.assertIn(component, self._stored("projects", "always_include"))
+
+    def test_unmarking_removes_it_again(self):
+        component = self._first_project_id()
+        write_component_rules("_editor_test", {}, {}, {component: True}, {})
+        write_component_rules("_editor_test", {}, {}, {component: False}, {})
+        self.assertNotIn(component, self._stored("projects", "always_include"))
+
+    def test_never_include_persists_separately(self):
+        component = self._first_project_id()
+        write_component_rules("_editor_test", {}, {}, {}, {component: True})
+        self.assertIn(component, self._stored("projects", "never_include"))
+
+    def test_the_reader_reports_what_the_writer_stored(self):
+        """A form that cannot read what it wrote reverts it on the next save."""
+        component = self._first_project_id()
+        write_component_rules("_editor_test", {}, {}, {component: True}, {})
+        entry = next(c for c in read_component_rules("_editor_test")["projects"]
+                     if c["id"] == component)
+        self.assertTrue(entry["always"])
+        self.assertFalse(entry["never"])
+
+    def test_omitting_the_decisions_changes_nothing(self):
+        """
+        The tuning screen can save tiers alone. Passing None must not be read
+        as "the user unticked everything".
+        """
+        component = self._first_project_id()
+        write_component_rules("_editor_test", {}, {}, {component: True}, {})
+        write_component_rules("_editor_test", {}, {})
+        self.assertIn(component, self._stored("projects", "always_include"))
+
+    def test_a_rule_for_an_unknown_component_is_left_alone(self):
+        """R17: rules referencing components the resume no longer has."""
+        data = json.loads(TEMP.read_text(encoding="utf-8"))
+        data["resume_preferences"]["projects"]["always_include"] = ["proj_ghost"]
+        TEMP.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+        write_component_rules("_editor_test", {}, {},
+                              {self._first_project_id(): True}, {})
+        self.assertIn("proj_ghost", self._stored("projects", "always_include"))
+
+    def test_the_profile_still_loads_afterwards(self):
+        from tools.profile import load_profile
+
+        write_component_rules("_editor_test", {}, {},
+                              {self._first_project_id(): True}, {})
+        self.assertTrue(load_profile("_editor_test"))

@@ -308,8 +308,8 @@ release; a doctor's does not. It also gives item 7's detection a home.
 
 - **Derive `rarely_include`** from the importance map. Small; folds naturally
   into item 1's validation work.
-- **INTERNAL cleanup** — five profile fields that should be code constants.
-  Every one removed is one less thing in a new user's profile.
+- **INTERNAL cleanup** — **done (R52)**, and it was twenty-five fields rather
+  than five. The template lost sixteen; the rest already had schema defaults.
 - **Q9** — `gemini-embedding-001` is past its shutdown date and still
   serving. R11 made the cache model-aware, so the dangerous part is handled.
 - **Q10** — clearance-gated employers. Needs investigation before
@@ -318,8 +318,8 @@ release; a doctor's does not. It also gives item 7's detection a home.
   headroom appears before spending LLM output on bullets that may be trimmed.
 - **Q2** — PDF and DOCX resume input. Large, and the architectural choice is
   still open.
-- **USER-INPUT fields** — six that need a UI before they stop being
-  hand-edited JSON. Item 8 covers three of them.
+- **USER-INPUT fields** — **done (R40, R52)**. The debt list in
+  `migration_plan.md` has no open rows left.
 
 ## Not scheduled
 
@@ -4190,6 +4190,67 @@ reported *2 valid resumes from 20 scored jobs*.
 14 new tests, 436 pass, baselines clean. Every test throws away its handle on
 the run and asks the registry cold, because "a thread was started" is not the
 guarantee — "the answer comes from disk" is.
+
+---
+
+## R52. The last hand-edited fields, and a template that asked too much
+
+**Decision:** (August 2026) The three deferred items that did not depend on the
+React question: always/never include, the rest of `locations`, and the
+INTERNAL fields a new user should never see. `migration_plan.md`'s USER-INPUT
+debt list is now empty.
+
+### always_include / never_include
+
+Both have been read by the parser since it was written — one boosts a
+component, the other excludes it outright — so the behaviour worked and the
+only way to reach it was opening the JSON. Two toggles per component on the
+tuning screen.
+
+The conflict is worth naming: ticking both is a contradiction, and the screen
+says **never wins**, because that is what the pipeline already does. Inventing
+a different answer in the UI would make the two disagree.
+
+Decisions are passed as `{id: bool}` and only ids on the screen are touched,
+so a rule naming a component the resume no longer has survives — R17's point,
+that a rule which silently vanishes is indistinguishable from one that never
+matched.
+
+### The rest of `locations`
+
+Countries, state priorities and relocation. Not inert: discovery searches the
+**first priority state by name**, and the filter scores every posting against
+all of them. R40 stopped the form destroying these; this is the half that lets
+someone set them.
+
+### INTERNAL fields, and why the note was wrong about them
+
+The deferred entry called this "five profile fields that should be code
+constants". It is about twenty-five, and a naive pass at it breaks the file.
+
+**`description` is two different fields.** At the top level it is a developer's
+note — "drop in production", per the plan. Inside every `conditional_inclusion`
+rule it says *why the rule exists*, which is the entire reason R17 asked for
+it. Stripping by field name removes both. It is a path, not a name.
+
+Only two INTERNAL fields lacked a schema default, so the work was small once
+that was known: `description` and `discovery_sources` now default, and the
+template drops sixteen fields — 3322 characters to 2270. A profile built from
+it is 6473 rather than 7813, and every removed field arrives from the schema.
+
+Existing profiles are untouched and still load; the defaults only fill what is
+absent.
+
+### Verified
+
+A profile created from the slimmed template loads, reports the same 5
+experiences and 13 projects, and ran the pipeline over the frozen 20-JD input
+to 1 valid resume. 447 tests, baselines clean, doctor green.
+
+**What is deliberately still deferred:** Q9 (the embedding model past its
+shutdown date, with R11 and R36 covering the danger) and Q10 (clearance-gated
+employers, which needs investigation before implementation). Both keep their
+original reasons.
 
 ---
 

@@ -105,7 +105,12 @@ class TestProfileMergeKeepsWhatTheFormNeverShowed(unittest.TestCase):
         prefs = read_preferences("_board_test")
         self.assertEqual(
             set(prefs),
-            {"target_roles", "seniority", "exclude_keywords", "cities", "remote_ok"})
+            {"target_roles", "seniority", "exclude_keywords", "cities",
+             "remote_ok",
+             # Added by R52, when the form learned to set the rest of
+             # `locations` rather than only preserve it.
+             "countries", "states_priority", "states_acceptable",
+             "willing_to_relocate"})
         self.assertIsInstance(prefs["remote_ok"], bool)
 
     def test_read_preferences_round_trips_a_save(self):
@@ -273,3 +278,54 @@ class TestChoiceFacades(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheRestOfTheLocationFields(unittest.TestCase):
+    """
+    R52: countries, state priorities and relocation.
+
+    Discovery searches the first priority state by name and the filter scores
+    every posting against these, so they were never inert — just unreachable
+    without opening the JSON. R40 stopped the form destroying them; this is
+    the half that lets someone set them.
+    """
+
+    def setUp(self):
+        shutil.copy2(TEMPLATE, TEMP)
+
+    def tearDown(self):
+        TEMP.unlink(missing_ok=True)
+
+    def test_read_preferences_now_offers_them(self):
+        prefs = read_preferences("_board_test")
+        for field in ("countries", "states_priority", "states_acceptable",
+                      "willing_to_relocate"):
+            self.assertIn(field, prefs)
+
+    def test_they_round_trip(self):
+        update_profile_fields("_board_test", {"job_preferences": {"locations": {
+            "countries": ["United States", "Canada"],
+            "states_priority": ["California"],
+            "willing_to_relocate": False,
+        }}})
+        prefs = read_preferences("_board_test")
+
+        self.assertEqual(prefs["countries"], ["United States", "Canada"])
+        self.assertEqual(prefs["states_priority"], ["California"])
+        self.assertFalse(prefs["willing_to_relocate"])
+
+    def test_the_profile_still_validates(self):
+        from tools.profile import load_profile
+
+        update_profile_fields("_board_test", {"job_preferences": {"locations": {
+            "countries": ["Canada"], "states_priority": [],
+            "states_acceptable": [], "willing_to_relocate": False,
+        }}})
+        profile = load_profile("_board_test")
+        self.assertEqual(profile.job_preferences.locations.countries, ["Canada"])
+
+    def test_relocation_false_is_not_read_as_missing(self):
+        """`bool(...)` on a stored False must survive the read."""
+        update_profile_fields("_board_test", {"job_preferences": {
+            "locations": {"willing_to_relocate": False}}})
+        self.assertFalse(read_preferences("_board_test")["willing_to_relocate"])
