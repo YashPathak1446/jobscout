@@ -4990,8 +4990,14 @@ gated behind three verification items. The local app becomes the free tier.
 Not the architecture — the constraint. Every previous decision here was made
 under OOS5's "no money spent on this project", and that rule is what made
 free-tier Gemini the only option, which is what made "twenty active users
-exhaust the daily cap before noon" decisive. Willingness to spend against
-revenue removes the premise.
+exhaust the daily cap before noon" decisive. Willingness to spend removes the
+premise.
+
+**The replacement is a number, not a condition: $10/month, the amount that may
+be lost with zero users.** See OOS5. This entry first said spend was allowed
+"where revenue justifies it" — which is not a constraint, because there is no
+revenue and so the condition can never be tested. A ceiling still binds during
+the phase that has no income, which is the phase this is.
 
 **Measured, because the whole argument rests on it.** The real generation
 prompt across the eight jobs of the 2026-08-25 run is a median of **6,200
@@ -5167,12 +5173,27 @@ custom flows that are outside this project's scope.
 
 ## OOS5. Claude API integration
 
-**The no-spend constraint is superseded for the hosted path (R60, 2026-08-25);
-the decision about Claude specifically still stands.** Spend is now allowed
-where revenue justifies it, which changes the *reason* this entry gives rather
-than its conclusion — Gemini Flash at roughly 1.5 cents per resume is the
-cheap rung, and nothing about paying for it argues for adding a second
-provider. The speculative-generality point below is the durable half.
+**The no-spend constraint is replaced by a ceiling (R60, 2026-08-25); the
+decision about Claude specifically still stands.**
+
+**The new rule: $10/month, which is the amount that may be lost with zero
+users.** Revisited when revenue exists, and not before.
+
+It is written as a number on purpose. The first draft of this amendment said
+spend was allowed "where revenue justifies it", which is not a constraint at
+all — there is no revenue, so the condition can never be tested and the rule
+becomes "spend, and argue about it later". A ceiling does the work a
+constraint is for during the phase where it matters most, which is this one.
+
+What $10 buys at the measured rates: a domain, a small paid host, and roughly
+600 Flash-generated resumes a month (~4,000 on Flash-Lite) — comfortably more
+than a board plus a proving run of hosted generation needs. Phase one is
+expected to come in under it on free tiers regardless.
+
+This changes the *reason* this entry gives rather than its conclusion. Gemini
+Flash at roughly 1.5 cents per resume is the cheap rung, and nothing about
+paying for it argues for adding a second provider. The speculative-generality
+point below is the durable half.
 
 **Decision:** No (August 2026). Hard constraint: no money spent on this
 project.
