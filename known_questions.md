@@ -5050,22 +5050,48 @@ no metering system ever has to tell a free user from a fresh browser profile.
 The funnel is then honest: board → run it locally → pay if you would rather
 not run anything.
 
-### Redistribution: nobody says
+### Redistribution: not silence, a scope that addresses somebody else
 
-The question was whether the ATS feeds may be republished. **Checked, and the
-answer is that the documentation is silent** — Greenhouse's API overview, its
-developer portal and Ashby's public posting API docs state no terms, no
-licence, no attribution requirement, no rate limit and no prohibition. Ashby
-says only that "if you host your own careers page, you can use this data to
-populate it". There is no permission to rely on and no rule to breach.
+**Corrected 2026-08-25, same day.** This section first read "the documentation
+is silent". That was wrong, and wrong in the direction that flatters the plan —
+worth keeping, because a decision record exists so future-you can audit the
+reasoning rather than inherit its conclusion.
+
+What the docs actually do is **state a purpose, addressed throughout to the
+platform's customer**. Greenhouse describes the Job Board API as exporting
+information about *your* public job boards and job posts so *your* web
+developers can build custom career and application sites. Ashby's line is the
+same sentence with the same addressee: "if you host your own careers page, you
+can use this data to populate it."
+
+That is a stated scope that does not include a third-party aggregator. Whether
+it *excludes* one is a different question and genuinely unresolved: the
+endpoints are unauthenticated, the data is what each customer chose to publish,
+and an entire aggregator industry operates on exactly this basis. But "the docs
+say nothing" and "the docs describe a use case that is not mine" are different
+findings, and only the second is accurate.
+
+**Three places the check did not look**, and any real answer needs them:
+
+- **Platform Terms of Service** on greenhouse.com and ashbyhq.com. API
+  reference pages rarely carry terms; the terms live in the site ToS and
+  usually cover programmatic access.
+- **`robots.txt`** on the board domains.
+- **Who owns the prose.** The job description is the *employer's* copyright,
+  not the ATS's. Ashby granting or withholding anything says nothing about
+  Stripe's rights in Stripe's job description — so permission from the platform
+  would not settle it even if it existed.
+
+### The mitigation, and why it survives all of that
 
 Since it cannot be settled by reading, it is designed around: **link out, do
 not mirror.** The board serves title, company, location, posted date, source,
 apply URL and JobScout's own score and labels. It never serves the scraped
 `full_jd`, which stays server-side as scoring input. Facts about a job carry
-thin copyright; the job description's prose is the part somebody owns. The
-link sends traffic to the original posting, which is what these feeds exist
-for.
+thin copyright; the job description's prose is the part somebody owns — and
+that owner is the employer, which is precisely why not serving the prose
+matters more than anything the ATS does or does not permit. The link sends
+traffic to the original posting, which is what these feeds exist for.
 
 This is a risk judgement rather than legal advice, and it is worth a real
 opinion before there is revenue attached.
@@ -5074,15 +5100,26 @@ opinion before there is revenue attached.
 
 None of them block the board; all of them decide the shape of what follows.
 
-1. **Confirm Gemini pricing** against Google's official page. Every unit
-   economic above is downstream of a number from a third-party tracker.
+1. ~~**Confirm Gemini pricing**~~ — **done 2026-08-25**, against
+   `ai.google.dev/gemini-api/docs/pricing`. The third-party figures were
+   right: `gemini-3.5-flash` is **$1.50/M input, $9.00/M output**, so the
+   ~1.5 cents per resume above stands. `gemini-3.1-flash-lite` is **$0.25/M
+   input (text), $1.50/M output**.
+
+   The same page settles the privacy question this entry asserted, and in the
+   direction it assumed: prompts and responses are used to improve Google's
+   products on the **free** tier and **not** on the paid tier. So a paid key
+   is not merely a quota decision for a hosted product handling strangers'
+   resumes — it is the only defensible one.
 2. **Spike LaTeX in the browser.** Compile one real Jake-template `.tex` with
    SwiftLaTeX or texlive.js. If it works, the server never touches a resume;
    if it does not, a TeX container and PII custody come back and phase two
    changes shape. See Q8b.
 3. **A cost/quality measurement on `gemini-3.1-flash-lite`** against the
-   frozen baselines. Lite tiers have historically run an order of magnitude
-   cheaper; if quality holds, per-resume cost drops roughly tenfold.
+   frozen baselines. Now that both prices are known the prize is **6x, not
+   10x** — 0.25 cents per resume against 1.5 — because the lite tier's output
+   price is only a sixth of Flash's rather than a tenth. Still worth measuring;
+   less worth contorting the design for.
 
 ### Sequence
 
