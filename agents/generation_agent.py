@@ -1632,6 +1632,26 @@ Source bullets:
         if header_end == -1:
             header_end = master_latex.find('\\section{Experience}')
 
+        # `find` answers "not found" with -1, and -1 was being used as a slice
+        # index: `master_latex[:header_end]` silently became everything but
+        # the last character, and the `if header_end != -1` below then threw
+        # the header away entirely. The output had no \documentclass, no
+        # \begin{document}, no name and no education — 574 bytes that will not
+        # compile — and the run reported that it had written a resume.
+        #
+        # A master with no Experience heading is one `tex_renderer` produced
+        # from an import with no experiences, which the orchestrator now
+        # refuses before the run. This is the second line of defence, for a
+        # hand-written master that names the section something else: fail
+        # loudly rather than emit a headless file. Seventh instance of a
+        # not-found sentinel read as a value.
+        if header_end == -1:
+            raise ValueError(
+                "Could not find the Experience section in your master resume, "
+                "so there is no way to tell the header from the body. The "
+                "template expects a line reading \\section{Experience}."
+            )
+
         # Keep everything from Technical Skills onward
         skills_start = master_latex.find('%-----------PROGRAMMING SKILLS-----------')
         if skills_start == -1:

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, Trash2 } from 'lucide-react'
+import { AlertTriangle, Plus, Trash2 } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -46,6 +46,24 @@ export function ImportConfirm({
 
   function setContact(field: string, value: string) {
     setDraft((d) => ({ ...d, contact: { ...(d.contact ?? {}), [field]: value } }))
+  }
+
+  /**
+   * A blank entry, in the shape `tex_renderer` reads.
+   *
+   * This is the whole of the fix for the dead end. The screen used to render
+   * entry fields only when extraction had produced entries, so a resume the
+   * pattern reader could not split showed the owner three jobs it had read
+   * correctly, told them "anything you want kept has to be typed in above",
+   * and gave them nowhere to type. Priya Raghunathan walked five screens and
+   * a full pipeline from there to a 574-byte file with no work history on it.
+   */
+  function addEntry(section: 'experiences' | 'projects') {
+    const blank =
+      section === 'experiences'
+        ? { title: '', company: '', dates: '', location: '', bullets: [] }
+        : { name: '', tech: '', dates: '', url: '', bullets: [] }
+    setDraft((d) => ({ ...d, [section]: [...(d[section] ?? []), blank] }))
   }
 
   function dropEntry(section: 'experiences' | 'projects', index: number) {
@@ -98,8 +116,9 @@ export function ImportConfirm({
           <AlertDescription className="space-y-3">
             <p>
               Most likely because no model was available to read it. It is
-              below exactly as it appeared — anything you want kept has to be
-              typed in above.
+              below exactly as it appeared. Use <strong>Add an experience</strong>
+              or <strong>Add a project</strong> further down to enter what you
+              want kept — copying from here — and delete anything you do not.
             </p>
             {leftovers.map(([section, lines]) => (
               <div key={section} className="w-full">
@@ -139,12 +158,31 @@ export function ImportConfirm({
         </div>
       </section>
 
+      {/* Both sections always render, empty or not. An empty section with an
+          add button is a form; an absent section is a dead end. */}
       {(['experiences', 'projects'] as const).map((section) => {
         const entries = section === 'experiences' ? experiences : projects
-        if (!entries.length) return null
+        const noun = section === 'experiences' ? 'experience' : 'project'
         return (
           <section key={section} className="space-y-3">
-            <h3 className="font-medium capitalize">{section}</h3>
+            <div className="flex items-center gap-3">
+              <h3 className="font-medium capitalize">{section}</h3>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => addEntry(section)}
+              >
+                <Plus className="size-4" />
+                Add {noun === 'experience' ? 'an' : 'a'} {noun}
+              </Button>
+            </div>
+            {entries.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                Nothing was read into separate {section}. A resume with none of
+                these produces a resume with none of these — add what you have
+                before continuing.
+              </p>
+            )}
             {entries.map((entry, index) => (
               <div key={index} className="space-y-3 rounded-lg border p-4">
                 <div className="flex items-start gap-3">

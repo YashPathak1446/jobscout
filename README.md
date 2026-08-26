@@ -89,7 +89,8 @@ still works if you would rather not install the package.
 
 ```bash
 cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY
+# Fill in GOOGLE_API_KEY — that is the variable the code reads,
+# and .env.example already has the line waiting for it.
 ```
 
 Get a Gemini API key at [aistudio.google.com](https://aistudio.google.com).

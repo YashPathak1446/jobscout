@@ -672,8 +672,59 @@ class JobScoutOrchestrator:
         if not Path(resume_path).is_absolute():
             resume_path = str(Path(__file__).parent.parent / resume_path)
         self.resume_path = resume_path
-        
+
         logger.info(f"📄 Resume: {resume_path}")
+        self._refuse_an_empty_resume(resume_path)
+
+    @staticmethod
+    def _refuse_an_empty_resume(resume_path: str) -> None:
+        """
+        Stop before the run rather than after it, if there is nothing to tailor.
+
+        A master with no experiences and no projects is not a degraded resume,
+        it is not a resume — and the pipeline used to accept one, discover
+        jobs, score them, and write a file holding an education line and an
+        empty Experience heading. Priya Raghunathan got 574 bytes with no
+        `\\begin{document}` in it, under a headline saying a resume had been
+        written.
+
+        Nothing along the way was wrong. Import produced what it could, the
+        renderer omitted the sections that were empty, generation filled the
+        two it owns. The product still handed somebody a file that is not a
+        resume, so the refusal belongs here, before the API calls, where the
+        message can name the cause.
+        """
+        from tools.resume.latex_parser import parse_latex_resume
+        from tools.resume import tex_renderer
+
+        try:
+            text = Path(resume_path).read_text(encoding="utf-8", errors="replace")
+            parsed = parse_latex_resume(resume_path)
+        except Exception:
+            # Parsing is the pipeline's own job further down and it reports
+            # its failures properly. This guard only answers one question, so
+            # it must not become the thing that breaks a run it cannot judge.
+            return
+
+        # "This file is not a LaTeX resume" and "this resume has no work on
+        # it" are different failures, and `parse_latex_resume` answers both
+        # with an empty parse. Telling somebody their resume has no experience
+        # when the real problem is that the file is not a resume would be this
+        # same bug wearing the fix's clothes, so only a file that *is* one gets
+        # judged here; anything else goes to the parser, which says so
+        # properly.
+        if not tex_renderer.looks_like_latex(text):
+            return
+
+        if parsed.experiences or parsed.projects:
+            return
+
+        raise ValueError(
+            f"{Path(resume_path).name} has no experience and no projects, so "
+            "there is nothing to tailor. If you imported a PDF or Word file, "
+            "some of it could not be read into separate entries — go back to "
+            "the resume step and add them, or edit the .tex directly."
+        )
     
     def run(
         self,
