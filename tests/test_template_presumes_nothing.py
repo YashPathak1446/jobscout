@@ -89,6 +89,66 @@ class TestTheTemplatePresumesNoLevel(unittest.TestCase):
         UserProfile(**self.profile)
 
 
+class TestTheTemplateStoresNoInstructions(unittest.TestCase):
+    """
+    A placeholder written into a value field is a fictional answer.
+
+    Found by walking Priya to step two. `personal_info.location` held the
+    string "City, State", the About-you form seeds itself from the stored
+    profile, and Continue was enabled — so agreeing with the screen recorded a
+    location that does not exist, into the field R55 and R69 score against.
+
+    The same block asserted `us_citizen: true` about somebody it had never
+    met. `_is_us_person` reads that to decide whether ITAR-restricted postings
+    are shown, so the default surfaced roles the reader could not hold.
+
+    This is the invariant one layer down from the UI: blank is how a file says
+    "unknown". A string that reads like an instruction cannot be told from an
+    answer by anything downstream.
+    """
+
+    #: Text that is guidance wearing a value's clothes.
+    TELLS = ("your ", "yourname", "yourusername", "your.email",
+             "city, state", "month yyyy", "add your", "e.g.", "example.com",
+             "|", "xxx", "tbd", "placeholder")
+
+    def setUp(self):
+        self.personal = json.loads(
+            TEMPLATE.read_text(encoding="utf-8"))["personal_info"]
+
+    def test_no_field_holds_instructions(self):
+        offenders = {}
+        for field, value in self.personal.items():
+            if field.startswith("_") or not isinstance(value, str):
+                continue
+            lowered = value.lower()
+            hit = [t for t in self.TELLS if t in lowered]
+            if hit:
+                offenders[field] = value
+        self.assertEqual(
+            offenders, {},
+            f"these hold guidance rather than data: {offenders}. Blank is how "
+            "a template says 'unknown'; put the guidance in _comment.")
+
+    def test_the_fields_a_resume_cannot_state_are_blank(self):
+        """The four the About-you screen exists to ask."""
+        for field in ("location", "visa_status"):
+            self.assertEqual(
+                self.personal.get(field), "",
+                f"{field} is pre-filled, so the form that asks for it will "
+                "offer an answer the user never gave")
+
+    def test_it_asserts_nothing_about_citizenship(self):
+        self.assertFalse(self.personal.get("us_citizen"))
+        self.assertFalse(self.personal.get("permanent_resident"))
+
+    def test_the_guidance_still_exists_somewhere(self):
+        """Blanking the fields must not delete what they meant."""
+        self.assertTrue(self.personal.get("_comment"),
+                        "the placeholders were the only documentation and "
+                        "they are gone; _comment has to carry it now")
+
+
 class TestABuiltProfileInheritsNoLevel(unittest.TestCase):
     """
     The template is only half of it: `build_profile` copies the template and

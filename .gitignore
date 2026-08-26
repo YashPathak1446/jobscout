@@ -106,3 +106,7 @@ applied_jobs.csv
 
 # ADK
 .adk/
+
+# Fixtures staged into the dev server to drive a real upload through the
+# browser. Never part of a build.
+web/public/_fixture_*

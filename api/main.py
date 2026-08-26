@@ -89,6 +89,30 @@ def health() -> dict:
     }
 
 
+class BackendRequest(BaseModel):
+    # Optional: the pipeline runs with nothing configured. R37 gave rewriting
+    # a floor and R36 moved embeddings off the API, so demanding a key would
+    # be the UI holding the door shut on a pipeline that runs without one.
+    key: str = ""
+
+
+@app.post("/api/backend")
+def backend(request: BackendRequest) -> dict:
+    """
+    What will rewrite bullets if this key is used, and what that costs.
+
+    A POST with the key in the body rather than a GET with it in the query
+    string: a URL is logged, cached and kept in history, and this is a
+    credential. It is passed straight through to detection and never stored —
+    the hosted tier is where key handling becomes a real design problem (Q15),
+    and inventing half of it here would be worse than not having it.
+
+    Detection touches the network (it asks whether Ollama is up), so the
+    caller should ask when the answer could have changed, not per keystroke.
+    """
+    return backend_status(request.key)
+
+
 # ------------------------------------------------------------ board ----
 
 @app.get("/api/board")

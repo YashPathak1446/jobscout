@@ -3,6 +3,7 @@ import { Check } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { AboutYouStep } from '@/components/steps/AboutYouStep'
 import { ResumeStep } from '@/components/steps/ResumeStep'
 import { api, type ProfileSummary } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -24,6 +25,9 @@ export function Wizard({
   const [furthest, setFurthest] = useState(0)
   const [profiles, setProfiles] = useState<string[] | null>(null)
   const [summary, setSummary] = useState<ProfileSummary | null>(null)
+  // Never persisted, here or on the server: it is passed to the pipeline
+  // for the run and forgotten.
+  const [apiKey, setApiKey] = useState('')
 
   useEffect(() => {
     api
@@ -118,7 +122,26 @@ export function Wizard({
         </>
       )}
 
-      {step > 0 && (
+      {step === 1 && profile && (
+        <AboutYouStep
+          profile={profile}
+          apiKey={apiKey}
+          onKey={setApiKey}
+          onBack={() => setStep(0)}
+          onContinue={() => go(2)}
+        />
+      )}
+
+      {step === 1 && !profile && (
+        <Alert>
+          <AlertTitle>No profile yet</AlertTitle>
+          <AlertDescription>
+            Go back to step one and pick or build one.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {step > 1 && (
         <div className="space-y-4">
           <Alert>
             <AlertTitle>{STEPS[step]} is not built yet</AlertTitle>
