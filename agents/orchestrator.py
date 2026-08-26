@@ -197,6 +197,29 @@ def board_total(status=None, min_score=None, has_resume=None, company=None,
         store.close()
 
 
+def board_export_rows() -> list:
+    """
+    Every stored job, for the public board's export (R64).
+
+    **Every** job, deliberately. The gate columns hold *this* profile's verdict,
+    and a public board has no visitor to hold a verdict about — a mid-level
+    reader wants the five-years roles this machine's owner is filtered out of.
+    So this does not pass `eligible` and must never learn to: filtering here
+    would quietly rebuild the opinionated single-user board the facets exist to
+    replace.
+
+    A facade for the same reason as the rest of them (R25): the exporter should
+    not know the store is SQLite.
+    """
+    from tools.jobs.job_store import JobStore
+
+    store = JobStore()
+    try:
+        return store.query(sort="newest", limit=-1)
+    finally:
+        store.close()
+
+
 def refresh_board_gate(profile_name: str) -> int:
     """
     Bring every stored verdict up to date with the current gates (R62).

@@ -679,6 +679,34 @@ stopped inflating the rendered length; a later measurement should revisit it.
 
 # Active questions
 
+## Q23. The board cannot say when a job was posted
+
+**Status:** Open. Surfaced 2026-08-26 while building R64, when freshness turned
+out to be the board's primary sort and the field behind it was checked.
+
+`first_seen` is correct: `JobStore.record()` stamps it once at insert and never
+moves it, so an employer editing a posting cannot make a six-month-old role
+read as new. It is safe to sort on. What it means is **"first seen by this
+crawler"**, which on a board's first crawl is every job at once.
+
+`JobListing.created` looks like the answer and is not. `ats_search.py:105` sets
+`created=_now()` — the crawl time wearing a posting-date name — and the store
+never persists it, which is the only reason it has caused no harm. A third
+instance of the shape R31 and R61 already found: a field whose name describes
+data and whose value describes the observation.
+
+**The real dates exist and are being thrown away.** Greenhouse's payload
+carries `updated_at`, Ashby's carries `publishedAt`, and the ATS adapters read
+neither. Capturing them means a column, a migration (the R57 mechanism), and
+deciding what to do for sources that offer nothing.
+
+**Worth doing before the board ships**, because "posted 3 days ago" is the
+single most load-bearing fact on a job board and the board currently cannot say
+it. Until then the field is named `first_seen` in the export and must be
+labelled as such in any UI — never "posted".
+
+---
+
 ## Q1. How does the profile generalize when there are different users?
 
 **Status:** Partially answered, awaiting Phase 1 (auto-derivation refactor).
@@ -5433,6 +5461,115 @@ direction Q8b tentatively recorded long before there was a reason to care.
 **The PII custody that comes with it is now a planned cost rather than
 something the architecture avoids**, which is a materially different product to
 design: retention, deletion, and what the privacy policy has to say.
+
+---
+
+## R64. Facts about the posting, not verdicts about the reader
+
+**Decision:** (2026-08-26) The public board extracts what each posting demands
+and lets the reader filter. Every facet carries the basis it was read on.
+
+**The hole in R60.** R60 said the board would apply "the R56 eligibility gate
+so the ineligible postings never appear". It cannot. **Eligibility is defined
+relative to a person and a public board has no visitor** — the same is true of
+the match score, which is computed against one resume and means nothing to a
+stranger. The plan read fine and only failed on contact with the code.
+
+So: facets, not gates. The board says a role wants eight years; it does not say
+you are unqualified.
+
+### Most of it already existed
+
+`required_years`, `excludes_entry_level` and `parse_location` were already
+profile-free — they read the posting, not the person — and needed no changes.
+The one refactor was splitting `posting_demands(text)` out of R56's
+`eligibility_disqualifiers(text, profile)`: the sentence loop, the EEO guard
+and the held-vs-obtainable rule moved out unchanged, and the judgement stayed
+behind. R56's 28 tests passed untouched, which is what made the split safe to
+make.
+
+### Three states, because a filter is not a gate
+
+`required_years` returns None for two different things: the posting states no
+floor, and the text could not be read. **Under a gate that collapse was
+harmless** — it meant a job slipped through. Under a filter it is not: a
+five-years role whose floor failed to parse lands in the early-career view
+looking like it belongs there.
+
+So `years_basis` is `stated`, `none_stated` or `unknown`, and `unknown` covers
+both a body too thin to read and a body that asks for experience in words no
+parser turns into a number ("several years of experience"). `demands_basis`
+does the same for clearance and citizenship.
+
+The frontend must show `unknown` under a filter rather than hide it, which is
+why `include_unknown_years` is in the default preset. That is R62's lesson —
+a filter that removes things without saying so — applied to the visitor's side.
+
+**The threshold is calibrated, not guessed.** Real scraped bodies in the store
+start at 818 characters (p10 = 2,987, median = 5,663); the short descriptions a
+failed scrape falls back to since R61 run 25-300 characters. Nothing lands
+between 300 and 818, so `READABLE_MIN_CHARS = 500` sits in an empty gap with
+margin either side, and a test fails if it ever drifts into the occupied range.
+
+### Counting the facets changed a frontend decision
+
+The export reports what each facet actually knows, because a control over a
+field that is mostly empty looks useful and does nothing. On 107 real rows:
+
+    years_basis    stated 60,  none_stated 42,  unknown 5
+    years stated   1:4  2:8  3:20  4:3  5:20  8:5
+    level          unspecified 46,  mid 32,  senior 25,  entry 4
+    country known  62 / 107
+    demands        clearance 1,  us_person 7,  no_sponsorship 1
+
+**The years filter is the useful control and the level facet is not.** Level is
+`unspecified` for 43% of rows, and only four postings classify as entry —
+because most genuinely early-career roles state no floor at all, and inventing
+"entry" for a posting that never said would put senior roles in the view most
+visitors start on. So the board leads with years and treats level as secondary.
+
+That is a finding the frontend would otherwise have discovered by building the
+wrong control first.
+
+### The seam
+
+`full_jd`, `score`, `selection`, `status`, `scored_at`, `resume_tex`,
+`resume_pdf` and `gate_reason` never cross. The first is the employer's prose —
+R60's redistribution answer is that the board links out rather than mirroring —
+and the rest are one person's.
+
+`build_row` emits an allow-list, so none of them can appear by construction,
+and the exporter asserts it anyway and refuses to write on a leak. "True by
+construction" is exactly what was true of `scraped_successfully` before R61.
+A test also checks that no marker planted in a JD appears anywhere in the
+payload, because the field list is not the point — the text is.
+
+**Population is every job in the store, deliberately.** `board_export_rows()`
+does not pass `eligible` and must never learn to: the gate columns hold *this*
+profile's verdict, and a mid-level reader wants the five-years roles this
+machine's owner is filtered out of. Filtering there would quietly rebuild the
+opinionated single-user board that facets exist to replace.
+
+### The export itself
+
+`schema_version` so the frontend cannot drift silently, `generated_at`,
+`facet_summary`, and `default_preset` — the early-career view as **data rather
+than React**, because facets were chosen over gates precisely on the grounds
+that early-career is a default and defaults should be changeable without a
+deploy.
+
+72 KB for 107 rows, so roughly 700 bytes a row; ten thousand postings would be
+about 7 MB. Gitignored: committing a file of real listings to a public repo
+*is* the redistribution act R60 left unresolved, and it should not happen as a
+side effect of running a script.
+
+### Verified
+
+35 new tests, 687 pass, three baselines clean. Against the frozen baseline
+Samsara reads 8 years and senior, Scale AI's DevOps posting demands a clearance
+in hand while its Forward Deployed posting demands only US-person status — the
+held-versus-obtainable distinction surviving the refactor — Databricks excludes
+early career, and Experian resolves to Brazil.
 
 ---
 

@@ -349,13 +349,54 @@ def _is_us_person(profile) -> bool:
                 or getattr(personal, "permanent_resident", False))
 
 
+def posting_demands(text: str) -> dict:
+    """
+    What the posting demands of whoever holds it — about the *job*, not a person.
+
+    Split out of `eligibility_disqualifiers` for the public board (R64), which
+    has no visitor to judge against. A board that says "this role wants a
+    clearance" is stating a fact about the posting; a board that says "you are
+    not eligible" would need to know who is reading, and it does not.
+
+    The detection is unchanged: sentence by sentence, skipping equal-opportunity
+    boilerplate, and taking the weakest reading when one sentence states both an
+    active-clearance requirement and an obtainable one. Only the judgement moved
+    out.
+
+    Returns three flags, all False for text that demands nothing. Whether the
+    text was substantial enough to be worth reading is the caller's question —
+    see `board_export.demands_basis`.
+    """
+    demands = {"clearance_held": False, "us_person": False,
+               "no_sponsorship": False}
+    if not text:
+        return demands
+
+    for sentence in re.split(r"[.;!?]\s+|\n", _plain(text)):
+        if not sentence.strip() or _EEO_CUES.search(sentence):
+            continue
+
+        obtainable = _CLEARANCE_OBTAINABLE.search(sentence)
+        if _CLEARANCE_HELD.search(sentence) and not obtainable:
+            demands["clearance_held"] = True
+        if obtainable:
+            # Eligibility to obtain a clearance is US-person status and nothing
+            # more, so it lands in the same bucket as ITAR rather than its own.
+            demands["us_person"] = True
+        if _US_PERSON_REQUIRED.search(sentence):
+            demands["us_person"] = True
+        if _NO_SPONSORSHIP.search(sentence):
+            demands["no_sponsorship"] = True
+
+    return demands
+
+
 def eligibility_disqualifiers(text: str, profile) -> list:
     """
     Reasons the posting's stated eligibility rules this candidate out.
 
-    Sentence by sentence, skipping equal-opportunity boilerplate, and taking the
-    weakest reading when one sentence states both an active-clearance
-    requirement and an obtainable one.
+    Now only the judgement half: `posting_demands` reads the posting, and this
+    compares what it asks for against who the profile says you are.
     """
     if not text:
         return []
@@ -364,23 +405,10 @@ def eligibility_disqualifiers(text: str, profile) -> list:
     holds_clearance = bool(getattr(personal, "holds_security_clearance", False))
     us_person = _is_us_person(profile)
 
-    wants_held = wants_us_person = bars_sponsorship = False
-
-    for sentence in re.split(r"[.;!?]\s+|\n", _plain(text)):
-        if not sentence.strip() or _EEO_CUES.search(sentence):
-            continue
-
-        obtainable = _CLEARANCE_OBTAINABLE.search(sentence)
-        if _CLEARANCE_HELD.search(sentence) and not obtainable:
-            wants_held = True
-        if obtainable:
-            # Eligibility to obtain a clearance is US-person status and nothing
-            # more, so it lands in the same bucket as ITAR rather than its own.
-            wants_us_person = True
-        if _US_PERSON_REQUIRED.search(sentence):
-            wants_us_person = True
-        if _NO_SPONSORSHIP.search(sentence):
-            bars_sponsorship = True
+    demands = posting_demands(text)
+    wants_held = demands["clearance_held"]
+    wants_us_person = demands["us_person"]
+    bars_sponsorship = demands["no_sponsorship"]
 
     reasons = []
     if wants_held and not holds_clearance:

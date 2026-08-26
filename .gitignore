@@ -65,6 +65,12 @@ data/master_resumes/*.tex
 # The durable job store: personal, unbounded, rebuildable by discovery.
 data/jobs.db
 
+# The public board's export (R64). Generated, regenerated on every crawl, and
+# — more to the point — a file of real job listings. Committing it to a public
+# repo would *be* the redistribution act R60 left unresolved, taken by accident
+# as a side effect of running a script rather than deliberately.
+data/board/
+
 user_profiles/*.json
 !user_profiles/*.example.json
 !user_profiles/template.json
