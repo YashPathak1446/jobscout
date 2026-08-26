@@ -968,18 +968,29 @@ looks for in JDs.
 - Should we use embedding similarity for "near-miss" matches (e.g., JD
   says "K8s", resume says "Kubernetes")? Adds complexity but catches more.
 
-## Q8b. Where does pdflatex run once this is a web app?
+## Q8b. Where does pdflatex run once this is a web app? — ANSWERED (R63)
 
-**Status:** Open and now gating (R60). Phase two cannot be designed until the
-third option below is tried, because the answer decides whether a hosted
-product needs a TeX container and the PII custody that comes with it.
+**Status:** The spike is done — see R63. **It works, and it costs the visitor
+120-226 MB.**
 
-**The third option is now the preferred one, untested.** Client-side WASM
-compiles in the visitor's browser, which costs nothing per compile *and* means
-the rendered resume never touches the server. The tentative direction below
-(containerised) was recorded before there was a reason to care about either.
-Compile one real Jake-template `.tex` in a browser before designing around it;
-if it fails, the container comes back and phase two changes shape.
+Browser pdfLaTeX compiled the real template: exit code 0, a 52 KB `%PDF-1.7`,
+including `\input{glyphtounicode}` and `\pdfgentounicode=1`, which were the
+genuinely uncertain parts. So the option is real rather than theoretical.
+
+What it costs is the finding. The engine is a 31 MB WASM binary and the TeX
+Live data package is 88.5 MB (basic) or 191.9 MB (recommended) — cached in
+IndexedDB after the first visit, but paid in full before the first resume
+renders.
+
+That inverts the argument R60 made for it. Client-side compilation was
+attractive because "the server never touches a resume"; it is unattractive
+because the paid tier's entire pitch is *no install, no LaTeX*, and a 120 MB
+download is worse than the install it replaces — on a phone, considerably
+worse.
+
+**So the tentative direction below stands after all: containerised,
+server-side.** WASM is kept as the documented fallback for the case where PII
+custody, not convenience, turns out to be the binding constraint.
 
 R8 solved PDF generation for the local CLI by shelling out to a locally
 installed pdflatex. That doesn't survive the move to a hosted app: you can't
@@ -5170,10 +5181,11 @@ None of them block the board; all of them decide the shape of what follows.
    products on the **free** tier and **not** on the paid tier. So a paid key
    is not merely a quota decision for a hosted product handling strangers'
    resumes — it is the only defensible one.
-2. **Spike LaTeX in the browser.** Compile one real Jake-template `.tex` with
-   SwiftLaTeX or texlive.js. If it works, the server never touches a resume;
-   if it does not, a TeX container and PII custody come back and phase two
-   changes shape. See Q8b.
+2. ~~**Spike LaTeX in the browser**~~ — **done 2026-08-25, see R63.** It
+   works and it is the wrong trade: 31 MB of WASM plus 88.5-191.9 MB of TeX
+   Live before the first resume renders. Phase two is therefore designed
+   around a **server-side TeX container**, and the PII custody that comes with
+   it is real and has to be planned for rather than engineered away.
 3. **A cost/quality measurement on `gemini-3.1-flash-lite`** against the
    frozen baselines. Now that both prices are known the prize is **6x, not
    10x** — 0.25 cents per resume against 1.5 — because the lite tier's output
@@ -5343,6 +5355,84 @@ Strategy (8+ years), Databricks FDE (excludes new grads)* to *Software Engineer
 I, AI Engineer, AI Engineer Product* — entry-level roles, which is what the
 profile asks for. Checked end to end through `AppTest`: 68 shown, toggle on,
 107 shown with reasons attached. 24 new tests, 652 pass, baselines clean.
+
+---
+
+## R63. LaTeX in the browser: it works, and it is the wrong trade
+
+**Decision:** (2026-08-25) Phase two compiles PDFs server-side. Browser WASM is
+documented as the fallback if PII custody becomes the binding constraint.
+
+**The spike.** R60 gated phase two on three questions. This was the one that
+decided the architecture, because the answer determines whether a hosted
+JobScout ever holds a resume.
+
+### It works
+
+`texlyre-busytex` 1.4.0 (TeX Live 2026, published eleven days before this was
+written) compiled the real template in a browser: **exit code 0 on every pass,
+a 52 KB `%PDF-1.7`**. Every package the template needs resolved — `latexsym`,
+`fullpage`, `titlesec`, `marvosym`, `color`, `verbatim`, `enumitem`,
+`hyperref`, `fancyhdr`, `babel`, `tabularx` — as did `\input{glyphtounicode}`
+and `\pdfgentounicode=1`, the two pdfTeX-specific lines that were the real
+uncertainty. So did the constructs R53 spent a commit on: `\textasciitilde{}`,
+`\textless{}`, `$|$`, `94.2\%`.
+
+**Engine choice is not optional.** The demo defaults to XeLaTeX and XeLaTeX
+*fails* on this template — `\pdfgentounicode` is a pdfTeX primitive XeTeX does
+not have. Exit code 1 until the engine was switched to pdfLaTeX, then 0. Worth
+recording because "LaTeX in the browser works" is not a fact; "pdfLaTeX in the
+browser works" is.
+
+### And it costs the visitor 120-226 MB
+
+Measured directly from the asset server rather than estimated:
+
+    busytex.wasm                31.0 MB
+    texlive-basic.data          88.5 MB
+    texlive-recommended.data   191.9 MB
+
+The template compiled against *recommended*. So the first visit costs roughly
+**226 MB**, or about **120 MB** with the basic collection plus an on-demand
+package endpoint. IndexedDB caches it afterwards — the cost is paid once, in
+full, before the first resume renders.
+
+That inverts R60's argument. Client-side compilation was attractive because the
+server would never touch a resume. It is unattractive because **the paid tier's
+entire pitch is "no install, no LaTeX"**, and a 120 MB download is a worse
+imposition than the install it is replacing. On a phone it is not a trade at
+all.
+
+### A prediction that was wrong, and how
+
+Before compiling anything, the collection indexes were read to work out which
+packages ship where, and they said `fullpage`, `titlesec` and `enumitem` were
+in *Extra* only — implying a 340 MB download. The compile then succeeded on
+*recommended*.
+
+The index lists `\ProvidesPackage` declarations, and not every `.sty` announces
+itself that way, so absence from the index is not absence from the collection.
+The empirical test overruled the analysis, which is the entire reason the
+reviewer asked for a compile rather than a survey.
+
+### Licensing, which nobody asked about
+
+`texlyre-busytex` is **AGPL-3.0-or-later** (bundling MIT-licensed BusyTeX
+components). SwiftLaTeX upstream ships no compiled engine at all — the
+repository holds C sources and a Makefile, so "point a script tag at it" is not
+available without building it yourself.
+
+AGPL against a commercial product with paid tiers is a question for someone
+qualified, not for this document. It is recorded because it is the kind of
+thing that is cheap to notice now and expensive to notice after launch.
+
+### What this settles
+
+Phase two compiles server-side, in a container with a trimmed TeX Live — the
+direction Q8b tentatively recorded long before there was a reason to care.
+**The PII custody that comes with it is now a planned cost rather than
+something the architecture avoids**, which is a materially different product to
+design: retention, deletion, and what the privacy policy has to say.
 
 ---
 
