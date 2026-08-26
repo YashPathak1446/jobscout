@@ -1672,9 +1672,24 @@ Source bullets:
             location = self._escape_latex(exp.get('location', ''))
             bullets = exp.get('bullets', [])
 
+            # {title}{dates}{company}{location} — the order the master template
+            # means, and the order `tex_renderer._experiences` writes. This
+            # renderer had company and title transposed. The PDF looked fine
+            # either way, which is why it survived: bold-company reads as a
+            # legitimate style. What it broke was reading the file back —
+            # `parse_latex_resume` files argument three as the employer, so
+            # every generated resume named its job titles as companies and two
+            # internships sharing a title collapsed onto one id. Anyone saving
+            # a tailored resume as their new master lost an experience.
+            #
+            # The transposition was found once already and fixed only in the
+            # other renderer (known_questions.md, "The renderer transposed
+            # experience fields"). Fifth time a fix has landed on one of two
+            # paths; `test_tex_renderer.py` and `test_latex_escaping.py` now
+            # hold both to the same rule.
             latex_content += f"""    \\resumeSubheading
-                {{{company}}}{{{dates}}}
-                {{{title}}}{{{location}}}
+                {{{title}}}{{{dates}}}
+                {{{company}}}{{{location}}}
                 \\resumeItemListStart
             """
 

@@ -50,3 +50,26 @@ pipeline invent job descriptions and score them — the whole selection
 breakdown (R57), and `graduation_eligibility` / `experience_level` (R66).
 
 When adding a field, wire the consumer in the same change, or do not add it.
+
+## The other recurring bug: two paths, one walked
+
+A fix lands on the path the author uses and not on the twin. Found five times,
+twice in the same pair of modules: the escape table (R69) and the experience
+field order (R70) were both fixed in one renderer and left in the other.
+
+The author's resume is a `.tex`, so he never walks the PDF/DOCX import path.
+He reads generated resumes as PDFs, so he never parses one back. Both bugs
+lived exclusively where he does not go, and neither was findable by care on
+the path he does — `test_tex_renderer.py` asserted the correct behaviour the
+whole time, for its own module.
+
+So: **a test that checks one path against itself proves nothing about the
+other.** Walk both and compare them. The known forks are `.tex` upload vs.
+PDF/DOCX import, Gemini vs. `none` vs. `ollama`, LaTeX installed vs. not, and
+cached vs. cold. Each is a branch where one machine takes the same side every
+time.
+
+Related: **unknown is not elsewhere.** Any field where absence and failure look
+alike will collapse them by default — `years_required: None` (R64),
+`location_score == 0` (R69), country parse failures (R55). Three instances.
+Give the unknown case its own state when you add the field.
