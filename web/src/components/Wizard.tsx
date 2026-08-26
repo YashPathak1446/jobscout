@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button'
 import { AboutYouStep } from '@/components/steps/AboutYouStep'
 import { PreferencesStep } from '@/components/steps/PreferencesStep'
 import { ResumeStep } from '@/components/steps/ResumeStep'
+import { RunStep } from '@/components/steps/RunStep'
+import { TuningStep } from '@/components/steps/TuningStep'
 import { api, type ProfileSummary } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -150,7 +152,24 @@ export function Wizard({
         />
       )}
 
-      {step > 2 && (
+      {step === 3 && profile && (
+        <TuningStep
+          profile={profile}
+          onBack={() => setStep(2)}
+          onContinue={() => go(4)}
+        />
+      )}
+
+      {step === 4 && profile && (
+        <RunStep
+          profile={profile}
+          apiKey={apiKey}
+          onBack={() => setStep(3)}
+          onOpenBoard={onOpenBoard}
+        />
+      )}
+
+      {step > 2 && !profile && (
         <div className="space-y-4">
           <Alert>
             <AlertTitle>{STEPS[step]} is not built yet</AlertTitle>

@@ -296,6 +296,50 @@ def embed_resume_components(parsed_resume, api_key: str = None) -> dict[str, lis
     return embeddings
 
 
+def _section_average(sorted_scores, cap: int):
+    """
+    The mean of the top `cap` components, and whether there were any.
+
+    Divided by **how many were actually considered**, not by the cap. The
+    production scorer divided by the cap, so a resume with three jobs scored
+    its experience term at three-fifths of what it earned and a resume with no
+    projects scored that whole term as zero. The mock scorer next door has had
+    the correct divisor all along, which is the third time a fix has existed on
+    one of two twin paths (R69, R70) — and this is the one that decided whether
+    the product returned anything at all.
+
+    Returns `(average, present)`. `present` is False for a section the resume
+    does not have, which is not the same as one that scored badly and must not
+    be averaged in as a zero.
+    """
+    considered = sorted_scores[:cap]
+    if not considered:
+        return 0.0, False
+    return sum(score for _, score in considered) / len(considered), True
+
+
+def _weighted(terms):
+    """
+    Blend `(value, weight, present)` triples over the sections that exist.
+
+    A section the resume does not have contributes no evidence, so its weight
+    is shared out among the ones that do rather than dragging the total toward
+    zero. Priya Raghunathan has three jobs and no projects: under the old
+    arithmetic her ceiling was 0.4 x (3/5) x similarity, and five senior
+    backend roles she is plainly qualified for scored 1.8%, 1.8%, 1.8%, 4.7%
+    and 15.2% against a threshold of 40. The run finished, reported success,
+    and produced nothing.
+
+    This is the codebase's own invariant reaching the scorer: absence is not a
+    value. A missing section is unknown evidence, not evidence of a bad match.
+    """
+    live = [(value, weight) for value, weight, present in terms if present]
+    if not live:
+        return 0.0
+    total_weight = sum(weight for _, weight in live)
+    return sum(value * weight for value, weight in live) / total_weight
+
+
 def score_job_with_embeddings(
     jd_text: str,
     resume_embeddings: dict[str, list[float]],
@@ -348,18 +392,15 @@ def score_job_with_embeddings(
     best_exp = [eid for eid, _ in sorted_exp[:max_experiences]]
     best_proj = [pid for pid, _ in sorted_proj[:max_projects]]
 
-    # Overall score: weighted combination
-    top_exp_avg = (
-        sum(s for _, s in sorted_exp[:max_experiences]) / max_experiences
-        if sorted_exp else 0
-    )
-    top_proj_avg = (
-        sum(s for _, s in sorted_proj[:max_projects]) / max_projects
-        if sorted_proj else 0
-    )
-
-    # Weight: 40% experiences, 30% projects, 30% skills
-    overall = top_exp_avg * 0.4 + top_proj_avg * 0.3 + skills_sim * 0.3
+    # Overall score: weighted combination. 40% experiences, 30% projects,
+    # 30% skills — over the sections this resume actually has.
+    top_exp_avg, has_exp = _section_average(sorted_exp, max_experiences)
+    top_proj_avg, has_proj = _section_average(sorted_proj, max_projects)
+    overall = _weighted([
+        (top_exp_avg, 0.4, has_exp),
+        (top_proj_avg, 0.3, has_proj),
+        (skills_sim, 0.3, "__skills__" in resume_embeddings),
+    ])
 
     embedding_pct = _normalise(overall)
 
@@ -463,11 +504,20 @@ def score_job_mock(
     best_exp = [eid for eid, _ in sorted_exp[:max_experiences]]
     best_proj = [pid for pid, _ in sorted_proj[:max_projects]]
 
-    top_exp_avg = sum(s for _, s in sorted_exp[:max_experiences]) / max(1, min(len(sorted_exp), max_experiences))
-    top_proj_avg = sum(s for _, s in sorted_proj[:max_projects]) / max(1, min(len(sorted_proj), max_projects))
-    skills_sim = _cosine_similarity(jd_vec, resume_embeddings.get("__skills__", [0.0]*768))
+    # Same arithmetic as the real scorer, through the same helpers. This one
+    # already divided by what it considered; what it shared with production
+    # was averaging an absent section in as a zero.
+    top_exp_avg, has_exp = _section_average(sorted_exp, max_experiences)
+    top_proj_avg, has_proj = _section_average(sorted_proj, max_projects)
+    has_skills = "__skills__" in resume_embeddings
+    skills_sim = _cosine_similarity(
+        jd_vec, resume_embeddings.get("__skills__", [0.0] * 768))
 
-    overall = top_exp_avg * 0.4 + top_proj_avg * 0.3 + skills_sim * 0.3
+    overall = _weighted([
+        (top_exp_avg, 0.4, has_exp),
+        (top_proj_avg, 0.3, has_proj),
+        (skills_sim, 0.3, has_skills),
+    ])
     embedding_pct = max(0, min(100, (overall - 0.1) / 0.5 * 100))
 
     # Mock embeddings are fake; the keyword overlap is not, because it is read

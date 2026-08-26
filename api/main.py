@@ -32,6 +32,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from agents.orchestrator import (
+    active_runs,
     available_profiles,
     backend_status,
     board_filters,
@@ -51,6 +52,8 @@ from agents.orchestrator import (
     score_bands,
     seniority_levels,
     set_job_status,
+    start_run,
+    run_status,
 )
 from scripts.init_profile import (
     create_profile,
@@ -384,18 +387,80 @@ def profile_update(name: str, request: ProfileUpdate) -> dict:
 class ComponentRules(BaseModel):
     importance: dict[str, Any]
     triggers: dict[str, Any]
+    # `always_include` boosts and `never_include` excludes outright. Both have
+    # been read by the parser since they were written and were editable only
+    # by hand until the tuning screen existed — so leaving them off here would
+    # have made this endpoint the one path that silently cannot set them.
+    always: dict[str, bool] = {}
+    never: dict[str, bool] = {}
 
 
 @app.put("/api/profile/{name}/components")
 def components_write(name: str, request: ComponentRules) -> dict:
     try:
-        write_component_rules(name, request.importance, request.triggers)
+        write_component_rules(name, request.importance, request.triggers,
+                              request.always, request.never)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"saved": name}
 
 
 # ------------------------------------------------------------- runs ----
+
+class RunRequest(BaseModel):
+    profile: str
+    # Not stored anywhere. It reaches the pipeline for this run and is
+    # forgotten; a run with no key is a supported configuration, not an error.
+    api_key: str = ""
+    max_jobs: int = 20
+    max_resumes: int = 3
+    generate_pdf: bool = True
+
+
+@app.post("/api/run")
+def run_start(request: RunRequest) -> dict:
+    """
+    Begin a run in the background and hand back its id at once (R51).
+
+    The pipeline takes minutes. Progress goes to `data/runs.db` rather than to
+    this response, because the browser that asked may be gone by the time it
+    ends — which is the whole point: a reloaded page can find the run again.
+    """
+    run_id = start_run(
+        request.profile,
+        api_key=request.api_key,
+        max_jobs=request.max_jobs,
+        max_resumes=request.max_resumes,
+        generate_pdf=request.generate_pdf,
+    )
+    return {"run_id": run_id}
+
+
+@app.get("/api/run/{run_id}")
+def run_progress(run_id: str) -> dict:
+    """
+    Where a run has got to, or 404 if there is no such run.
+
+    404, not an empty object: "this run does not exist" and "this run has no
+    progress yet" are different answers, and a UI given the second for the
+    first would spin forever on a run that never started.
+    """
+    status = run_status(run_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="No such run")
+    return status
+
+
+@app.get("/api/run")
+def runs_active() -> dict:
+    """
+    What is still going, read from disk.
+
+    A reloaded page has no memory of starting anything, so the answer cannot
+    come from anything the browser holds.
+    """
+    return {"active": active_runs()}
+
 
 @app.get("/api/runs")
 def runs(limit: int = Query(10, ge=1, le=50)) -> list:

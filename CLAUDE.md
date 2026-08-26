@@ -69,6 +69,30 @@ PDF/DOCX import, Gemini vs. `none` vs. `ollama`, LaTeX installed vs. not, and
 cached vs. cold. Each is a branch where one machine takes the same side every
 time.
 
+## `yash_pathak.json` is the least representative fixture in this repo
+
+It predates every question the wizard has since changed, so it carries fields
+no newly-built profile has — and it therefore **satisfies gates that a new
+profile cannot**. Four times now:
+
+- R70/R72's shape: the template presumed a new grad; his profile did not
+- the seniority literal (R68): fixed in the wizard, not in what it starts from
+- `us_citizen: true`: never seen, because his says what he is
+- the preferences Save button, gated on `seniority` — populated in his profile
+  from before R68, empty in every profile built since, so the button was dead
+  for every new user and enabled for him
+
+That last one is the worst of them in product terms. **A stranger does not
+file a bug report; they close the tab.**
+
+So: **build against Priya, not against yourself.** `priya_raghunathan` — six
+years, Boston, Staff Engineer, imported from a PDF this repo did not produce —
+is the default fixture for anything touching profile shape, gates, defaults or
+onboarding. `yash_pathak` is a **legacy-migration test case**, which is what it
+actually is: the shape a profile has when it was built before the current
+questions existed. Both are worth testing. Only one of them is what a new user
+gets.
+
 ## Ignore by pattern, never by filename
 
 `.gitignore` named `data/jobs.db`. `data/runs.db` arrived four months later
