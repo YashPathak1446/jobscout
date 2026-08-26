@@ -682,10 +682,16 @@ def evaluate(job, profile) -> FilterDecision:
     # cities and no priority states has expressed no preference, and gating on
     # it would empty the board — R55's lesson pointing the other way, where an
     # unknown country silently passed a filter built to catch it.
+    # And only when the posting says *where*. `location_score == 0` covers two
+    # different things — "in this country, in a state you did not name" and "in
+    # this country, state unknown" — and a first run excluded three postings
+    # listed only as "United States" on the second reading. Unknown is not
+    # elsewhere; the same distinction R64 drew for years and R55 for countries.
     named_somewhere = bool(prefs.locations.cities or prefs.locations.states_priority)
     if (named_somewhere
             and not getattr(prefs.locations, "willing_to_relocate", True)
-            and location_score == 0):
+            and location_score == 0
+            and loc_result.state):
         decision.exclude = True
         decision.reason = (
             f"{loc_result.state or loc_result.city or job.location} is outside "

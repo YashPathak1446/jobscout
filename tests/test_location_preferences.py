@@ -125,6 +125,20 @@ class TestTheGuard(unittest.TestCase):
         profile = _Profile(priority=[], cities=["San Francisco"], relocate=False)
         self.assertTrue(evaluate(_Job("Austin, TX"), profile).exclude)
 
+    def test_an_unresolved_state_is_not_treated_as_elsewhere(self):
+        """
+        Found in the first mid-level run: three postings listed only as
+        "United States" were excluded as somewhere the user would have to move
+        to. The state is unknown, not known-wrong — the same distinction R64
+        drew for years and R55 for countries.
+        """
+        profile = _Profile(priority=["Massachusetts"], relocate=False)
+        self.assertFalse(evaluate(_Job("United States"), profile).exclude)
+
+    def test_a_known_state_elsewhere_is_still_excluded(self):
+        profile = _Profile(priority=["Massachusetts"], relocate=False)
+        self.assertTrue(evaluate(_Job("Austin, TX"), profile).exclude)
+
     def test_it_cannot_empty_a_board(self):
         """
         The failure mode stated as a property: with nowhere named, nothing is

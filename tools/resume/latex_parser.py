@@ -264,6 +264,10 @@ def _clean_latex(text: str) -> str:
     text = re.sub(r"\\_", "_", text)
     text = re.sub(r"\\#", "#", text)
     text = re.sub(r"\\textasciitilde\{\}", "~", text)
+    # R69 writes a tilde as `$\sim$`, so the round trip has to read it back —
+    # render, re-parse, and "~500 samples" must still say "~500". The older
+    # form above stays because resumes written before it still exist.
+    text = re.sub(r"\$\\sim\$\s*", "~", text)
     text = re.sub(r"\$\|?\$", "|", text)
     text = re.sub(r"\\small\s*", "", text)
     text = text.replace("--", "–")

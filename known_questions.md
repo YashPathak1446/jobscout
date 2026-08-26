@@ -5970,6 +5970,114 @@ saves; and the relocation gate cannot empty a board when no location is named.
 
 ---
 
+## R69. The glyph bug that escaping could not reach
+
+**Decision:** (2026-08-26) A tilde is written `$\sim$`, both renderers escape
+the same characters, and the template deliberately does not load `fontenc`.
+
+**Why this survived three sweeps.** R53 found that `<` prints as an inverted
+exclamation mark under this template's OT1 encoding and escaped it. Twice since
+then the report came back that the bug was still there, and twice a search of
+the generated `.tex` files found nothing. Both searches were right and both
+were looking in the wrong place.
+
+### The twin renderer
+
+R53 fixed `generation_agent._escape_latex_impl` and not `tex_renderer.escape`,
+which is the path an **imported PDF or DOCX** resume takes. So the identical
+bug sat in the module only a *new* user reaches — the author's resume is a
+`.tex` that never passes through it.
+
+That is the second bug this week reachable only by somebody who is not the
+author, after "Boston, MA" reading as Morocco (R68). The generalisation work is
+finding a class of defect nothing else could.
+
+### The half no escape could fix
+
+`\textasciitilde` is the *correct* escape for a tilde, and under OT1 it renders
+as a raised diacritic: "˜2 min" rather than "~2 min". It also extracts from the
+PDF as an unmappable character, so ATS software reading the text loses the
+qualifier on the number entirely. R53 could not have fixed this by escaping,
+because the escape is the thing that renders wrong.
+
+### T1 was tried, measured, and rejected
+
+Loading `\usepackage[T1]{fontenc}` fixes all three glyphs — and it was
+implemented, including injection into existing masters, before being backed
+out. Compiling the real preamble both ways and extracting the text:
+
+    without T1   Sep. 2021 – June 2025      tilde renders wrong
+    with T1      Sep. 2021 \x15 June 2025   tilde renders correctly
+
+T1 breaks the ToUnicode mapping for the en-dash, so **every date range extracts
+as a control character**. For a document whose whole purpose is being read as
+text by ATS software, trading every date for three glyphs is the wrong way
+round. The `\pdfgentounicode` machinery already in the template does not cover
+it.
+
+`$\sim$` fixes the tilde with no such cost: it renders correctly, extracts as
+U+223C, and is what a resume means by a tilde anyway. It is also what the
+author's own master already writes by hand.
+
+The template now carries a comment explaining the omission, and a test fails if
+someone adds `fontenc` without revisiting the measurement — an absent line is
+otherwise indistinguishable from an oversight.
+
+### A round trip that broke on the way
+
+`_clean_latex` un-escaped `\textasciitilde{}` and knew nothing of `$\sim$`, so
+rendering an imported resume and parsing it back turned "~500 samples" into
+"500 samples". Caught by an existing round-trip test, which is the test earning
+its keep.
+
+### The doc's claims are now executable
+
+Three times now a decision entry has described a state the code never reached:
+roadmap item 13 on discovery seniority, Q2 on PDF/DOCX import, and R55's
+state-code removal. The shape is consistent — **a claim that something is
+removed, guarded or wired, sitting on top of an outcome that looked right for
+another reason.**
+
+Prose cannot check itself, so `tests/test_doc_claims_hold.py` asserts the
+load-bearing ones: no US state code resolves to a country, the guard compares
+like with like, the dead profile fields are gone, the real scrape path cannot
+reach the mock, no literal "new grad" reaches a query, both escape tables
+agree. Plus structural checks on the log — that no entry points at a resolution
+that was never written, and no number is reused.
+
+Running it immediately found a stale docstring inside the very function R61
+fixed, still promising to "fall back to mock if scraping fails".
+
+### The mid-level run
+
+Everything this week changed assumptions about users who are not new graduates,
+and nothing had exercised that path end to end. A profile with six years, based
+in Boston, on an H1B, unwilling to relocate:
+
+    derived levels   mid, senior          (from years, not picked)
+    search term      "mid"                (was the literal "new grad")
+    tolerated floor  9
+    github newgrad   skipped
+    excluded         Canada 5, New York 22, California 17, Illinois 2
+
+**"Illinois" appears as a US state**, which before today read as Israel. The
+run produced *Senior Software Engineer* resumes — a path that a week ago hunted
+new-grad postings.
+
+It also found one more three-state mistake. `location_score == 0` covers both
+"in a state you did not name" and "state unknown", so three postings listed
+only as "United States" were excluded as somewhere the user would have to move
+to. Unknown is not elsewhere — the same distinction R64 drew for years and R55
+for countries, and the third time this session it has come up.
+
+### Verified
+
+767 tests, three baselines clean. Both renderers now produce identical output
+for every special character; a compiled PDF renders `<5ms`, `>1s`, `∼2 min` and
+`94.2%` correctly while keeping the en-dash extractable.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

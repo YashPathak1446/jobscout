@@ -193,7 +193,14 @@ class GenerationAgent:
             '_': r'\_',
             '{': r'\{',
             '}': r'\}',
-            '~': r'\textasciitilde{}',
+            # `$\sim$`, not `\textasciitilde` (R69). Under this template's OT1
+            # encoding the latter renders as a raised diacritic — "˜2 min"
+            # rather than "~2 min" — and extracts as an unmappable character,
+            # so an ATS reading the PDF as text gets nothing where the number
+            # was qualified. This is the half of the glyph problem R53 could
+            # not fix by escaping, because the escape was the thing rendering
+            # wrong.
+            '~': r'$\sim$',
             '^': r'\textasciicircum{}',
             '\\': r'\textbackslash{}',
             '<': r'\textless{}',

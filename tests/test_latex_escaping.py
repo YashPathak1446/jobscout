@@ -68,7 +68,13 @@ class TestTheLoudOnesStillWork(unittest.TestCase):
         self.assertEqual(_escape("C# and F#"), r"C\# and F\#")
 
     def test_tilde(self):
-        self.assertEqual(_escape("~2 minutes"), r"\textasciitilde{}2 minutes")
+        """
+        `$\\sim$` since R69, not `\\textasciitilde`. The old escape was correct
+        LaTeX that rendered as a raised diacritic under this template's OT1
+        encoding — "˜2 minutes" — and extracted from the PDF as an unmappable
+        character, so an ATS reading the text lost the qualifier.
+        """
+        self.assertEqual(_escape("~2 minutes"), r"$\sim$2 minutes")
 
     def test_backslash(self):
         self.assertEqual(_escape("a\\b"), r"a\textbackslash{}b")

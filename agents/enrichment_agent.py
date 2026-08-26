@@ -183,7 +183,8 @@ class EnrichmentAgent:
         2. Detect ATS from final URL
         3. Use Greenhouse/Lever/Ashby/Workday/generic scraper
         4. Extract structured requirements
-        5. Fall back to mock if scraping fails
+        5. Report failure as failure — this used to fall back to a mock, which
+           invented job descriptions the rest of the pipeline then scored (R61)
 
         Args:
             job: JobListing with apply_url to scrape

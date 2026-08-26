@@ -6,6 +6,17 @@
 
 \documentclass[letterpaper,11pt]{article}
 
+% No \usepackage[T1]{fontenc} here, and that is deliberate (R69).
+%
+% T1 does fix the three glyphs OT1 gets wrong — `<`, `>` and a literal tilde —
+% and it was tried. It also breaks the ToUnicode mapping for the en-dash, so
+% every date range extracts from the PDF as a control character instead of
+% "2021 - 2025". For a resume that ATS software reads as text, trading every
+% date for three glyphs is the wrong way round. Measured by compiling both
+% ways and extracting the text, not assumed.
+%
+% The glyphs are handled where they arise instead: escaped in the two
+% renderers, with a tilde written as $\sim$ rather than \textasciitilde.
 \usepackage{latexsym}
 \usepackage[empty]{fullpage}
 \usepackage{titlesec}

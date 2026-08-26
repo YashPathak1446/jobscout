@@ -41,7 +41,18 @@ _ESCAPES = {
     "\\": r"\textbackslash{}",
     "&": r"\&", "%": r"\%", "$": r"\$", "#": r"\#",
     "_": r"\_", "{": r"\{", "}": r"\}",
-    "~": r"\textasciitilde{}", "^": r"\textasciicircum{}",
+    # `$\sim$`, not `\textasciitilde` (R69). In this template's OT1 encoding
+    # `\textasciitilde` renders as a raised diacritic — "˜2 min" rather than
+    # "~2 min" — and extracts from the PDF as an unmappable character, so ATS
+    # software reading the text gets nothing. `$\sim$` renders correctly and
+    # extracts as U+223C. It is also what a resume means by a tilde: roughly.
+    "~": r"$\sim$", "^": r"\textasciicircum{}",
+    # R53 added these two to the *generation* path and not to this one, so an
+    # imported resume containing "<5ms" rendered it as an inverted exclamation
+    # mark. The same bug, in the module only a new user reaches — the author's
+    # resume is a `.tex` that never passes through here, which is why it
+    # survived every sweep (R69).
+    "<": r"\textless{}", ">": r"\textgreater{}",
 }
 
 _ESCAPE_PATTERN = re.compile("|".join(re.escape(c) for c in _ESCAPES))
