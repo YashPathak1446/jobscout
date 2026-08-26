@@ -71,7 +71,13 @@ data/master_resumes/*.doc
 
 # User profiles - personal data
 # The durable job store: personal, unbounded, rebuildable by discovery.
-data/jobs.db
+# Every store, not the one that existed when this line was written.
+# `data/jobs.db` was ignored by name; `data/runs.db` arrived with R51 four
+# months later and nobody added a second line, so a live database holding the
+# author's own run history — profile name, local filesystem paths, timestamps
+# — was tracked while its twin was not. Both are built by CREATE TABLE IF NOT
+# EXISTS; neither ever needed to be in the repo.
+data/*.db
 
 
 user_profiles/*.json

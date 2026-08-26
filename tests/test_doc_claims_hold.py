@@ -176,5 +176,111 @@ class TestTheDocDoesNotContradictItself(unittest.TestCase):
             self.assertNotIn("**Status:** Resolved", rest, name)
 
 
+class TestNoDegradationTierIsOnlyEverFaked(unittest.TestCase):
+    r"""
+    A test that hand-builds the state it asserts on is testing the display,
+    not the path.
+
+    The case that named this class. `heuristic_schema` returns
+    `experiences: []` by design and keeps the section text it could not split
+    under `_unparsed`, so a person with no model still gets a confirmation
+    screen. `app.py` has had the code to render that since the screen was
+    written, and `test_import_confirmation.py` proved it — by assigning
+    `schema["_unparsed"] = {...}` itself.
+
+    It had to. `extract_resume` treated an empty experiences list as failure,
+    so no real run could produce the state. A whole graceful-degradation tier
+    was verified against a fixture and was broken in production for as long as
+    it existed, and the test passing is what made it invisible.
+
+    So: where a test constructs a fallback state by hand, something in the
+    product must be able to construct it too. This does not ban the fixture —
+    fixtures are how you test a display without a PDF — it requires that the
+    path be reachable, and it fails when the two drift apart.
+    """
+
+    # Keys that name a degraded or partial state: something the product enters
+    # when a rung is missing, not something a healthy run produces.
+    FALLBACK_KEYS = ("_unparsed", "degraded", "gate_reason")
+
+    def _tests_that_assign(self, key):
+        found = []
+        for path in sorted((ROOT / "tests").glob("test_*.py")):
+            if path.name == Path(__file__).name:
+                continue
+            text = path.read_text(encoding="utf-8")
+            # Assignment, not a read: `schema["_unparsed"] = ...` builds the
+            # state; `schema.get("_unparsed")` inspects one that arrived.
+            if re.search(r"""\[\s*["']%s["']\s*\]\s*=""" % re.escape(key), text):
+                found.append(path.name)
+        return found
+
+    def test_every_faked_fallback_state_is_reachable_in_the_product(self):
+        """
+        For each degraded state a test builds by hand, some non-test module
+        must write that key. Otherwise the only thing that ever produces it is
+        the test.
+
+        **This is the weaker half and would not have caught the case above.**
+        `resume_import.py` wrote `_unparsed` the whole time; the state was
+        unreachable because a *caller* rejected it first, which no key-level
+        check can see. What this does is enumerate the candidates — it names
+        every fallback state whose only author is a fixture — so the list
+        below stays honest and each one gets a specific test like the two
+        that follow. Treat a new name appearing here as work to do, not as a
+        failure to silence.
+        """
+        product = ""
+        for folder in ("tools", "agents", "scripts", "api"):
+            for path in (ROOT / folder).rglob("*.py"):
+                product += path.read_text(encoding="utf-8")
+
+        for key in self.FALLBACK_KEYS:
+            fakers = self._tests_that_assign(key)
+            if not fakers:
+                continue
+            self.assertIn(
+                f'"{key}"', product,
+                f"{fakers} build {key!r} by hand and nothing in the product "
+                f"ever writes it — the tier is tested and unreachable")
+
+    def test_the_import_floor_can_actually_be_reached(self):
+        """
+        The specific one, kept specific. `extract_resume` must not treat the
+        floor's empty experiences list as failure; if it does, every no-model
+        import raises and `_unparsed` is decoration.
+        """
+        source = source_of("scripts/init_profile.py")
+        guard = re.search(
+            r"if not \(schema\.get\(.experiences.\) or schema\.get\(.projects.\)\)",
+            source)
+        self.assertIsNone(
+            guard,
+            "extract_resume rejects any schema with no experiences, which is "
+            "exactly what heuristic_schema returns by design — the no-model "
+            "import path is unreachable again (see the R-entry for the "
+            "stranger import)")
+
+    def test_the_floor_still_returns_the_shape_that_guard_must_tolerate(self):
+        """
+        The other half. If `heuristic_schema` ever starts splitting roles, the
+        guard above may be safe to restore — and whoever does that has to come
+        here and say so.
+        """
+        from tools.resume.resume_import import heuristic_schema
+
+        schema = heuristic_schema("\n".join([
+            "Jane Doe",
+            "jane@example.com",
+            "Experience",
+            "Staff Engineer, Acme - Boston, MA Jan 2020 - Present",
+            "Did a thing nobody can parse into fields",
+        ]))
+        self.assertEqual(schema["experiences"], [],
+                         "the floor now splits roles; the guard in "
+                         "extract_resume may need revisiting")
+        self.assertTrue((schema.get("_unparsed") or {}).get("experiences"))
+
+
 if __name__ == "__main__":
     unittest.main()
