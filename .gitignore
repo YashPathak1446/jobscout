@@ -57,7 +57,15 @@ outputs/
 /.cache/
 
 # Master resumes - personal data
+# Everything a resume can arrive as, not just the format the author uses.
+# This rule was written when a master resume was always a hand-written .tex.
+# R38 added PDF and Word import, which writes the upload into this same
+# directory — so a stranger's resume was tracked while the author's was
+# ignored, and the first `git add -A` would have committed their CV.
 data/master_resumes/*.tex
+data/master_resumes/*.pdf
+data/master_resumes/*.docx
+data/master_resumes/*.doc
 !data/master_resumes/*.example.tex
 !data/master_resumes/.gitkeep
 

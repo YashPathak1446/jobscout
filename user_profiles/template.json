@@ -29,32 +29,23 @@
       "full-time"
     ],
     "exclude_keywords": [
-      "senior",
-      "staff",
-      "principal",
-      "5+ years",
-      "PhD required"
+      "PhD required",
+      "security clearance required"
     ],
     "locations": {
       "countries": [
         "United States"
       ],
       "exclude_countries": [],
-      "states_priority": [
-        "California",
-        "New York"
-      ],
-      "states_acceptable": [
-        "Texas",
-        "Washington"
-      ],
+      "states_priority": [],
+      "states_acceptable": [],
       "cities": [
         "Remote"
       ],
       "remote_ok": true,
       "willing_to_relocate": true
     },
-    "years_experience": 0
+    "years_experience": null
   },
   "resume_preferences": {
     "master_resume_path": "data/master_resumes/YOUR_NAME.tex",

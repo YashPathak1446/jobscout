@@ -66,6 +66,16 @@ class TestProfileMergeKeepsWhatTheFormNeverShowed(unittest.TestCase):
         return json.loads(TEMP.read_text(encoding="utf-8"))
 
     def test_saving_two_location_fields_keeps_the_other_five(self):
+        # Seeded here rather than inherited from the template. This test used
+        # to lean on the template shipping ["California", "New York"], which
+        # made it pass for a reason it was not about — and fail the day the
+        # template stopped presuming one person's geography. A test for "the
+        # merge keeps what the form never showed" has to put the thing there
+        # itself.
+        update_profile_fields("_board_test", {
+            "job_preferences": {"locations": {"states_priority": ["Oregon"]}},
+        })
+
         update_profile_fields("_board_test", {
             "job_preferences": {"locations": {"cities": ["Irvine"], "remote_ok": False}},
         })
@@ -76,7 +86,7 @@ class TestProfileMergeKeepsWhatTheFormNeverShowed(unittest.TestCase):
         # The required field the old merge dropped, plus the one discovery and
         # the filter actually read.
         self.assertEqual(locations["countries"], ["United States"])
-        self.assertTrue(locations["states_priority"])
+        self.assertEqual(locations["states_priority"], ["Oregon"])
 
     def test_the_profile_still_loads_after_the_preferences_screen_saves(self):
         """The failure this fixes: a wizard step leaving an unloadable profile."""
