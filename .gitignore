@@ -57,13 +57,25 @@ outputs/
 /.cache/
 
 # Master resumes - personal data
+# Every format a resume can arrive as, not just the one the author uses.
+# This rule was written when a master resume was always a hand-written .tex;
+# R38 added PDF and Word import, which writes the upload into this same
+# directory — so a stranger's CV was trackable while the author's was ignored.
 data/master_resumes/*.tex
+data/master_resumes/*.pdf
+data/master_resumes/*.docx
+data/master_resumes/*.doc
 !data/master_resumes/*.example.tex
 !data/master_resumes/.gitkeep
 
 # User profiles - personal data
 # The durable job store: personal, unbounded, rebuildable by discovery.
-data/jobs.db
+# Every store, not the one that existed when this line was written.
+# `data/jobs.db` was ignored by name; `data/runs.db` arrived with R51 four
+# months later and nobody added a second line, so a live database holding real
+# run history was tracked while its twin was not. Both are built by
+# CREATE TABLE IF NOT EXISTS; neither ever needed to be in the repo.
+data/*.db
 
 
 user_profiles/*.json
