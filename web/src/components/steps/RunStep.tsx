@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CheckCircle2, FileDown, Loader2, PenLine, Play, XCircle } from 'lucide-react'
+import {
+  CheckCircle2,
+  FileDown,
+  Loader2,
+  PenLine,
+  Play,
+  SearchX,
+  XCircle,
+} from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -209,6 +217,60 @@ export function RunStep({
   )
 }
 
+/**
+ * What a finished run actually produced, and what to do about it.
+ *
+ * A run that analysed nothing and wrote nothing used to say "Finished" — on
+ * the last screen a first-time user sees, about a run that did nothing. That
+ * is the silent-subtraction pattern at the point of highest consequence: the
+ * scoring bug fixed alongside this would have presented to every new user as
+ * "JobScout ran fine and found me no jobs."
+ *
+ * Zero has three causes and the user can act on two of them, so they get
+ * three different headlines rather than one word that covers all of them.
+ */
+function outcome(status: RunStatus) {
+  if (status.state === 'failed') {
+    return { tone: 'bad' as const, headline: 'The run failed', advice: null }
+  }
+  const r = status.result
+  if (!r) return { tone: 'good' as const, headline: 'Finished', advice: null }
+
+  if (r.generated > 0) {
+    return {
+      tone: 'good' as const,
+      headline: `Wrote ${r.generated} resume${r.generated === 1 ? '' : 's'}`,
+      advice: null,
+    }
+  }
+  if (r.discovered === 0) {
+    return {
+      tone: 'empty' as const,
+      headline: 'No jobs found',
+      advice:
+        'Discovery returned nothing at all. Widen your target roles or the ' +
+        'places you would work, on the Preferences screen.',
+    }
+  }
+  if (r.analysed === 0) {
+    return {
+      tone: 'empty' as const,
+      headline: `Found ${r.discovered} jobs, none matched you well enough`,
+      advice:
+        `Every one scored below ${r.threshold ?? 'the threshold'}. That ` +
+        'usually means the roles you asked for are not the roles your resume ' +
+        'reads as — try adding target roles closer to your recent work.',
+    }
+  }
+  return {
+    tone: 'empty' as const,
+    headline: `${r.analysed} jobs matched, but no resumes were written`,
+    advice:
+      'The matches are on your board. Generation produced nothing, which is ' +
+      'a problem with this machine rather than with your profile.',
+  }
+}
+
 function Progress({ status }: { status: RunStatus }) {
   const failed = status.state === 'failed'
   const done = status.state === 'finished'
@@ -220,12 +282,18 @@ function Progress({ status }: { status: RunStatus }) {
         {failed ? (
           <XCircle className="size-4 shrink-0" />
         ) : done ? (
-          <CheckCircle2 className="size-4 shrink-0" />
+          outcome(status).tone === 'good' ? (
+            <CheckCircle2 className="size-4 shrink-0" />
+          ) : (
+            <SearchX className="size-4 shrink-0" />
+          )
         ) : (
           <Loader2 className="size-4 shrink-0 animate-spin" />
         )}
         <span className="font-medium">
-          {failed ? 'The run failed' : done ? 'Finished' : status.message || 'Working…'}
+          {done || failed
+            ? outcome(status).headline
+            : status.message || 'Working…'}
         </span>
         {/* total 0 means "not counted yet", which is not "0 of 0 done". */}
         {!done && !failed && status.total > 0 && (
@@ -259,9 +327,13 @@ function Progress({ status }: { status: RunStatus }) {
 
       {done && status.result && (
         <div className="space-y-2 text-sm">
+          {outcome(status).advice && (
+            <p className="text-muted-foreground">{outcome(status).advice}</p>
+          )}
           <p>
-            {status.result.analysed} jobs analysed · {status.result.generated}{' '}
-            resumes written · {status.result.valid} passed validation
+            {status.result.discovered} found · {status.result.analysed} analysed
+            · {status.result.generated} written · {status.result.valid} passed
+            validation
           </p>
           {/* Named, not hidden. A resume built from the owner's own bullets
               is a real outcome, and someone who is not told reads unchanged

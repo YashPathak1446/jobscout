@@ -368,9 +368,23 @@ def start_run(profile_name, api_key="", max_jobs=20, max_resumes=3,
             )
             results = (state or {}).get("generation_results") or []
             registry.finish(run_id, {
+                # `discovered` and `enriched` are here so a run that produced
+                # nothing can say *which* nothing. "Found no jobs at all",
+                # "found jobs and none scored high enough" and "matched jobs
+                # and wrote no resumes" are three different problems, and the
+                # user can act on the first two. Without these the screen can
+                # only report zero and call it success — which is what it did,
+                # on the last screen a first-time user sees.
+                "discovered": len((state or {}).get("discovered_jobs") or []),
+                "enriched": len((state or {}).get("enriched_jobs") or []),
                 "analysed": len((state or {}).get("analysis_results") or []),
                 "generated": len(results),
                 "valid": sum(1 for r in results if r.get("status") == "valid"),
+                # The bar a job had to clear, so the screen can name the number
+                # rather than telling somebody to go and find it.
+                "threshold": getattr(
+                    getattr(orchestrator.profile, "agent_preferences", None),
+                    "scoring_threshold", None),
                 # Carried out of the run so a reloaded page can say why the
                 # bullets are the user's own without reopening state.json.
                 "degraded": sorted({r["degraded"] for r in results
