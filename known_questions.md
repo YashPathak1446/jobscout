@@ -5573,6 +5573,78 @@ early career, and Experian resolves to Brazil.
 
 ---
 
+## R65. The board people will actually see
+
+**Decision:** (2026-08-26) The public board is a static React page over R64's
+export. Vite, React 19, Tailwind 4, no component library.
+
+**Why no shadcn.** The advice was not to hand-roll a component library for a
+board, and the advice is right — but shadcn's init pulls Radix, CVA and path
+aliases to supply what turned out to be five controls, against React 19 /
+Tailwind 4 / Vite 8, all new enough that a generator is a risk of its own. Five
+controls written directly cost less than the setup and are quality this project
+controls. The finished bundle is **198 KB, 62 KB gzipped** — worth stating next
+to R63's 120-226 MB, which is what the browser-LaTeX path would have added.
+
+### The facet counts decided the controls, as intended
+
+R64 measured what each facet knows before anything was designed, and it changed
+the layout: **years leads and level is not a control at all.** Level reads
+`unspecified` on 43% of postings and `entry` on four, because genuinely
+early-career roles mostly state no floor. A level filter would have looked like
+the obvious primary control and done almost nothing.
+
+### Three states, all the way to the screen
+
+The rule R64 established in the data survives into the UI: a facet the export
+could not read is *shown*, and hiding it is a choice the reader makes with the
+count in front of them. "Include postings that don't say" is checked by
+default and says how many hang on it.
+
+**The country filter is where this stopped being theoretical.** 45 of 107
+postings resolve to no country, because the location text reads "*HQ - San
+Francisco, CA". Dropping those under a United States filter hides US jobs from
+someone filtering for the US — so they are kept, and the first version of this
+page then showed a São Paulo role under a United States filter, because a bare
+"São Paulo" is unresolved in exactly the same way. Neither default is right, so
+it is a toggle: *"Include 45 with an unclear location"*, and the count moves
+68 → 38 when it is turned off.
+
+### Two smaller calls
+
+**Amber means "this rules you out"** — clearance, US-person, no sponsorship,
+excludes-new-grads. The first draft flagged the years tag too, so a "3+ years"
+posting matching a "max 3 years" filter appeared as a warning about itself. If
+every tag is a warning, none of them is.
+
+**The heading says "tech roles", not "engineering roles"**, because the data
+contains business analyst postings and the title was quietly wrong about its
+own contents.
+
+### What the page refuses to do
+
+It renders nothing if `schema_version` does not match — a frontend drawing a
+shape it does not understand is worse than one that stops. And the footer says
+the requirements are read from the posting and can be wrong, because they are
+extracted by regex and the employer's posting is the authority.
+
+`frontend/public/jobs.json` is gitignored for the same reason `data/board/` is:
+committing a file of real listings to a public repo *is* the redistribution act
+R60 left open, and it should not happen as a side effect of a build.
+
+### Verified
+
+23 frontend tests over the filter rules — where a three-state bug hides
+silently — plus a typecheck and a production build. The Python suite is
+untouched at 687. Driven in a real browser rather than reasoned about: the
+country filter moves 77 → 68 → 38 as it is tightened, São Paulo leaves when it
+should, and a fresh tab loads with zero console errors.
+
+**Not done:** the deploy and the nightly crawl, so this runs on localhost only.
+Q23 still means the page can say "first seen today" and not "posted today".
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

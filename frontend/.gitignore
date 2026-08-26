@@ -1,0 +1,30 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# The board's data, written by `python scripts/export_board.py --out
+# frontend/public/jobs.json`. Generated on every crawl, and a file of real job
+# listings — committing it to a public repo would be the redistribution act
+# R60 left unresolved, done by accident. Same reason `data/board/` is ignored.
+public/jobs.json
