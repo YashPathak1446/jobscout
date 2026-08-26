@@ -632,8 +632,19 @@ def screen_preferences():
         _goto(1)
         st.rerun()
 
+    # Gated on what is *in force*, not on the override box. `seniority` is
+    # deliberately empty whenever the user has not overridden — that is what
+    # lets the levels follow the years — so requiring it disabled this button
+    # for every new profile, permanently, with no explanation. The only way
+    # forward was to open a collapsed expander and pick by hand, which is
+    # precisely the question R68 removed.
+    #
+    # It never showed up because the author's own profile still carries the
+    # seniority list from before R68 changed the question, so his button was
+    # always enabled. Measured: yash_pathak enabled, a freshly imported
+    # profile disabled.
     if forward.button("Save and continue", type="primary",
-                     disabled=not (roles and seniority)):
+                     disabled=not (roles and in_force)):
         update_profile_fields(st.session_state.profile_name, {
             "job_preferences": {
                 "target_roles": roles,

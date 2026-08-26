@@ -40,6 +40,7 @@ from agents.orchestrator import (
     board_sorts,
     board_stats,
     board_total,
+    derived_levels,
     ghosted_jobs,
     job_history,
     job_selection,
@@ -48,6 +49,7 @@ from agents.orchestrator import (
     previous_runs,
     refresh_board_gate,
     score_bands,
+    seniority_levels,
     set_job_status,
 )
 from scripts.init_profile import (
@@ -86,6 +88,22 @@ def health() -> dict:
         "pdflatex": pdflatex_available(),
         "statuses": list(job_statuses()),
         "sorts": board_sorts(),
+    }
+
+
+@app.get("/api/levels")
+def levels(years: Optional[int] = Query(None, ge=0, le=60)) -> dict:
+    """
+    Every seniority level, and the ones a number of years implies (R68).
+
+    `years` is optional and `None` is not zero: a profile that has never been
+    asked has no answer, and zero years is the claim "new graduate". The
+    caller gets `derived: []` for an unanswered profile and has to render that
+    as a question rather than as a level.
+    """
+    return {
+        "all": seniority_levels(),
+        "derived": derived_levels(years) if years is not None else [],
     }
 
 

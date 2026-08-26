@@ -4,6 +4,7 @@ import { Check } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { AboutYouStep } from '@/components/steps/AboutYouStep'
+import { PreferencesStep } from '@/components/steps/PreferencesStep'
 import { ResumeStep } from '@/components/steps/ResumeStep'
 import { api, type ProfileSummary } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -141,7 +142,15 @@ export function Wizard({
         </Alert>
       )}
 
-      {step > 1 && (
+      {step === 2 && profile && (
+        <PreferencesStep
+          profile={profile}
+          onBack={() => setStep(1)}
+          onContinue={() => go(3)}
+        />
+      )}
+
+      {step > 2 && (
         <div className="space-y-4">
           <Alert>
             <AlertTitle>{STEPS[step]} is not built yet</AlertTitle>
