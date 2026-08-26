@@ -135,7 +135,26 @@ US_STATE_BY_ABBREV = {v: k for k, v in US_STATES.items()}
 # becoming Canada would be a far worse bug than the one being fixed, so the
 # ambiguous codes are simply not treated as countries at all — a posting that
 # writes only "IN" for India is rarer than one that writes "IN" for Indiana.
-_AMBIGUOUS_WITH_US_STATES = set(US_STATE_BY_ABBREV)
+# Upper-cased on the way in, and this is not cosmetic (R68). `US_STATES` holds
+# its abbreviations lower-case, `COUNTRY_CODES` holds its keys upper-case, so
+# the guard below compared "MA" against {"ma", ...} and matched nothing — the
+# whole removal was dead from the day it was written.
+#
+# Four collisions survived it, and they are not obscure places:
+#
+#     Chicago, IL      -> Israel
+#     Boston, MA       -> Morocco
+#     Denver, CO       -> Colombia
+#     Little Rock, AR  -> Argentina
+#
+# The corpus this was measured against never showed it, because those postings
+# spell their states out ("Chicago, Illinois"). A user in Boston reading
+# "Boston, MA" would have had every local job excluded as Moroccan.
+#
+# The codes named in R55's comment below — CA, IN, DE and the rest — were safe
+# only because they had also been struck from the literal by hand. The guard
+# they were credited to was doing nothing.
+_AMBIGUOUS_WITH_US_STATES = {abbrev.upper() for abbrev in US_STATE_BY_ABBREV}
 
 COUNTRY_CODES = {
     code: name for code, name in {

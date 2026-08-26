@@ -80,6 +80,39 @@ def demands_facet(text: str) -> tuple:
     return posting_demands(text), "read"
 
 
+# What kind of engagement a posting is offering. Ordered so the most specific
+# wins: a graduate internship says "intern" and "full-time" in the same
+# paragraph, and "intern" is the one that decides whether it suits you.
+#
+# Boundaries on every term, because "intern" sits inside "internal" and
+# "internally" — R18's finding, which this module would otherwise repeat.
+_EMPLOYMENT_PATTERNS = (
+    ("internship", re.compile(r"\b(?:interns?|internship|co-?op)\b", re.I)),
+    ("contract", re.compile(r"\b(?:contract|contractor|freelance|c2c)\b|"
+                            r"\bfixed[-\s]term\b", re.I)),
+    ("part-time", re.compile(r"\bpart[-\s]time\b", re.I)),
+    ("full-time", re.compile(r"\bfull[-\s]time\b|\bpermanent\b", re.I)),
+)
+
+
+def employment_facet(text: str) -> tuple:
+    """
+    (type, basis) — internship, contract, part-time or full-time.
+
+    Postings carry no structured field for this, so it is read from the text
+    like every other fact here, and carries the same basis: a body too thin to
+    read is "unknown", not "full-time by default". Filtering on a default would
+    hide every posting whose scrape failed (R64).
+    """
+    text = text or ""
+    if len(text) < READABLE_MIN_CHARS:
+        return None, "unknown"
+    for name, pattern in _EMPLOYMENT_PATTERNS:
+        if pattern.search(text):
+            return name, "stated"
+    return None, "none_stated"
+
+
 def classify_level(title: str, years, years_basis: str, excludes_entry: bool) -> str:
     """
     "entry", "mid", "senior" or "unspecified".
@@ -124,7 +157,11 @@ def posting_facts(row: dict) -> dict:
     excludes = excludes_entry_level(body) if len(body) >= READABLE_MIN_CHARS else False
     location = parse_location(row.get("location") or "")
 
+    employment, employment_of = employment_facet(body)
+
     return {
+        "employment_type": employment,
+        "employment_basis": employment_of,
         "years_required": years,
         "years_basis": basis,
         "excludes_entry_level": excludes,

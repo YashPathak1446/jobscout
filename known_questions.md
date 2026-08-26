@@ -5874,6 +5874,102 @@ beside it.
 
 ---
 
+## R68. Asking the question a person can answer
+
+**Decision:** (2026-08-26) The wizard asks how long you have worked and derives
+the seniority vocabulary. Three fields with no consumer were wired, three were
+deleted, and the tool stopped defaulting to its author.
+
+### The wrong question
+
+The wizard asked a stranger to pick a *range of seniority levels* — modelling
+work pushed onto them — and `YEARS_BY_LEVEL` converted the answer straight back
+into a number of years, which is what R54's gate had always used. Years is the
+fact somebody knows about themselves.
+
+`years_experience` is now the question. Levels stay internal because the text
+matching genuinely needs them: `accepted_seniority_terms` matches a dozen ad
+phrasings per level, and R66's search queries need one word.
+
+**The tolerance constant reproduces measured behaviour rather than looking
+tidy.** `years + 3` is what the old map already produced at both points a real
+profile had been measured at: a new grad tolerated a floor of 3, and a
+`[mid, senior]` profile tolerated 8, which is 5 + 3. Replaying the frozen
+corpus, the gate drops **the same five postings for the same reasons**.
+
+### The override had to survive, so nothing writes to it
+
+Someone with six years who narrows the range to mid-level must keep that choice
+when they later edit an unrelated screen. So the derivation never writes into
+`seniority`: **emptiness is the flag**, exactly as R15's `merge_importance`
+treats a component the profile does not mention. A field recomputed on save is
+a field that loses your answer.
+
+Verified by walking it: set six years, override to `[mid]`, then edit the
+location screen and then the target roles — `[mid]` throughout.
+
+### Three fields wired, three deleted
+
+`willing_to_relocate` was the worst of the six with no consumer, because the
+wizard **asked for it** and nothing read the answer. It is now a **gate, not a
+weight**, and R55 is why: a weighted location penalty gets outrun by vocabulary
+overlap, which is how a São Paulo posting scored 54%. Guarded, too — a profile
+naming no cities and no priority states has expressed no preference, and gating
+on the flag alone would empty the board.
+
+`exclude_countries` is one clause beside the whitelist, checked first because
+it is the narrower statement. `employment_types` became `employment_facet` in
+`posting_facts.py`, carrying R64's three-state basis so a posting whose scrape
+failed reads "unknown" rather than "full-time by default".
+
+Deleted: `citizenship_restrictions` (job-shaped, replaced by R56's candidate
+facts), `comments`, `job_recency_hours`.
+
+### Stop defaulting to one person
+
+Four agent CLIs defaulted `--profile` to `yash_pathak`, which for anyone else
+fails by looking for a profile they never had. Now: the only profile when there
+is one, and argparse demands it when there are several.
+
+`ROLE_OPTIONS` went from nine titles to nineteen, and `EXCLUDE_OPTIONS` — fixed
+at "senior, staff, 3+ years" — is now derived from the user's own experience.
+A senior engineer was being offered their own roles to exclude.
+
+### A dead guard, and four cities in the wrong country
+
+Testing the relocation gate turned up something worse than the feature.
+
+R55 removed US state abbreviations from `COUNTRY_CODES` so "Los Angeles, CA"
+could not read as Canada. **That removal never ran.** `US_STATES` holds its
+abbreviations lower-case and `COUNTRY_CODES` holds its keys upper-case, so
+`code not in _AMBIGUOUS_WITH_US_STATES` compared `"MA"` against `{"ma", ...}`
+and matched nothing. The codes R55's comment credits it with removing — CA, IN,
+DE — were safe only because they had *also* been struck from the literal by
+hand. The guard was decoration.
+
+Four collisions survived, and they are not obscure places:
+
+    Chicago, IL       -> Israel
+    Boston, MA        -> Morocco
+    Denver, CO        -> Colombia
+    Little Rock, AR   -> Argentina
+
+Zero jobs in the store were affected, which is why nothing caught it: those
+postings spell their states out ("Chicago, Illinois"). A user in Boston reading
+"Boston, MA" would have had every local job excluded as Moroccan — a bug that
+could only ever hit somebody who was not the author.
+
+One `.upper()` fixes it. Every R55 case still resolves as it did.
+
+### Verified
+
+742 tests, three baselines clean, doctor green. The frozen corpus drops the
+same five postings for the same reasons; the author's profile keeps its
+explicit range and its tolerance of 3; the override survives two unrelated
+saves; and the relocation gate cannot empty a board when no location is named.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

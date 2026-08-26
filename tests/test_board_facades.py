@@ -110,7 +110,10 @@ class TestProfileMergeKeepsWhatTheFormNeverShowed(unittest.TestCase):
              # Added by R52, when the form learned to set the rest of
              # `locations` rather than only preserve it.
              "countries", "states_priority", "states_acceptable",
-             "willing_to_relocate"})
+             "willing_to_relocate",
+             # Added by R68, when the form started asking how long someone has
+             # worked instead of asking them to pick their own seniority band.
+             "years_experience"})
         self.assertIsInstance(prefs["remote_ok"], bool)
 
     def test_read_preferences_round_trips_a_save(self):

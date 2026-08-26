@@ -203,10 +203,10 @@ class DiscoveryAgent:
         rather than filtered, because a source that cannot serve this user is
         a request not worth making (R66).
         """
-        from tools.jobs.job_filter import wants_early_career
+        from tools.jobs.job_filter import effective_seniority, wants_early_career
 
         if not wants_early_career(self.profile):
-            levels = ", ".join(self.profile.job_preferences.seniority) or "unset"
+            levels = ", ".join(effective_seniority(self.profile)) or "unset"
             logger.info(f"🐙 Skipping GitHub new-grad repos — this profile "
                         f"wants {levels}")
             return
@@ -415,6 +415,22 @@ class DiscoveryAgent:
         return ranked
 
 
+
+def _default_profile() -> str:
+    """
+    The profile to use when none is named.
+
+    Was hardcoded to the author's, which for anyone else is a confusing
+    failure — the tool reports a missing profile they never asked for (R68).
+    One profile means no ambiguity; several means say which.
+    """
+    try:
+        from tools.profile import list_available_profiles
+        names = [n for n in list_available_profiles() if n != "template"]
+    except Exception:
+        return ""
+    return names[0] if len(names) == 1 else ""
+
 def main():
     """CLI for testing Discovery Agent."""
     import argparse
@@ -422,8 +438,9 @@ def main():
     parser = argparse.ArgumentParser(description="JobScout V3 - Discovery Agent")
     parser.add_argument(
         "--profile",
-        default="yash_pathak",
-        help="Profile name (default: yash_pathak)"
+        default=_default_profile() or None,
+        required=not _default_profile(),
+        help="Profile name (required when more than one profile exists)"
     )
     parser.add_argument(
         "--mock",

@@ -229,6 +229,22 @@ class EnrichmentAgent:
         }
 
 
+
+def _default_profile() -> str:
+    """
+    The profile to use when none is named.
+
+    Was hardcoded to the author's, which for anyone else is a confusing
+    failure — the tool reports a missing profile they never asked for (R68).
+    One profile means no ambiguity; several means say which.
+    """
+    try:
+        from tools.profile import list_available_profiles
+        names = [n for n in list_available_profiles() if n != "template"]
+    except Exception:
+        return ""
+    return names[0] if len(names) == 1 else ""
+
 def main():
     """CLI for testing Enrichment Agent."""
     import argparse
@@ -238,8 +254,9 @@ def main():
     parser = argparse.ArgumentParser(description="JobScout V3 - Enrichment Agent")
     parser.add_argument(
         "--profile",
-        default="yash_pathak",
-        help="Profile name (default: yash_pathak)"
+        default=_default_profile() or None,
+        required=not _default_profile(),
+        help="Profile name (required when more than one profile exists)"
     )
     parser.add_argument(
         "--mock",

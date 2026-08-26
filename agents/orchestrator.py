@@ -465,6 +465,17 @@ def seniority_levels() -> list:
     return list(SENIORITY_SYNONYMS.keys())
 
 
+def derived_levels(years) -> list:
+    """
+    The seniority levels a given number of years implies (R68).
+
+    A facade so the wizard can show what it derived without importing from
+    `tools/` (R25) — the screen displays the answer, it does not compute it.
+    """
+    from tools.jobs.job_filter import derive_levels
+    return derive_levels(years)
+
+
 def backend_status(gemini_key: str = "") -> dict:
     """
     What will rewrite bullets on the next run, and what that costs.

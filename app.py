@@ -33,6 +33,7 @@ from agents.orchestrator import (
     board_sorts,
     board_stats,
     board_total,
+    derived_levels,
     ghosted_jobs,
     job_history,
     job_selection,
@@ -64,17 +65,36 @@ VISA_OPTIONS = [
     "Other / prefer not to say",
 ]
 
+# Starting points, not a menu — the control keeps anything typed that is not
+# on the list. Nine tech titles was the shape of one new grad's search (R68);
+# this covers the market CLAUDE.md scopes to.
 ROLE_OPTIONS = [
     "Software Engineer", "Backend Engineer", "Frontend Engineer",
-    "Full Stack Engineer", "ML Engineer", "AI Engineer",
-    "Data Engineer", "Data Analyst", "DevOps Engineer",
+    "Full Stack Engineer", "Mobile Engineer", "iOS Engineer",
+    "Android Engineer", "ML Engineer", "AI Engineer", "Data Engineer",
+    "Data Scientist", "Data Analyst", "DevOps Engineer",
+    "Site Reliability Engineer", "Platform Engineer", "Security Engineer",
+    "QA Engineer", "Solutions Engineer", "Engineering Manager",
 ]
 
-EXCLUDE_OPTIONS = [
-    "senior", "staff", "principal", "lead",
-    "3+ years", "5+ years", "7+ years", "10+ years",
-    "PhD required", "security clearance required",
-]
+# Words that mark a posting as out of range, offered around wherever the user
+# actually sits. This list was fixed at "senior, staff, 3+ years" — right for a
+# new grad and actively wrong for anyone senior, who would be offered their own
+# roles to exclude (R68).
+EXCLUDE_ALWAYS = ["PhD required", "security clearance required"]
+
+
+def _exclude_options(years: int) -> list:
+    """Levels above where the user sits, plus year floors beyond their reach."""
+    above = [
+        (1, ["senior", "staff", "principal", "lead"]),
+        (4, ["staff", "principal", "lead"]),
+        (7, ["principal", "lead"]),
+        (99, []),
+    ]
+    levels = next(v for k, v in above if years <= k)
+    floors = [f"{n}+ years" for n in (3, 5, 7, 10) if n > years + 3]
+    return levels + floors + EXCLUDE_ALWAYS
 
 TIERS = ["high", "medium", "low"]
 
@@ -536,15 +556,44 @@ def screen_preferences():
     roles = st.multiselect("Target roles", options,
                            default=current["target_roles"] or ["Software Engineer"])
 
-    levels = seniority_levels()
-    seniority = st.multiselect(
-        "Levels to look at", levels,
-        default=[s for s in current["seniority"] if s in levels] or ["new grad"],
-        format_func=lambda s: s.title(),
-        help="Postings phrase these a dozen ways — 'recent graduate', "
-             "'0-2 years', 'Engineer II' — so each level you pick matches "
-             "more wordings than its name.",
+    # The question a person can answer. What the gates need is a set of level
+    # words, and this screen used to ask for those directly — pushing the
+    # translation onto the user, when the code translates it straight back to
+    # years anyway (R68).
+    years = st.number_input(
+        "Years of professional experience", min_value=0, max_value=40, step=1,
+        value=int(current.get("years_experience") or 0),
+        help="Internships and coursework do not count. This decides which "
+             "postings are worth showing you and which rule you out.",
     )
+
+    levels = seniority_levels()
+    derived = derived_levels(years)
+    stored_override = [s for s in current["seniority"] if s in levels]
+
+    # What is actually in force, not what would be derived — saying "looking at
+    # New Grad" while an override says otherwise is a caption that lies.
+    in_force = stored_override or derived
+    st.caption(
+        f"Looking at **{', '.join(l.title() for l in in_force) or 'any level'}** roles"
+        + ("  ·  your choice, not derived from the number above"
+           if stored_override else "")
+    )
+
+    with st.expander("Choose the levels yourself"):
+        st.caption(
+            "Only if you disagree. Leave this empty and the levels follow the "
+            "number above; set it and your choice is kept, whatever else you "
+            "change later."
+        )
+        seniority = st.multiselect(
+            "Levels to look at", levels,
+            default=stored_override,
+            format_func=lambda s: s.title(),
+            help="Postings phrase these a dozen ways — 'recent graduate', "
+                 "'0-2 years', 'Engineer II' — so each level you pick matches "
+                 "more wordings than its name.",
+        )
 
     cities = st.text_input("Cities (comma separated, optional)",
                            value=", ".join(current["cities"]),
@@ -570,8 +619,8 @@ def screen_preferences():
                                value=current["willing_to_relocate"])
     excludes = st.multiselect(
         "Skip postings mentioning",
-        EXCLUDE_OPTIONS + [e for e in current["exclude_keywords"]
-                           if e not in EXCLUDE_OPTIONS],
+        _exclude_options(int(years)) + [e for e in current["exclude_keywords"]
+                                        if e not in _exclude_options(int(years))],
         default=current["exclude_keywords"],
         help="A hard filter on wording, separate from the levels above. "
              "Excluding 'senior' while asking for senior roles will find you "
@@ -588,6 +637,11 @@ def screen_preferences():
         update_profile_fields(st.session_state.profile_name, {
             "job_preferences": {
                 "target_roles": roles,
+                "years_experience": int(years),
+                # Written as given: empty when the user did not override, so
+                # `effective_seniority` derives. Nothing writes a derived value
+                # back here, which is what lets an override outlive later edits
+                # to any other screen (R68).
                 "seniority": seniority,
                 "exclude_keywords": excludes,
                 "locations": {

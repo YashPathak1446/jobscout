@@ -24,11 +24,7 @@
       "Backend Engineer",
       "Add your target roles here"
     ],
-    "seniority": [
-      "new grad",
-      "entry level",
-      "junior"
-    ],
+    "seniority": [],
     "employment_types": [
       "full-time"
     ],
@@ -58,11 +54,7 @@
       "remote_ok": true,
       "willing_to_relocate": true
     },
-    "citizenship_restrictions": {
-      "us_citizenship_required": false,
-      "green_card_acceptable": true,
-      "h1b_sponsorship_ok": true
-    }
+    "years_experience": 0
   },
   "resume_preferences": {
     "master_resume_path": "data/master_resumes/YOUR_NAME.tex",

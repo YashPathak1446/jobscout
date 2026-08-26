@@ -55,8 +55,18 @@ class CitizenshipRestrictions(BaseModel):
 class JobPreferences(BaseModel):
     """Job search preferences."""
     target_roles: List[str]
-    seniority: List[str]
-    employment_types: List[str]
+    # How long the user has worked. The question a person can answer, from
+    # which the level vocabulary is derived (R68).
+    years_experience: Optional[int] = None
+    # An explicit override. Empty means "derive from years" — nothing writes a
+    # derived value back here, so an override survives every later edit.
+    seniority: List[str] = Field(default_factory=list)
+    employment_types: List[str] = Field(default_factory=list)
+    # Removed in R68, all three read by nothing: `job_recency_hours`,
+    # `comments`, and `citizenship_restrictions` — the last describing what a
+    # *job* demands, which R56 replaced with facts about the candidate in
+    # `personal_info`. Profiles carrying them still load; pydantic ignores
+    # extra keys.
     # `experience_level` ("0-2 years") and `graduation_eligibility` (["2025",
     # "2026"]) were removed in R66. Both were new-grad-shaped, and neither was
     # read by anything that affected behaviour — the fourth and fifth instance
@@ -64,9 +74,6 @@ class JobPreferences(BaseModel):
     # load unchanged; pydantic ignores extra keys.
     exclude_keywords: List[str]
     locations: LocationPreferences
-    citizenship_restrictions: CitizenshipRestrictions
-    job_recency_hours: int = 168
-    comments: Optional[str] = None
 
 
 class ConditionalInclusion(BaseModel):

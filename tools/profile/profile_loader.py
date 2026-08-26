@@ -171,7 +171,12 @@ def print_profile_summary(profile: UserProfile) -> None:
     print(f"\n💼 Job Preferences:")
     print(f"  Target Roles: {len(profile.job_preferences.target_roles)} roles")
     print(f"    → {', '.join(profile.job_preferences.target_roles[:3])}...")
-    print(f"  Seniority: {', '.join(profile.job_preferences.seniority)}")
+    from tools.jobs.job_filter import effective_seniority
+    years = profile.job_preferences.years_experience
+    if years is not None:
+        print(f"  Experience: {years} year(s)")
+    print(f"  Seniority: {', '.join(effective_seniority(profile)) or 'unset'}"
+          f"{'' if profile.job_preferences.seniority else '  (derived)'}")
     print(f"  Priority Locations: {', '.join(profile.job_preferences.locations.states_priority)}")
     
     print(f"\n📝 Resume Preferences:")

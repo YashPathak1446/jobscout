@@ -81,6 +81,63 @@ SENIORITY_SYNONYMS = {
 }
 
 
+# How many years of experience each band covers, and which level words a
+# posting at that band tends to use. The wizard asks the fact a person knows —
+# how long they have worked — and this turns it into the vocabulary the gates
+# and the search queries need (R68).
+#
+# Two levels per band because people apply upward: someone three years in reads
+# both junior and mid postings as plausible.
+_YEARS_TO_LEVELS = (
+    (1,  ["new grad", "entry level"]),
+    (2,  ["entry level", "junior"]),
+    (4,  ["junior", "mid"]),
+    (7,  ["mid", "senior"]),
+    (9,  ["senior", "staff"]),
+)
+_TOP_BAND = ["staff", "lead"]
+
+# The gap between what you have and the highest floor still worth applying to.
+#
+# Three, because that is what the old level map already produced at both points
+# a real profile had been measured at: a new grad (0 years) tolerated a floor of
+# 3, and a [mid, senior] profile tolerated 8 — which is 5 + 3. So R54's gate
+# keeps the behaviour it was measured with and loses the lookup table from its
+# path.
+YEARS_TOLERANCE = 3
+
+
+def derive_levels(years) -> list:
+    """The seniority words that fit someone with this much experience."""
+    if years is None:
+        return []
+    try:
+        years = max(0, int(years))
+    except (TypeError, ValueError):
+        return []
+    for ceiling, levels in _YEARS_TO_LEVELS:
+        if years <= ceiling:
+            return list(levels)
+    return list(_TOP_BAND)
+
+
+def effective_seniority(profile) -> list:
+    """
+    The levels this profile actually wants, derived unless it says otherwise.
+
+    Follows R15's `merge_importance`: what the profile states explicitly wins,
+    and what it leaves out is derived. **Emptiness is the flag** — nothing ever
+    writes a derived value back into `seniority`, so a user who overrides the
+    range keeps it through any number of edits to unrelated fields. A field
+    that is recomputed on save is a field that loses your answer.
+    """
+    prefs = getattr(profile, "job_preferences", None)
+    stated = [lvl for lvl in (getattr(prefs, "seniority", None) or []) if (lvl or "").strip()]
+    if stated:
+        return stated
+    return derive_levels(getattr(prefs, "years_experience", None))
+
+
 def primary_seniority_term(profile) -> str:
     """
     The level to put in a search query, or "" for a profile with no opinion.
@@ -97,9 +154,7 @@ def primary_seniority_term(profile) -> str:
     Empty rather than a default, because `build_serper_query` already omits an
     empty seniority and an unfiltered role search beats a wrong one.
     """
-    levels = getattr(
-        getattr(profile, "job_preferences", None), "seniority", None) or []
-    for level in levels:
+    for level in effective_seniority(profile):
         term = (level or "").strip()
         if term:
             return term
@@ -114,9 +169,7 @@ def wants_early_career(profile) -> bool:
     equivalent — so for a profile that does not accept those levels it fills
     the discovery pool with postings the gate immediately discards.
     """
-    levels = {(level or "").strip().lower()
-              for level in (getattr(
-                  getattr(profile, "job_preferences", None), "seniority", None) or [])}
+    levels = {(level or "").strip().lower() for level in effective_seniority(profile)}
     return bool(levels & {"new grad", "entry level", "junior"})
 
 
@@ -212,10 +265,26 @@ _EXCLUSION_CUES = re.compile(
 
 
 def _tolerated_years(profile) -> int:
-    """The highest experience floor this profile's seniority range can meet."""
-    levels = getattr(profile.job_preferences, "seniority", None) or []
+    """
+    The highest experience floor still worth applying to.
+
+    Read from `years_experience` when the profile states it, because that is
+    the number this has always been trying to recover — the level map existed
+    only to turn words back into years (R68). A profile that overrides its
+    levels instead still resolves through the map, so nothing that was tuned by
+    hand changes.
+    """
+    prefs = getattr(profile, "job_preferences", None)
+    years = getattr(prefs, "years_experience", None)
+    stated_levels = [lvl for lvl in (getattr(prefs, "seniority", None) or [])
+                     if (lvl or "").strip()]
+
+    if years is not None and not stated_levels:
+        return max(0, int(years)) + YEARS_TOLERANCE
+
     known = [YEARS_BY_LEVEL[level.strip().lower()]
-             for level in levels if level.strip().lower() in YEARS_BY_LEVEL]
+             for level in effective_seniority(profile)
+             if level.strip().lower() in YEARS_BY_LEVEL]
     # An unrecognised range should not silently reject everything, so an empty
     # result means "no opinion" rather than "zero years tolerated".
     return max(known) if known else max(YEARS_BY_LEVEL.values())
@@ -518,14 +587,14 @@ def evaluate(job, profile) -> FilterDecision:
             return decision
 
     has_senior = any(ind in text for ind in SENIOR_INDICATORS)
-    accepted = accepted_seniority_terms(prefs.seniority)
+    accepted = accepted_seniority_terms(effective_seniority(profile))
     has_accepted = any(term in text for term in accepted)
 
     if has_senior and not has_accepted:
         decision.exclude = True
         decision.reason = (
             "Seniority above this profile's range "
-            f"({', '.join(prefs.seniority) or 'unset'})"
+            f"({', '.join(effective_seniority(profile)) or 'unset'})"
         )
         return decision
 
@@ -579,6 +648,15 @@ def evaluate(job, profile) -> FilterDecision:
         decision.reasons.append(f"Location unclear: {job.location or '(empty)'}")
         return decision
 
+    # Blacklist first — it is the narrower statement. A user who names no
+    # preferred countries but rules one out has said something specific, and
+    # the whitelist below would never reach it (R68).
+    excluded_countries = getattr(prefs.locations, "exclude_countries", None) or []
+    if loc_result.country in excluded_countries:
+        decision.exclude = True
+        decision.reason = f"Location country '{loc_result.country}' is excluded"
+        return decision
+
     # Whitelist check: is the detected country in user's preferred countries?
     preferred_countries = prefs.locations.countries
     if preferred_countries and loc_result.country not in preferred_countries:
@@ -592,6 +670,28 @@ def evaluate(job, profile) -> FilterDecision:
     # Country matches — score by state preference
     location_score = _score_us_location(loc_result, prefs.locations)
     decision.location_score = location_score
+
+    # Not willing to relocate: a gate, not a penalty (R68).
+    #
+    # A weighted location score is the wrong shape here and R55 is why — a
+    # penalty gets outrun by vocabulary overlap, which is how a São Paulo
+    # posting scored 54% while the profile asked for the United States. So
+    # "somewhere I would have to move to" excludes rather than deducts.
+    #
+    # Guarded on the profile having named somewhere. A profile that lists no
+    # cities and no priority states has expressed no preference, and gating on
+    # it would empty the board — R55's lesson pointing the other way, where an
+    # unknown country silently passed a filter built to catch it.
+    named_somewhere = bool(prefs.locations.cities or prefs.locations.states_priority)
+    if (named_somewhere
+            and not getattr(prefs.locations, "willing_to_relocate", True)
+            and location_score == 0):
+        decision.exclude = True
+        decision.reason = (
+            f"{loc_result.state or loc_result.city or job.location} is outside "
+            f"the places you named, and you are not willing to relocate"
+        )
+        return decision
 
     if location_score >= 3:
         decision.reasons.append(
@@ -680,6 +780,7 @@ def gate_fingerprint(profile) -> str:
 
     relevant = json.dumps({
         "seniority": sorted(getattr(prefs, "seniority", None) or []),
+        "years_experience": getattr(prefs, "years_experience", None),
         "exclude_keywords": sorted(getattr(prefs, "exclude_keywords", None) or []),
         "countries": sorted(getattr(locations, "countries", None) or []),
         "us_citizen": bool(getattr(personal, "us_citizen", False)),

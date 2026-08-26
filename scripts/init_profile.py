@@ -304,6 +304,7 @@ def read_preferences(name: str) -> dict:
     return {
         "target_roles": prefs.get("target_roles", []) or [],
         "seniority": prefs.get("seniority", []) or [],
+        "years_experience": prefs.get("years_experience"),
         "exclude_keywords": prefs.get("exclude_keywords", []) or [],
         "cities": locations.get("cities", []) or [],
         "remote_ok": bool(locations.get("remote_ok", True)),
