@@ -16,6 +16,7 @@ from .latex_parser import (
     LatexResume,
     LatexExperience,
     LatexProject,
+    _GENERIC_TERMS,
 )
 from .embedding_scorer import (
     embed_resume_components,
@@ -499,14 +500,6 @@ class ResumeParser:
 
 # Generic terms that are too common to count as meaningful JD keyword matches.
 # These appear in almost every SWE JD and don't differentiate components.
-_GENERIC_TERMS = {
-    "api", "backend", "frontend", "software", "application", "system",
-    "data", "service", "server", "client", "code", "build", "team",
-    "work", "experience", "strong", "knowledge", "skills", "ability",
-    "development", "engineering", "developer", "engineer", "project",
-    "solution", "support", "management", "process", "performance",
-    "design", "architecture", "implement", "deploy", "test", "debug",
-}
 
 
 def _extract_jd_keywords(jd_lower: str, vocabulary=None) -> set:

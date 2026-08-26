@@ -1318,7 +1318,21 @@ for explanation text, never for scoring. See R17.
 
 ---
 
-## Q17. Embeddings reward vocabulary overlap, not role type
+## Q17. Embeddings reward vocabulary overlap, not role type — RESOLVED (R67)
+
+**Status:** Resolved 2026-08-26 — see R67, which did **not** do what this entry
+proposed. The suggested remedy was to derive a role-type signal from the title
+and weight it; measured, that term is the maximum for **100% of scored jobs**,
+because discovery already gates on `target_roles` and analysis only ever sees
+survivors. It would have added a constant — a sixth instance of the dead-signal
+bug this codebase keeps finding.
+
+What was wrong was not that the embedding misunderstands role type. It is that
+the embedding was the *entire* score, and on its own it barely discriminates:
+69 real jobs spanned 41.5-55.8 with a standard deviation of 3.58. The fix is
+concrete evidence — technologies both documents name — at 30% of the score.
+
+The original entry follows.
 
 **Scheduled by R60**, between the board and hosted generation. The board is
 forgiving of an imperfect ranker; a paid product is not, and there is direct
@@ -5751,6 +5765,112 @@ entry-level software roles" — and now describes this one.
 still produces exactly the searches it did before. 16 new tests pin the query
 term across four seniority ranges and pin `github_newgrad` being skipped for
 profiles that cannot use it.
+
+---
+
+## R67. The score that could not tell jobs apart
+
+**Decision:** (2026-08-26) A job's score is 70% embedding similarity and 30%
+concrete overlap — technologies named by both the posting and the resume — and
+it carries its own parts.
+
+### The measurement that started it
+
+Q17 was a component-selection anecdote: a tutoring job beat an AI internship by
+0.033. The product version is worse and countable. Across 69 real scored jobs:
+
+    embedding score   41.5 - 55.8   stdev 3.58   CoV 0.071
+
+Half of every job sat inside a four-point band. **A user shown "55% match"
+against "52% match" was reading noise.** R49 met this symptom and answered it
+with display bands relative to the user's own distribution; that was the right
+patch for a board and never touched the cause.
+
+Concrete overlap on the same corpus:
+
+    shared technologies   0 - 12    stdev 2.78   CoV 0.586
+
+**Eight times more discriminating**, computed by machinery this codebase
+already had — `_composite_score` uses exactly this for *component* selection,
+so job scoring was the less sophisticated of the two.
+
+### They disagree, and the embedding is the one that is wrong
+
+Spearman rank correlation between the two orderings: **0.312**. Where they
+disagreed:
+
+    Samsara      Finance & Strategy AI Engineer   2nd    3 shared terms
+    Affirm       Software Engineer I, Fullstack   4th    2 shared terms
+    Nuro         Full Stack Software Engineer    47th   11 shared terms
+    Squarespace  Software Engineer, Frontend    near last  11 shared terms
+
+The resume is AI-heavy, so the embedding rewards a posting that *reads* like AI
+over one that names the same tools. A job sharing two technologies outranked
+one sharing eleven.
+
+### What Q17 asked for, and why it was not built
+
+Q17 proposed deriving a role-type signal from the title. Measured before
+building: `role_score` is the maximum for **100% of the 69 scored jobs**.
+Discovery filters on `target_roles` before anything is scored, so by the time
+analysis sees a posting it matches by construction — the signal is destroyed by
+conditioning on survivors.
+
+Adding it would have been a term that changes nothing, which is the bug found
+in `rarely_include` (R31), `scraped_successfully` (R61), the selection
+breakdown (R57), and `graduation_eligibility`/`experience_level` (R66). A test
+pins the negative result and fails if discovery ever stops gating on roles, at
+which point the idea is worth revisiting.
+
+### The weights, and where they came from
+
+`KEYWORD_WEIGHT = 0.3` mirrors `_composite_score`, where the keyword term caps
+at 0.25 against an embedding near 0.6 — about 30% of the total. It was **not**
+tuned to flatter this corpus.
+
+`KEYWORD_SATURATION = 8` is the 90th percentile of shared-term counts. Past
+that, more overlap says little, and the cap stops a keyword-stuffed posting
+from climbing on repetition.
+
+Blended *after* normalisation, not before: `_normalise` is calibrated per
+backend against measured raw cosine ranges (R36), and folding a keyword count
+into the raw figure would push it outside the window those constants were
+measured for and silently rescale everything.
+
+### Result
+
+    stdev    3.58  ->  9.04      (2.5x)
+    range   41.5-55.8  ->  33.8-68.2
+
+Brex's *AI Engineer, Product* — one shared technology — falls 45 places.
+Squarespace's *Software Engineer, Frontend* — nine — rises 53.
+
+### The score can now be taken apart
+
+`EmbeddingScore` carries `embedding_score`, `keyword_score` and
+`keyword_hits`. R57's lesson applied one level up: a single number nobody can
+decompose is exactly what let two shared technologies outrank eleven without
+anyone noticing for months.
+
+Mock scoring blends too. A mock that behaves differently from production is how
+an invented job description survived a week (R61).
+
+### Migration
+
+The 69 stored scores were computed under the old formula, and a board mixing
+two scales is R62's problem again. Migrated in place with **no API calls** —
+the stored value *was* the embedding half, so the blend is arithmetic over what
+was already there. `data/jobs.db` backed up first.
+
+### Verified
+
+17 new tests, 708 pass, three baselines clean, doctor green. The corpus test
+asserts that blending *widens* the spread rather than pinning a number, so a
+future change that flattens the score again fails rather than passing quietly.
+
+**What this does not do:** make the embedding understand role type. Nothing
+here claims that. It bounds the embedding to 70% of the score and puts evidence
+beside it.
 
 ---
 

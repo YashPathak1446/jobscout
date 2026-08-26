@@ -11,9 +11,10 @@ Falls back to simple keyword overlap when --mock-embeddings is used.
 import os
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from config import EMBEDDING_BACKEND, EMBEDDING_MODEL, LOCAL_EMBEDDING_MODEL
+from .latex_parser import _GENERIC_TERMS, term_matches
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,11 @@ class EmbeddingScore:
     best_project_ids: list[str]         # Top matching project IDs
     experience_scores: dict[str, float] # component_id → similarity
     project_scores: dict[str, float]    # component_id → similarity
+    # What the score is made of (R67). A single number nobody can take apart
+    # is what let a job with two shared technologies outrank one with eleven.
+    embedding_score: float = 0.0        # the semantic half, 0-100
+    keyword_score: float = 0.0          # the evidence half, 0-100
+    keyword_hits: list[str] = field(default_factory=list)  # terms both name
 
 
 # Raw similarity is not comparable between backends, so the map onto 0-100 is
@@ -52,6 +58,53 @@ CALIBRATION = {
     "gemini": (0.30, 0.60),
     "local": (0.00, 0.10),
 }
+
+
+# How the two halves of a job score are weighted (R67).
+#
+# The embedding half alone barely discriminates: across 69 real scored jobs it
+# ran 41.5-55.8 with a standard deviation of 3.58 — a coefficient of variation
+# of 0.071, which is to say every job scored about the same. Half of them sat
+# inside a 4-point band. R49 noticed the symptom and answered it with display
+# bands; this is the cause.
+#
+# Concrete overlap — technologies named by both the posting and the resume —
+# discriminates roughly eight times better on the same corpus (CoV 0.586), and
+# the two rank jobs differently enough to matter: Spearman 0.312. Where they
+# disagreed, the embedding was wrong. It put a posting sharing *two*
+# technologies with the resume in fourth place and one sharing *eleven* near
+# the bottom, because the resume is AI-heavy and the embedding rewards a
+# document that reads like AI rather than one that names the same tools.
+#
+# Blending at 0.3 mirrors `_composite_score`, where the keyword term is capped
+# at 0.25 against an embedding around 0.6 — about 30% of the total — and was
+# not tuned to flatter this corpus.
+KEYWORD_WEIGHT = 0.3
+
+# Shared technologies at which the keyword half is full marks. The 90th
+# percentile of the same 69 jobs; past that, more overlap says little, and the
+# cap stops a keyword-stuffed posting from topping the board on repetition.
+KEYWORD_SATURATION = 8
+
+
+def resume_terms(parsed_resume) -> set:
+    """
+    Every technology the resume names, minus the words every posting contains.
+
+    Taken from the components' own keyword lists, which the parser already
+    built against the user's own vocabulary (Q7) — so this generalises to a
+    resume this code has never seen.
+    """
+    terms = set()
+    for component in list(parsed_resume.experiences) + list(parsed_resume.projects):
+        terms |= {k.lower() for k in (component.keywords or [])}
+    return terms - _GENERIC_TERMS
+
+
+def keyword_overlap(jd_text: str, parsed_resume) -> list:
+    """The technologies this posting and this resume both name, sorted."""
+    jd_lower = (jd_text or "").lower()
+    return sorted(t for t in resume_terms(parsed_resume) if term_matches(t, jd_lower))
 
 
 def _normalise(overall: float) -> float:
@@ -308,7 +361,18 @@ def score_job_with_embeddings(
     # Weight: 40% experiences, 30% projects, 30% skills
     overall = top_exp_avg * 0.4 + top_proj_avg * 0.3 + skills_sim * 0.3
 
-    overall_pct = _normalise(overall)
+    embedding_pct = _normalise(overall)
+
+    # The half that knows what the job is actually built with (R67).
+    #
+    # Blended after normalisation rather than before, because `_normalise` is
+    # calibrated per backend against raw cosine ranges — folding a keyword
+    # count into `overall` would push it outside the window those constants
+    # were measured for and silently rescale every score.
+    hits = keyword_overlap(jd_text, parsed_resume)
+    keyword_pct = min(len(hits) / KEYWORD_SATURATION, 1.0) * 100
+    overall_pct = (embedding_pct * (1 - KEYWORD_WEIGHT)
+                   + keyword_pct * KEYWORD_WEIGHT)
 
     return EmbeddingScore(
         job_id="",
@@ -319,6 +383,9 @@ def score_job_with_embeddings(
         best_project_ids=best_proj,
         experience_scores=exp_scores,
         project_scores=proj_scores,
+        embedding_score=round(embedding_pct, 1),
+        keyword_score=round(keyword_pct, 1),
+        keyword_hits=hits,
     )
 
 
@@ -401,7 +468,16 @@ def score_job_mock(
     skills_sim = _cosine_similarity(jd_vec, resume_embeddings.get("__skills__", [0.0]*768))
 
     overall = top_exp_avg * 0.4 + top_proj_avg * 0.3 + skills_sim * 0.3
-    overall_pct = max(0, min(100, (overall - 0.1) / 0.5 * 100))
+    embedding_pct = max(0, min(100, (overall - 0.1) / 0.5 * 100))
+
+    # Mock embeddings are fake; the keyword overlap is not, because it is read
+    # from the real JD text. Blended here too so `--mock` exercises the same
+    # shape a real run does — a mock that behaves differently from production
+    # is how the pipeline hid an invented job description for a week (R61).
+    hits = keyword_overlap(jd_text, parsed_resume)
+    keyword_pct = min(len(hits) / KEYWORD_SATURATION, 1.0) * 100
+    overall_pct = (embedding_pct * (1 - KEYWORD_WEIGHT)
+                   + keyword_pct * KEYWORD_WEIGHT)
 
     return EmbeddingScore(
         job_id="", title="", company="",
@@ -410,6 +486,9 @@ def score_job_mock(
         best_project_ids=best_proj,
         experience_scores=exp_scores,
         project_scores=proj_scores,
+        embedding_score=round(embedding_pct, 1),
+        keyword_score=round(keyword_pct, 1),
+        keyword_hits=hits,
     )
 
 

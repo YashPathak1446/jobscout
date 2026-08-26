@@ -97,6 +97,20 @@ def project_keyword_text(name: str, tech: str, bullets: list[str]) -> str:
     return f"{name} {tech} {' '.join(bullets)}"
 
 
+# Words every technical posting contains, so matching them says nothing about
+# fit. Lives here rather than with the scorers because it is vocabulary, and
+# because R67 needed it in `embedding_scorer` too — which cannot import
+# `resume_parser`, since that module imports it.
+_GENERIC_TERMS = {
+    "api", "backend", "frontend", "software", "application", "system",
+    "data", "service", "server", "client", "code", "build", "team",
+    "work", "experience", "strong", "knowledge", "skills", "ability",
+    "development", "engineering", "developer", "engineer", "project",
+    "solution", "support", "management", "process", "performance",
+    "design", "architecture", "implement", "deploy", "test", "debug",
+}
+
+
 def keyword_source_text(component) -> str:
     """
     Same thing, for an already-constructed component.
