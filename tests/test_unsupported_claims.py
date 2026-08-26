@@ -223,6 +223,90 @@ class TestScope(unittest.TestCase):
                                     "scalable", "efficient"))
 
 
+class TestTheAdjectiveHalf(unittest.TestCase):
+    r"""
+    The adverbs above are how a model asserts a size in the abstract. When the
+    figure that left was a latency or a rate, it reaches for an adjective
+    instead, and for four months none of them fired.
+
+    Measured across 61 generated resumes: this same 101gen bullet came back as
+    "low-latency" seven times, "high-performance" twice and "high-speed" once,
+    and the antibiotic bullet came back as "high precision" — every one beside
+    a dropped figure, every one passing `validate_resume_output`. The one that
+    shipped is from the 2026-08-26 run, the first run made by a profile that
+    was not the author's.
+    """
+
+    LATENCY_MASTER = (
+        "Benchmarked Weaviate against AWS Elasticsearch and Pinecone to select a "
+        "vector database, achieving p99 query latency of $<$5ms and 5K+ QPS at "
+        "million-scale via HNSW-indexed approximate nearest neighbor search."
+    )
+    # Shipped on the Affirm resume, 2026-08-26.
+    LATENCY_OUTPUT = (
+        "Designed a multi-tier data pipeline for PubMed's 36M-article corpus, "
+        "architecting a storage system utilizing Weaviate and MongoDB to "
+        "facilitate high-performance retrieval for domain-specific models"
+    )
+
+    def test_an_adjective_standing_in_for_a_rate_is_an_error(self):
+        result = validate_resume_output(
+            output("exp_101gen", [self.LATENCY_OUTPUT, "A second bullet here."],
+                   section="experiences"),
+            master_bullets={"exp_101gen": [self.LATENCY_MASTER]})
+        self.assertTrue(any("high-performance" in e for e in result.errors),
+                        result.errors)
+
+    def test_low_latency_is_the_same_claim(self):
+        bullet = ("Architected a multi-tier pipeline over PubMed's 36M-article "
+                  "corpus to power low-latency LLM retrieval.")
+        findings = find_unsupported_claims(
+            output("exp_101gen", [bullet], section="experiences"),
+            {"exp_101gen": [self.LATENCY_MASTER]})
+        self.assertEqual([f[1] for f in findings], ["low-latency"])
+        self.assertIn("5ms", findings[0][2])
+
+    def test_high_precision_covers_the_accuracy_case(self):
+        bullet = ("Engineered k-mer feature extraction with TF-IDF vectorization "
+                  "and trained XGBoost classifiers to predict antibiotic "
+                  "resistance with high precision and generalizability.")
+        findings = find_unsupported_claims(
+            output("proj_antibiotic", [bullet]),
+            {"proj_antibiotic": [ANTIBIOTIC_MASTER]})
+        self.assertEqual([f[1] for f in findings], ["high precision"])
+
+    def test_keeping_the_figure_is_still_accepted(self):
+        kept = ("Benchmarked Weaviate against Elasticsearch and Pinecone, "
+                "achieving p99 query latency of 5ms and 5K+ QPS at million-scale.")
+        self.assertEqual(
+            find_unsupported_claims(
+                output("exp_101gen", [kept], section="experiences"),
+                {"exp_101gen": [self.LATENCY_MASTER]}),
+            [])
+
+    def test_the_words_measured_as_padding_stayed_off(self):
+        """
+        The half of the widening that was rejected. Each of these was proposed,
+        measured across the same 61 resumes, and found beside *no* dropped
+        figure — "strongly" 13 times, "optimal" 3, "comprehensive" 1, all of
+        them padding. Adding them would have bought 0 signal and 17 warnings,
+        which is what R58 deleted `_validate_metric_preservation` for.
+        """
+        for word in ("strongly", "optimal", "comprehensive", "extensive",
+                     "superior", "highly"):
+            self.assertNotIn(word, VAGUE_INTENSIFIERS)
+
+    def test_the_authors_own_vocabulary_stayed_off(self):
+        """
+        "efficient" and "strongly" appear in the master resume's own bullets,
+        so they carry no signal — the premise test below would reject them.
+        Recorded here as a decision rather than left to be rediscovered.
+        """
+        for word in ("efficient", "strongly", "high-concurrency",
+                     "high-traffic", "real-time"):
+            self.assertNotIn(word, VAGUE_INTENSIFIERS)
+
+
 class TestAgainstEveryResumeInTheRepo(unittest.TestCase):
     """
     Calibration, in R45's shape: the check is only worth having if the rate is
@@ -230,7 +314,13 @@ class TestAgainstEveryResumeInTheRepo(unittest.TestCase):
     """
 
     def setUp(self):
+        # `needs_review/` counts. It was excluded when this was written, and
+        # that is exactly where the adjective family was shipping: a resume
+        # held back for an unrelated length error still carried the claim, and
+        # the calibration set could not see it. A check calibrated only
+        # against output that passed cannot measure what fails.
         self.tex = sorted(ROOT.glob("outputs/*/*.tex")) + \
+            sorted(ROOT.glob("outputs/*/needs_review/*.tex")) + \
             sorted(ROOT.glob("baselines/*/*.tex"))
         if not self.tex:
             self.skipTest("needs generated resumes")

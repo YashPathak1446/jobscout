@@ -169,10 +169,17 @@ Never replace a number with a word that asserts its size.
   RIGHT:   a 15-point macro-F1 lift over Random Forest
   RIGHT:   (say nothing about macro-F1 and use the characters elsewhere)
 
+  source:  p99 query latency of <5ms and 5K+ QPS at million-scale
+  WRONG:   a high-performance storage system powering low-latency retrieval
+  RIGHT:   p99 query latency of 5ms at million-scale
+  RIGHT:   (say nothing about speed and use the characters elsewhere)
+
 "Significant", "substantial", "dramatic", "notable" and "considerable" are
-claims about magnitude. The source states its magnitudes as numbers, so these
-words assert something it does not — the same problem as inventing a figure,
-reached from the other direction.
+claims about magnitude. So are "low-latency", "high-performance", "high-speed",
+"high-throughput" and "high precision" — an adjective is not a smaller claim
+than an adverb. The source states its magnitudes as numbers, so these words
+assert something it does not — the same problem as inventing a figure, reached
+from the other direction.
 
 =============================================================
 WRITING STYLE
@@ -396,7 +403,10 @@ STRICT REPAIR RULES
 6. Do not add new metrics.
 7. Do not remove existing metrics unless absolutely required to meet length limits.
 7b. If length forces a metric out, remove the claim with it. Never leave
-    "significant"/"substantial"/"dramatic" standing where a number was.
+    "significant"/"substantial"/"dramatic" standing where a number was, and
+    never leave an adjective doing the same job: "low-latency" where the
+    latency was stated, "high-performance"/"high-speed"/"high-throughput"
+    where the rate was, "high precision" where the accuracy was.
 8. Do not invent tools, technologies, companies, or outcomes.
 9. Do not remove components.
 10. Do not add components.

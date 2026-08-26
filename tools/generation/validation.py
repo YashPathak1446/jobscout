@@ -686,10 +686,38 @@ VAGUE_INTENSIFIERS = (
     "considerable", "considerably", "dramatic", "dramatically",
     "drastic", "drastically", "notable", "notably", "markedly",
     "greatly", "vastly", "massively", "meaningful", "meaningfully",
+    # A second family, added after the adverbs above missed the whole of it.
+    # "significant" is how a model asserts a size in the abstract; when the
+    # figure that left was a latency or a rate, it reaches for an adjective
+    # instead and none of the words above fire. Measured across 61 generated
+    # resumes: `p99 query latency of <5ms and 5K+ QPS` came back as
+    # "low-latency" seven times, "high-performance" twice and "high-speed"
+    # once, and `94.2% accuracy (±0.2%), 15-point macro-F1 lift (0.71 vs
+    # 0.56)` came back as "high precision" — every one of them beside a
+    # dropped figure, and `validate_resume_output` passed all of them.
+    #
+    # Each earned its place the way R58 asked: it occurs beside a figure the
+    # component lost, and the master resume uses none of them. Words that
+    # occur only as padding were measured and left off — "strongly" (13
+    # padding hits), "optimal" (3), "comprehensive" (1) — as were
+    # "high-concurrency" (29), "high-traffic" (12) and "near real" (15),
+    # which the author writes in his own bullets and which the premise test
+    # would therefore reject. "robust", "scalable", "seamless" and
+    # "efficient" stay off by rule, not by rate: they assert a quality rather
+    # than a size, which is the boundary `test_the_word_list_is_only_
+    # intensifiers` exists to hold.
+    "low-latency", "low latency", "high-latency",
+    "high-performance", "high performance",
+    "high-speed", "high speed",
+    "high-throughput", "high throughput",
+    "high precision",
 )
 
+# Longest first, so "high performance" is not shadowed by a shorter
+# alternative sharing its opening word.
 _INTENSIFIER_PATTERN = re.compile(
-    r"\b(" + "|".join(VAGUE_INTENSIFIERS) + r")\b", re.I)
+    r"\b(" + "|".join(sorted(VAGUE_INTENSIFIERS, key=len, reverse=True)) + r")\b",
+    re.I)
 
 
 def find_unsupported_claims(data: dict, master_bullets: dict) -> List[tuple]:

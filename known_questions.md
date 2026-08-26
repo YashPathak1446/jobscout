@@ -6138,6 +6138,78 @@ file it was tailoring. 6 new tests, 773 pass, baselines clean.
 
 ---
 
+## R71. An adjective is not a smaller claim than an adverb
+
+**Decision:** (2026-08-26) R58's list gains the size adjectives — `low-latency`,
+`high-performance`, `high-speed`, `high-throughput`, `high precision` — and
+nothing else. The words that were proposed and rejected are recorded, because
+the rejection is the more useful half.
+
+**The live case.** From the 2026-08-26 run, the first made by a profile that
+was not the author's. Master:
+
+    Benchmarked Weaviate against AWS Elasticsearch and Pinecone ... achieving
+    p99 query latency of $<$5ms and 5K+ QPS at million-scale
+
+Shipped:
+
+    ... architecting a robust storage system utilizing Weaviate and MongoDB to
+    facilitate high-performance retrieval ...
+
+And, worse, on the same resume:
+
+    ... trained XGBoost classifiers under stratified 5-fold cross-validation to
+    predict antibiotic resistance with high precision and generalizability.
+
+Seven figures in the master; none in the output. `validate_resume_output`
+returned no error for either, because R58's list is nineteen adverbs and the
+model reached for adjectives.
+
+### Measured, not guessed
+
+Eleven words were proposed. Counting each across **61 generated resumes**, split
+by whether the component had actually dropped a figure:
+
+    low-latency        7 error-shaped   5 padding    ADD
+    high-performance   2                0            ADD
+    high precision     1                0            ADD
+    high-speed         1                0            ADD
+    strongly           0               13            padding only
+    optimal            0                3            padding only
+    comprehensive      0                1            padding only
+    highly, strong, extensive, superior — never occur at all
+
+Seven of the eleven would have bought zero signal. Two more — `strongly` and
+`efficient` — **appear in the author's own master bullets**, so R58's premise
+test rejects them outright: a word the source uses carries no information when
+the output uses it.
+
+`robust`, `scalable`, `seamless` and `efficient` stay off by rule rather than by
+rate. They assert a quality, not a size, and
+`test_the_word_list_is_only_intensifiers` exists to hold that boundary. The
+`robust` in the shipped bullet above is still uncaught, and that is correct.
+
+A blanket `high-*` rule was tested and is a trap: `high-concurrency` (29
+occurrences), `high-traffic` (12) and `near real` (15) are all padding and all
+in the master.
+
+### The calibration set could not see the failure
+
+`TestAgainstEveryResumeInTheRepo` globbed `outputs/*/*.tex` and not
+`outputs/*/needs_review/*.tex`. The resume carrying both errors was in
+`needs_review` — held back for an unrelated length problem — so the check
+calibrated against the corpus that excluded it. **A check calibrated only on
+output that passed cannot measure what fails.** The glob now includes it.
+
+### Verified
+
+Both shipped bullets are now errors naming the figures they lost, and route
+into repair; the tailoring and repair prompts carry the adjective example
+beside R58's original. Rate across the widened corpus: 21 hits over 61 resumes
+against a threshold of 30, and 13 of the 21 are error-shaped. 6 new tests, 779
+pass, baselines clean.
+
+---
 
 # Out of scope
 
