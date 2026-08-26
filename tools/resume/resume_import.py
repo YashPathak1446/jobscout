@@ -128,9 +128,53 @@ def _from_docx(path: Path) -> str:
     return _tidy("\n".join(lines))
 
 
+# What a T1-encoded PDF extracts as, measured from a real one.
+#
+# R69 found that loading \usepackage[T1]{fontenc} makes an en-dash extract as
+# \x15, and rejected T1 for *this project's own* template on those grounds.
+# The import path is the same finding arriving from the other side: it accepts
+# PDFs from anywhere, and T1 is what most LaTeX resume advice tells people to
+# load. Their file is not ours to fix, so the damage is undone on the way in.
+#
+# The stakes are higher than they look, because the corruption is quiet. A
+# \x15 in a date is visible on the confirmation screen; "Sta Software
+# Engineer" is a plausible job title, and "congurator" and "Airow" read as
+# typos the owner made. Measured on one six-year resume: one corrupted job
+# title, two corrupted words, and eight control characters headed for profile
+# fields.
+T1_ARTIFACTS = {
+    "\x1b": "ff",   # Staff        -> Sta<ff>
+    "\x1c": "fi",   # configurator -> con<fi>gurator
+    "\x1d": "fl",   # Airflow      -> Air<fl>ow
+    "\x1e": "ffi",
+    "\x1f": "ffl",
+    # Spaced, because PDF layout eats the space on one side: "University\x16
+    # Boston" would otherwise read "University- Boston". The whitespace
+    # collapse below tidies any double it creates.
+    "\x15": " - ",  # en-dash, the one R69 named
+    "\x16": " - ",  # em-dash
+    "\x88": "",     # itemize bullet; the line break already carries it
+}
+
+# Presentation-form ligatures, which is what a PDF *without* T1 emits. Both
+# encodings reach this function; only fi and fl were ever handled.
+UNICODE_LIGATURES = {
+    "\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl",
+    "\ufb03": "ffi", "\ufb04": "ffl",
+}
+
+
 def _tidy(text: str) -> str:
-    """Collapse the whitespace damage that PDF extraction leaves behind."""
-    text = text.replace(" ", " ").replace("ﬁ", "fi").replace("ﬂ", "fl")
+    """Undo what PDF extraction leaves behind: ligatures, controls, space."""
+    text = text.replace("\u00a0", " ")
+    for artifact, plain in {**UNICODE_LIGATURES, **T1_ARTIFACTS}.items():
+        text = text.replace(artifact, plain)
+
+    # Anything left in the control range is an encoding this does not know
+    # about. It must not reach a resume field either way: a job title holding
+    # a raw \x0e survives every downstream check and renders as a box.
+    text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", "", text)
+
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()

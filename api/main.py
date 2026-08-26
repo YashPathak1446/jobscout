@@ -24,9 +24,9 @@ Run it with:
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -49,6 +49,16 @@ from agents.orchestrator import (
     refresh_board_gate,
     score_bands,
     set_job_status,
+)
+from scripts.init_profile import (
+    create_profile,
+    extract_resume,
+    read_component_rules,
+    read_personal,
+    read_preferences,
+    save_extracted,
+    update_profile_fields,
+    write_component_rules,
 )
 
 app = FastAPI(title="JobScout", version="1.0.0")
@@ -209,6 +219,138 @@ def update_status(request: StatusRequest) -> dict:
             detail=f"{request.status!r} is not one of {list(job_statuses())}")
     set_job_status(request.url, request.status)
     return {"url": request.url, "status": request.status}
+
+
+# ------------------------------------------------------- setup: resume ----
+
+# Uploads land here, and the only thing a client is ever given back is a bare
+# filename. `extract_resume` returns an absolute path, which would be the
+# obvious thing to hand over and take back on the confirm call — and that is a
+# client choosing which file the server opens. Names are resolved against this
+# directory instead, so the worst a caller can name is a file in it.
+RESUME_DIR = Path.cwd() / "data" / "master_resumes"
+
+
+def _resolve_upload(filename: str) -> Path:
+    candidate = (RESUME_DIR / Path(filename).name).resolve()
+    if candidate.parent != RESUME_DIR.resolve() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="No such uploaded resume")
+    return candidate
+
+
+@app.post("/api/resume/extract")
+async def resume_extract(file: UploadFile = File(...)) -> dict:
+    """
+    Read an upload far enough to show it, without committing to anything.
+
+    R33's rule is that every extracted field is confirmed before use, which
+    only works if extracting and writing are two calls with a person in
+    between. A `.tex` skips confirmation because it is already the pipeline's
+    own format — there is nothing a model guessed at.
+    """
+    try:
+        extracted = extract_resume(await file.read(), file.filename or "resume")
+    except ValueError as exc:
+        # A scanned image, or a PDF with no readable experience in it. The
+        # message says which; it is written for the person, not the log.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:  # surfaced, not swallowed
+        raise HTTPException(status_code=400,
+                            detail=f"Could not read that resume: {exc}") from exc
+
+    if extracted["kind"] == "latex":
+        return {"kind": "latex", "filename": Path(extracted["path"]).name}
+    return {
+        "kind": "extracted",
+        "filename": Path(extracted["source"]).name,
+        "schema": extracted["schema"],
+    }
+
+
+class ProfileRequest(BaseModel):
+    name: str
+    filename: str
+    force: bool = False
+    # Present when the upload needed confirming; absent for a .tex. This is
+    # what the person corrected, not what the model said, which is the entire
+    # point of the two-call split.
+    schema_: Optional[dict[str, Any]] = None
+
+    model_config = {"populate_by_name": True}
+
+
+@app.post("/api/profile")
+def profile_create(request: ProfileRequest) -> dict:
+    """
+    Build a profile from a confirmed resume.
+
+    Overwriting is never implicit: `create_profile` raises when the name is
+    taken and `force` is not set, and one profile was already lost to a
+    rebuild that discarded hand-tuned rules (R30). The 409 exists so the UI
+    can ask rather than clobber.
+    """
+    source = _resolve_upload(request.filename)
+    resume_path = (save_extracted(request.schema_, source)
+                   if request.schema_ else source)
+    try:
+        return create_profile(resume_path, request.name, force=request.force)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # surfaced, not swallowed
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not build a profile from that resume: {exc}") from exc
+
+
+# ------------------------------------------------------ setup: profile ----
+
+@app.get("/api/profile/{name}")
+def profile_read(name: str) -> dict:
+    """Everything the wizard's forms need, in the shape they need it."""
+    try:
+        return {
+            "personal": read_personal(name),
+            "preferences": read_preferences(name),
+            "components": read_component_rules(name),
+        }
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+class ProfileUpdate(BaseModel):
+    updates: dict[str, Any]
+
+
+@app.patch("/api/profile/{name}")
+def profile_update(name: str, request: ProfileUpdate) -> dict:
+    """
+    Save part of a profile without disturbing the rest.
+
+    `update_profile_fields` merges nested sections rather than replacing
+    them. That is load-bearing: the preferences screen saves two of
+    `locations`' seven fields, and a wholesale replace dropped `countries`,
+    which the schema requires — walking the wizard left a profile that would
+    not load. A form must not destroy what it never showed (R30).
+    """
+    try:
+        path = update_profile_fields(name, request.updates)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"saved": Path(path).name}
+
+
+class ComponentRules(BaseModel):
+    importance: dict[str, Any]
+    triggers: dict[str, Any]
+
+
+@app.put("/api/profile/{name}/components")
+def components_write(name: str, request: ComponentRules) -> dict:
+    try:
+        write_component_rules(name, request.importance, request.triggers)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"saved": name}
 
 
 # ------------------------------------------------------------- runs ----
