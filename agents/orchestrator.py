@@ -281,6 +281,26 @@ def job_history(url: str) -> list:
         store.close()
 
 
+def board_job(url: str):
+    """
+    One stored job in full, posting text included, or None.
+
+    The list facades deliberately hand back every column, which is right for a
+    view that renders a table and wrong for one rendering fifty rows over
+    HTTP — a 50-row page is 336 KB with the descriptions and 44 KB without.
+    So the HTTP boundary drops `full_jd` from list rows and asks here for the
+    one job a reader actually opened. Streamlit never needed this because it
+    renders in-process; a second view is what made the difference visible.
+    """
+    from tools.jobs.job_store import JobStore
+
+    store = JobStore()
+    try:
+        return store.get(url)
+    finally:
+        store.close()
+
+
 def job_selection(url: str):
     """
     Why one job's resume contains what it contains, or None (R57).

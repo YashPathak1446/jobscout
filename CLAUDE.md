@@ -69,7 +69,31 @@ PDF/DOCX import, Gemini vs. `none` vs. `ollama`, LaTeX installed vs. not, and
 cached vs. cold. Each is a branch where one machine takes the same side every
 time.
 
-Related: **unknown is not elsewhere.** Any field where absence and failure look
-alike will collapse them by default — `years_required: None` (R64),
-`location_score == 0` (R69), country parse failures (R55). Three instances.
-Give the unknown case its own state when you add the field.
+## The invariant: unknown is never a value
+
+**Nothing may render or score "not yet known" as though it were known.** Every
+field with a "not yet" state needs a third case — known, absent, and unknown —
+and the code has to carry all three to the place that displays or ranks it.
+
+Four instances, and the fourth is what makes it a rule rather than a run of bad
+luck:
+
+- `years_required: None` read as "no experience required" (R64)
+- country parse failures read as a country that did not match (R55)
+- `location_score == 0` meant both "a state you did not name" and "state
+  unknown", so three postings listed only as "United States" were excluded as
+  relocation (R69)
+- the React board rendered every job as **"Not scored"** for the beat before
+  the score bands arrived, telling the reader analysis had skipped their whole
+  list — a claim, where a placeholder was wanted
+
+The fourth appeared within hours of a frontend existing, which is the point:
+**anything that arrives asynchronously has an unknown state by construction.**
+Every screen in the wizard displays data that loads after it mounts, so this
+will keep firing. A loading state is not an empty state, an empty state is not
+a zero, and a zero is not a "no".
+
+Related and older: **a filter that removes things must say how many.** The
+board hides jobs the gates reject (R62) and states the count under the current
+filters — 59 of 136, and 14 of 19 when narrowed to one company. Silent
+subtraction is the same failure wearing product clothes.
