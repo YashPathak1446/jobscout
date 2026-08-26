@@ -6211,6 +6211,108 @@ pass, baselines clean.
 
 ---
 
+## R72. The template stored instructions where answers go
+
+**Decision:** (2026-08-26) A profile template states nothing it has not been
+told. Blank is how a file says unknown, and a default is not a statement.
+
+**Severity: the worst-consequence defect found in this five-day stretch.**
+Worse than the glyphs (R69), worse than the field transposition (R70). Those
+produce a resume that looks slightly wrong. This one told a stranger they were
+eligible for work they are legally barred from holding.
+
+### The line that did it
+
+    "us_citizen": true
+
+In `user_profiles/template.json`, asserted about every person who ever builds a
+profile. `_is_us_person` in `tools/jobs/job_filter.py` reads it — citizen or
+permanent resident, the ITAR sense — and postings restricted to US persons are
+gated on the answer. So a new user on an H1B who did not walk the About-you
+screen had a profile claiming US citizenship, and JobScout showed them
+ITAR-restricted roles and wrote tailored resumes for them.
+
+Under a paid service that is the failure to be most afraid of. The user spends
+their time, submits, and is rejected on a ground the product could have known
+and in fact claimed to know. Nothing in the output looks wrong.
+
+### The rest of the block
+
+Every field was guidance wearing a value's clothes:
+
+    name            "Your Name"
+    email           "your.email@example.com"
+    location        "City, State"
+    visa_status     "US Citizen | Green Card | F1 OPT | H1B"      <- a menu
+    graduation_date "Month YYYY"
+    target_roles    [..., "Add your target roles here"]           <- a query
+
+`location` is the one that shows what the shape costs. The About-you form
+seeds itself from the stored profile, which is correct — saving a blank form
+over stored answers is a silent revert this wizard has done before. So the box
+arrived pre-filled with `City, State` and Continue was **enabled**: agreeing
+with the screen recorded a location that does not exist, into the exact field
+R55 and R69 score against.
+
+`visa_status` held the option list itself, which matches no option, so the
+Streamlit select fell back to index 0 — "US Citizen" — silently. Two separate
+paths to the same wrong claim.
+
+### The invariant, third costume
+
+R69 named it for rendering: unknown is never displayed as a value. R71's
+sibling finding named it for the frontend. This is the data layer:
+
+- a **placeholder** is not an answer
+- a **default** is not a statement
+- `years_experience: 0` is a claim of new-graduate status; `null` is the truth
+
+Anything downstream that reads a profile cannot tell an instruction from an
+answer, because at the type level there is nothing to tell.
+
+### Why it survived
+
+The template is a frozen artifact from the single-user era. The author's own
+profile predates the wizard and was never rebuilt from it, so nobody had read
+what a fresh profile actually contains since the tool became general. R68 fixed
+the wizard's *offered* exclusions relative to where the user sits and did not
+touch the file the wizard starts from — the same one-of-two-paths shape as R69
+and R70, with the untaken path being "arrive as a new user".
+
+Found by building a stranger — six years, Boston, Staff Engineer, a PDF from a
+template this repo has never produced — and reading the profile that came out.
+It also excluded `senior` and `staff`, the two words in her own job title.
+
+### The fix, and what it is not
+
+Fields blanked, guidance moved to `_comment`, `us_citizen` and
+`permanent_resident` default false, `years_experience` null, one person's
+states removed. False for citizenship is the safe direction on the same
+reasoning the schema already gives for `holds_security_clearance`: it hides
+postings rather than surfacing ones the reader cannot hold.
+
+Blanking is not sufficient on its own. The React About-you screen now **gates
+Continue on work authorisation** rather than defaulting to the first option, so
+an unanswered question stays unanswered rather than being answered by omission.
+
+### Verified
+
+`tests/test_template_presumes_nothing.py` — eleven tests: no level word in the
+exclusions, no instruction text in any value, the two fields a resume cannot
+state are blank, nothing asserted about citizenship, and the guidance still
+exists in `_comment`. Priya's rebuilt profile reads Boston / H1B /
+`us_citizen: false` / `years_experience: null`, with name, email, school and
+degree surviving the nested merge. 813 tests, three baselines clean.
+
+**Open:** the work-authorisation select's click-through is unverified in a
+browser. The bug found in it — `value={x || undefined}` making a Radix Select
+uncontrolled, so the display stops tracking state — is the class that passes
+contract tests and fails in front of a person, and this is the one control
+whose field gates ITAR postings. `tests/test_web_controls.py` holds the source
+shape; the widget itself still wants a human click.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

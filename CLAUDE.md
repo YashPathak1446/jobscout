@@ -69,6 +69,18 @@ PDF/DOCX import, Gemini vs. `none` vs. `ollama`, LaTeX installed vs. not, and
 cached vs. cold. Each is a branch where one machine takes the same side every
 time.
 
+## Ignore by pattern, never by filename
+
+`.gitignore` named `data/jobs.db`. `data/runs.db` arrived four months later
+(R51) and nobody added a second line, so a live store holding real run history
+was committed while its twin was ignored. The same rule had already been
+written for `data/master_resumes/*.tex` and missed every PDF and Word resume a
+user uploads (R38 added that path).
+
+**Any directory the app writes to gets a pattern, not a list of names.** A new
+file format or a second store is exactly the change nobody remembers to
+mirror, and the cost lands in a published commit rather than in a test.
+
 ## The invariant: unknown is never a value
 
 **Nothing may render or score "not yet known" as though it were known.** Every
