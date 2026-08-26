@@ -55,10 +55,13 @@ class CitizenshipRestrictions(BaseModel):
 class JobPreferences(BaseModel):
     """Job search preferences."""
     target_roles: List[str]
-    experience_level: str
     seniority: List[str]
-    graduation_eligibility: List[str]
     employment_types: List[str]
+    # `experience_level` ("0-2 years") and `graduation_eligibility` (["2025",
+    # "2026"]) were removed in R66. Both were new-grad-shaped, and neither was
+    # read by anything that affected behaviour — the fourth and fifth instance
+    # of the shape R31, R61 and R64 each found. Profiles that still carry them
+    # load unchanged; pydantic ignores extra keys.
     exclude_keywords: List[str]
     locations: LocationPreferences
     citizenship_restrictions: CitizenshipRestrictions

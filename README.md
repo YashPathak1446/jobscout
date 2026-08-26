@@ -14,7 +14,8 @@
 
 Four specialized agents coordinated by an orchestrator. Each run:
 
-1. **Discovers** new-grad / entry-level software roles from curated sources
+1. **Discovers** software roles at the levels your profile asks for, from
+   keyless ATS boards and optional key-based sources
 2. **Enriches** each posting by scraping the full JD from its apply URL
 3. **Analyzes** resume fit using Gemini embeddings + composite scoring
 4. **Generates** tailored LaTeX resumes that mirror each JD's terminology,

@@ -194,7 +194,23 @@ class DiscoveryAgent:
             logger.error(f"ATS search failed: {e}")
 
     def _search_github(self) -> None:
-        """Search GitHub curated new grad lists."""
+        """
+        Search GitHub curated new grad lists — for profiles that want them.
+
+        These repos are new-grad by nature and have no senior equivalent, so
+        for a profile whose range starts above entry level they fill the
+        discovery pool with postings the body gate then throws away. Skipped
+        rather than filtered, because a source that cannot serve this user is
+        a request not worth making (R66).
+        """
+        from tools.jobs.job_filter import wants_early_career
+
+        if not wants_early_career(self.profile):
+            levels = ", ".join(self.profile.job_preferences.seniority) or "unset"
+            logger.info(f"🐙 Skipping GitHub new-grad repos — this profile "
+                        f"wants {levels}")
+            return
+
         logger.info("🐙 Searching GitHub new grad repos...")
 
         try:
@@ -216,10 +232,15 @@ class DiscoveryAgent:
         
         # Build queries for each target role
         roles_to_search = self.profile.job_preferences.target_roles[:5]  # Top 5 roles
+
+        # From the profile, not a constant. This said "new grad" for every user
+        # regardless of their range (R66).
+        from tools.jobs.job_filter import primary_seniority_term
+        seniority = primary_seniority_term(self.profile)
         
         for role in roles_to_search:
             # Try Greenhouse first (cleanest postings)
-            query = build_serper_query(role, "new grad", "greenhouse.io")
+            query = build_serper_query(role, seniority, "greenhouse.io")
             
             try:
                 jobs = search_serper(query, max_results=10)
@@ -247,8 +268,11 @@ class DiscoveryAgent:
         if self.profile.job_preferences.locations.states_priority:
             location = self.profile.job_preferences.locations.states_priority[0]
         
+        from tools.jobs.job_filter import primary_seniority_term
+        seniority = primary_seniority_term(self.profile)
+
         for role in roles_to_search:
-            query = f"{role} new grad"
+            query = f"{role} {seniority}".strip()
             
             try:
                 jobs = search_adzuna(query, location=location, max_results=15)

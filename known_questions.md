@@ -5645,6 +5645,115 @@ Q23 still means the page can say "first seen today" and not "posted today".
 
 ---
 
+## R66. The product found its audience, and the code had not
+
+**Decision:** (2026-08-26) JobScout is a paid product for tech job seekers at
+any level who hand-tailor resumes against job descriptions. The public board is
+dropped. `CLAUDE.md` records the definition so no session has to re-derive it.
+
+**What changed.** JobScout worked — it ran its author's job search and he got
+hired. That turns the project from a personal tool into a product with a
+proven premise, and the audience becomes people doing by hand, with a chatbot,
+what this does in a pipeline.
+
+### The board was built on a premise this goal makes false
+
+R60 argued for the public board on a seam: discovery is *shared* — keyless,
+PII-free, identical for every user — while the resume half is personal and
+expensive. Host the first, keep the second local.
+
+That seam exists only while every user wants the same jobs. Once a profile
+drives **what gets discovered** rather than only what gets ranked afterwards,
+discovery is per-user, there is no shared half, and the board is a different
+product rather than a funnel into this one.
+
+R64 had already found the first crack without recognising it: the board could
+not apply R56's eligibility gate, because eligibility is defined against a
+person and a public board has no visitor. That was not a gap to design around.
+It was the seam failing.
+
+**Dropped, not deferred.** `frontend/` and `scripts/export_board.py` are
+deleted, recoverable at commit `717c50a`. Code that looks live and is not
+misleads whoever reads it next (R31).
+
+### What the two days bought anyway
+
+The refactor turns out to be the multi-user architecture, not a workaround.
+Splitting `posting_demands(text)` out of `eligibility_disqualifiers(text,
+profile)` was done because the board had no visitor; **one posting evaluated
+against many users** is exactly that shape, and it would have been needed
+regardless. Kept, along with `required_years`, `excludes_entry_level` and
+`parse_location`, which were already profile-free.
+
+`board_export.py` becomes `posting_facts.py` — the three-state basis rules
+describe a posting without reference to any reader. The board-only parts
+(`SCHEMA_VERSION`, `DEFAULT_PRESET`, `build_rows`, `summarise_facets`) are gone.
+
+### The live bug the audit found
+
+`build_serper_query(role, seniority, site)` has always been parameterised.
+Both callers passed a literal:
+
+    discovery_agent.py:222   build_serper_query(role, "new grad", ...)
+    discovery_agent.py:251   query = f"{role} new grad"
+
+**So discovery searched for new-grad roles whoever you were.** A mid-level
+user's pool was filtered twice — once by a constant nobody had noticed, then
+again by their own gate, which discarded what came back.
+
+R34 made the *gate* read `job_preferences.seniority` and roadmap item 13
+recorded the work as done, quoting the very function whose caller was wrong:
+*"already parameterised and the caller simply passes `new grad`"*. The
+observation was correct and was read as a description rather than a defect.
+
+`primary_seniority_term(profile)` supplies the term, empty for a profile with
+no opinion, since `build_serper_query` already omits an empty seniority and an
+unfiltered role search beats a wrong one:
+
+    ['new grad', 'entry level']   -> "Backend Engineer new grad site:greenhouse.io"
+    ['mid', 'senior']             -> "Backend Engineer mid site:greenhouse.io"
+    []                            -> "Backend Engineer site:greenhouse.io"
+
+`github_newgrad` is also now skipped unless the profile's range reaches
+early-career. Those repos are curated new-grad lists with no senior
+equivalent, so for anyone else they fill the pool with postings the gate throws
+straight out.
+
+### Dead fields, four and five
+
+- `graduation_eligibility` — declared in the schema, read by **nothing**.
+- `experience_level` — read by one print statement in the profile summary.
+
+Both new-grad-shaped, neither doing anything: the same pattern as
+`rarely_include` (R31), `scraped_successfully` (R61) and the selection
+breakdown (R57). Removed from the schema and the template; existing profiles
+load unchanged because pydantic ignores extra keys.
+
+That is five instances of one bug, so it is now written at the top of
+`CLAUDE.md`: **wire the consumer in the same change, or do not add the field.**
+
+### Scope, stated rather than implied
+
+**Tech job seekers, any level, any location.** Not "all fields", and the
+reasons are specific rather than caution: Greenhouse, Ashby and Lever skew hard
+to tech, so a nurse's postings are largely not in the corpus; Jake's template
+is a one-page tech resume with a projects section; and Q17's
+vocabulary-over-role-type problem worsens where "analyst" names five different
+jobs. That is still the whole software labour market instead of one graduating
+cohort.
+
+`README.md` had been describing the old product — "discovers new-grad /
+entry-level software roles" — and now describes this one.
+
+### Verified
+
+691 tests, three baselines clean, doctor green, and the author's own profile
+still produces exactly the searches it did before. 16 new tests pin the query
+term across four seniority ranges and pin `github_newgrad` being skipped for
+profiles that cannot use it.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

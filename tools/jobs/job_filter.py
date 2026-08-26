@@ -81,6 +81,45 @@ SENIORITY_SYNONYMS = {
 }
 
 
+def primary_seniority_term(profile) -> str:
+    """
+    The level to put in a search query, or "" for a profile with no opinion.
+
+    Keyword search takes one term, not a range, and the profile's list is
+    ordered by preference — so the first level is the one to search for.
+
+    This exists because both keyword-search callers passed the literal string
+    `"new grad"` regardless of the profile (R66). R34 made the *gate* read
+    `job_preferences.seniority` and roadmap item 13 recorded the work as done,
+    but the queries kept hunting new-grad roles, so a mid-level user's pool was
+    filled with jobs their own gate would then throw away.
+
+    Empty rather than a default, because `build_serper_query` already omits an
+    empty seniority and an unfiltered role search beats a wrong one.
+    """
+    levels = getattr(
+        getattr(profile, "job_preferences", None), "seniority", None) or []
+    for level in levels:
+        term = (level or "").strip()
+        if term:
+            return term
+    return ""
+
+
+def wants_early_career(profile) -> bool:
+    """
+    Is this profile's range low enough for new-grad sources to be worth reading?
+
+    `github_newgrad` is curated new-grad lists by nature — there is no senior
+    equivalent — so for a profile that does not accept those levels it fills
+    the discovery pool with postings the gate immediately discards.
+    """
+    levels = {(level or "").strip().lower()
+              for level in (getattr(
+                  getattr(profile, "job_preferences", None), "seniority", None) or [])}
+    return bool(levels & {"new grad", "entry level", "junior"})
+
+
 def accepted_seniority_terms(levels) -> list:
     """
     Expand a profile's seniority levels into the phrasings ads actually use.
@@ -365,7 +404,7 @@ def posting_demands(text: str) -> dict:
 
     Returns three flags, all False for text that demands nothing. Whether the
     text was substantial enough to be worth reading is the caller's question —
-    see `board_export.demands_basis`.
+    see `posting_facts.demands_basis`.
     """
     demands = {"clearance_held": False, "us_person": False,
                "no_sponsorship": False}

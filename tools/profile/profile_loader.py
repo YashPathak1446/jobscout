@@ -171,7 +171,6 @@ def print_profile_summary(profile: UserProfile) -> None:
     print(f"\n💼 Job Preferences:")
     print(f"  Target Roles: {len(profile.job_preferences.target_roles)} roles")
     print(f"    → {', '.join(profile.job_preferences.target_roles[:3])}...")
-    print(f"  Experience Level: {profile.job_preferences.experience_level}")
     print(f"  Seniority: {', '.join(profile.job_preferences.seniority)}")
     print(f"  Priority Locations: {', '.join(profile.job_preferences.locations.states_priority)}")
     

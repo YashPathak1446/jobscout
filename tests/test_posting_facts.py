@@ -1,24 +1,16 @@
 """
-Facts about the posting, not verdicts about the reader (R64).
+Facts a posting states about itself (R64, kept by R66).
 
-Every gate this project built answers "does this rule *you* out", which needs a
-profile. R60 planned for the public board to apply R56's gate; it cannot,
-because a public board has no visitor. So the board states what a posting asks
-for and the reader filters.
+Written for the public board and kept when the board was dropped, because
+the shape is what a multi-user product needs anyway: **one posting is read
+against many people**, so what it demands should be extracted once and
+compared per-user rather than re-derived for each.
 
-Two things carry the weight here.
-
-**Every facet carries its basis.** `required_years` returns None both when a
-posting states no floor and when the text could not be read. Under a gate that
-collapse was harmless — it meant a job slipped through. Under a *filter* it is
-not: a five-years role whose floor failed to parse lands in the early-career
-view looking like it belongs there.
-
-**Nothing personal leaves the store.** The board links out rather than
-mirroring, because the job description is the employer's prose (R60), and the
-score, status and resume paths are one person's. `FORBIDDEN_FIELDS` is asserted
-rather than assumed, because "true by construction" is exactly what was true of
-`scraped_successfully` before R61.
+The load-bearing part is that every fact carries its basis.
+`required_years` returns None both when a posting states no floor and when
+the text could not be read. Collapsing those is harmless in a gate and not
+in a filter: a five-years role whose floor failed to parse looks exactly
+like a role that asks for nothing.
 """
 
 import json
@@ -29,20 +21,11 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from scripts.export_board import (  # noqa: E402
-    FORBIDDEN_FIELDS,
-    build_payload,
-    check_no_personal_data,
-)
-from tools.jobs.board_export import (  # noqa: E402
-    DEFAULT_PRESET,
+from tools.jobs.posting_facts import (  # noqa: E402
     READABLE_MIN_CHARS,
-    SCHEMA_VERSION,
-    build_row,
-    build_rows,
     classify_level,
     demands_facet,
-    summarise_facets,
+    posting_facts,
     years_facet,
 )
 
@@ -170,95 +153,6 @@ class TestLevel(unittest.TestCase):
                          "mid")
 
 
-class TestNothingPersonalLeaves(unittest.TestCase):
-    """The reason this module exists as a seam rather than a query."""
-
-    def setUp(self):
-        self.payload = build_payload([store_row()])
-        self.job = self.payload["jobs"][0]
-
-    def test_no_forbidden_field_is_present(self):
-        for field in FORBIDDEN_FIELDS:
-            self.assertNotIn(field, self.job)
-
-    def test_the_check_agrees(self):
-        self.assertEqual(check_no_personal_data(self.payload), [])
-
-    def test_the_check_catches_a_leak(self):
-        """The guard has to be able to fail, or it is decoration."""
-        leaked = {"jobs": [{"url": "u", "full_jd": "the employer's prose"}]}
-        self.assertEqual(check_no_personal_data(leaked), ["full_jd"])
-
-    def test_the_job_description_does_not_appear_anywhere_in_the_payload(self):
-        """
-        Not just the field — the text. The board links out precisely so that
-        the employer's prose is never republished.
-        """
-        marker = "UNIQUEMARKERPHRASE"
-        payload = build_payload([store_row(full_jd=BODY + " " + marker)])
-        self.assertNotIn(marker, json.dumps(payload))
-
-    def test_the_apply_url_does_survive(self):
-        """Linking out only works if the link is there."""
-        self.assertEqual(self.job["url"], "https://example.com/job/1")
-
-
-class TestThePayload(unittest.TestCase):
-    def setUp(self):
-        self.payload = build_payload([store_row(), store_row(
-            url="https://example.com/job/2", title="Senior Engineer")])
-
-    def test_it_carries_a_schema_version(self):
-        self.assertEqual(self.payload["schema_version"], SCHEMA_VERSION)
-
-    def test_the_default_preset_travels_with_the_data(self):
-        """
-        So the default view can change without a deploy. Facets were chosen
-        over gates because early-career is a default rather than a hard filter,
-        and this is where that default lives.
-        """
-        self.assertEqual(self.payload["default_preset"], DEFAULT_PRESET)
-        self.assertTrue(DEFAULT_PRESET["include_unknown_years"],
-                        "unknown must stay visible, per R62")
-
-    def test_it_is_json_serialisable(self):
-        json.dumps(self.payload)
-
-    def test_first_seen_is_not_called_posted_at(self):
-        """
-        It is when this crawler first saw the posting, not when the employer
-        published it — `ats_search` sets `created` to the crawl time, so no
-        true posting date exists to export. The name has to say so.
-        """
-        job = self.payload["jobs"][0]
-        self.assertIn("first_seen", job)
-        self.assertNotIn("posted_at", job)
-
-
-class TestTheFacetSummary(unittest.TestCase):
-    """Counts that decide which controls are worth building."""
-
-    def test_it_counts_the_bases(self):
-        rows = build_rows([store_row(),
-                           store_row(full_jd=THIN),
-                           store_row(full_jd=BODY + " Requires 5+ years of experience.")])
-        summary = summarise_facets(rows)
-        self.assertEqual(summary["total"], 3)
-        self.assertEqual(summary["years_basis"]["unknown"], 1)
-        self.assertEqual(summary["years_basis"]["stated"], 1)
-        self.assertEqual(summary["years_basis"]["none_stated"], 1)
-
-    def test_it_reports_the_distribution(self):
-        rows = build_rows([
-            store_row(full_jd=BODY + " Requires 5+ years of experience."),
-            store_row(full_jd=BODY + " Requires 5+ years of experience."),
-        ])
-        self.assertEqual(summarise_facets(rows)["years_distribution"], {5: 2})
-
-    def test_an_empty_store_summarises_to_zero(self):
-        self.assertEqual(summarise_facets([])["total"], 0)
-
-
 class TestAgainstTheRealPostings(unittest.TestCase):
     """Skipped on a clean clone."""
 
@@ -271,7 +165,7 @@ class TestAgainstTheRealPostings(unittest.TestCase):
     def _row(self, company, needle=""):
         for job in self.jobs:
             if job.get("company") == company and needle in str(job.get("title")):
-                return build_row({
+                return posting_facts({
                     "url": job.get("apply_url"), "title": job.get("title"),
                     "company": job.get("company"), "location": job.get("location"),
                     "source": job.get("source"), "first_seen": "2026-08-25",
@@ -314,7 +208,7 @@ class TestAgainstTheRealPostings(unittest.TestCase):
 
     def test_every_posting_produces_a_row_without_raising(self):
         for job in self.jobs:
-            build_row({"url": job.get("apply_url"), "title": job.get("title"),
+            posting_facts({"url": job.get("apply_url"), "title": job.get("title"),
                        "company": job.get("company"),
                        "location": job.get("location"),
                        "source": job.get("source"), "first_seen": "x",
