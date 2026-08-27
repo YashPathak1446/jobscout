@@ -7033,6 +7033,134 @@ can now say what it used; it still cannot be told what to use.
 
 ---
 
+## R80. A rung can be chosen, and two cache defects found on the way
+
+**Decision:** (2026-08-26) The backend is selectable from a CLI flag, an
+environment variable, a profile field or a run request, with detection as the
+default rather than the answer. `config.resolve_backend` holds the chain and
+is the only place that knows it.
+
+    --backend  >  JOBSCOUT_LLM_BACKEND  >  profile  >  config.LLM_BACKEND  >  detect()
+
+R79 let a run *say* which rung wrote it. This lets it be *told*.
+
+### Why it blocked three things at once
+
+`LLM_BACKEND`, `OLLAMA_API_URL`, `OLLAMA_BASE_URL` and `OLLAMA_MODEL` were
+module constants with no override, so choosing a rung meant editing
+`config.py`. That single gap was:
+
+1. **Ollama could not be measured.** Switching rungs meant a wrapper script
+   that monkeypatched a module attribute — not reproducible, not scriptable,
+   and not something a number could be trusted against.
+2. **Users could not choose.** Anyone with a Gemini key got Gemini forever.
+   The free, local, private rung — the whole argument for the free tier — was
+   unreachable by the people it exists for.
+3. **It foreclosed accounts.** Per-user-per-run selection cannot be expressed
+   by a module constant. The account-readiness audit came back clean because
+   every store takes a path; this was the one subsystem that did not.
+
+### Absent, auto, and none are three different things
+
+`llm_backend: None` on a profile means **nobody has stated a preference**.
+`"auto"` means somebody stated that detection should decide. `"none"` means
+somebody stated they want no model. The field validator **refuses `"auto"` as
+a stored value**, because two spellings of "not chosen" — one absent and one a
+value — is how `location_score == 0` and `years_required: None` began. `"auto"`
+stays valid on the flag and the variable, where it is an instruction and is
+never persisted.
+
+An unknown name raises rather than falling through to detection, and the
+message names which layer said it: `JOBSCOUT_LLM_BACKEND says 'olama', which
+is not a backend`. Silently detecting after being told exactly what to do is
+how a measurement ends up describing a rung it did not use.
+
+### The two-paths bug, named before it happened
+
+`complete_json` serves resume import; `GenerationAgent` serves rewriting. They
+are the project's two model consumers, and if one obeyed the flag while the
+other went on detecting, a run pinned to Ollama would import through Gemini
+and nothing would say so.
+
+Every previous instance of this shape — the escape table (R69), the experience
+field order (R70), the selection breakdown (R57), `rarely_include` (R31),
+`scraped_successfully` (R61) — was found months later, by somebody walking the
+path the author does not. **This one was predicted from the shape of the
+change and had a test written against it before either path existed.**
+`backend_status` was a third caller reading the constant directly; all three
+now go through `resolve_backend`, and `test_backend_selection` asserts that
+none of them resolves the rung on its own.
+
+Worth recording as evidence the rule is operating rather than merely written
+down.
+
+### The recurring bug, committed inside the change that adds a setting
+
+The first draft of `resolve_backend` read the environment variable directly
+and never read `LLM_BACKEND` at all — making the constant **computed and never
+read**, this codebase's most-repeated defect, in the function whose entire
+purpose is to be the one place that reads it.
+
+It was not caught by reasoning. Five tests that set `config.LLM_BACKEND =
+"ollama"` to pin a rung fell straight through to detection and made real
+network calls against a deliberately fake URL; the suite went from 66 seconds
+to 197 and returned five failures. The constant is now the last layer of the
+chain — below the profile, because a person's stated preference outranks a
+code default, and above nothing.
+
+### Two cache defects, found while planning the measurement
+
+**`--no-cache` existed on the wrong entry point.** It was on
+`generation_agent.py`'s own `main()`, and its constructor documented itself as
+"wired to the --no-cache CLI flag" — true of one entry point and false of the
+one every real run uses. The orchestrator had no such flag and built its agent
+without `use_cache`, so a full run always cached and could not be told not to.
+A measurement is the caller that most needs it.
+
+**The cache key held the rung but not the model.** R45 put the rung in the key
+after three llama3.1 replies were served to a Gemini run and read as a Gemini
+regression. That module's closing line — "the rung, not the model id, so a
+fallback within a provider still hits" — was written when *provider* meant
+Gemini's model chain, where flash-lite answering for flash is the entire
+point. It does not survive a provider meaning "whatever you happened to pull":
+`llama3.1:8b` and `qwen2.5:7b` are both the `ollama` rung and shared one key.
+
+A two-model comparison would therefore have served the first model's answers
+to the second and produced a table that was perfect, instant and entirely
+fictional. **That failure mode has no error to notice**, which is why it is
+asserted rather than watched for. Gemini passes an empty model and keeps the
+sharing its chain is for; `ollama` and `openai` pass the resolved id.
+
+R11 said the embedding cache needed the model. R45 said this one needed the
+rung. This says the rung was not enough.
+
+### Verified
+
+- `--backend none` **with a Gemini key present** → `verbatim (5)`.
+- `--backend ollama` **with a Gemini key present** → `llama3.1:latest (5)`.
+  This is the condition under which the rung has been unreachable for its
+  entire life. Read from `summary.md`, not the console (R78).
+- `JOBSCOUT_LLM_BACKEND=none` reproduces the floor with no wrapper script,
+  which is now deleted.
+- `JOBSCOUT_LLM_BACKEND=olama` fails loudly and names the variable.
+- In a browser: the Run screen lists all four rungs, with the OpenAI rung
+  disabled and reading "needs a key"; selecting Ollama flips the caption from
+  "Detected on this machine" to "Your choice, for this run". Unavailable rungs
+  are shown disabled rather than hidden, because hiding them is what kept
+  Ollama a secret.
+
+996 tests before this entry's own additions, three baselines clean.
+
+### Next
+
+Part 2: the measurement. R44's frozen corpus, four rows — the floor,
+`llama3.1:8b` for comparability with R44's table, one current model for
+whether the rung is viable today, and Gemini as the ceiling — scoring
+extraction and rewriting separately, because they are different tasks and a
+model can pass one and fail the other.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

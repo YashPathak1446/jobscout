@@ -328,7 +328,7 @@ def job_selection(url: str):
 
 
 def start_run(profile_name, api_key="", max_jobs=20, max_resumes=3,
-              generate_pdf=True, output_dir="outputs") -> str:
+              generate_pdf=True, output_dir="outputs", backend=None) -> str:
     """
     Begin a run in the background and return its id immediately (R33).
 
@@ -360,6 +360,7 @@ def start_run(profile_name, api_key="", max_jobs=20, max_resumes=3,
                 max_resumes=max_resumes,
                 generate_pdf=generate_pdf,
                 checkpoint=False,
+                backend=backend,
             )
             state = orchestrator.run(
                 max_jobs=max_jobs,
@@ -510,7 +511,8 @@ def derived_levels(years) -> list:
     return derive_levels(years)
 
 
-def backend_status(gemini_key: str = "") -> dict:
+def backend_status(gemini_key: str = "", backend: str = None,
+                   profile=None) -> dict:
     """
     What will rewrite bullets on the next run, and what that costs.
 
@@ -523,18 +525,20 @@ def backend_status(gemini_key: str = "") -> dict:
     Detection touches the network (it asks whether Ollama is up), so a caller
     rendering on every keystroke should cache it.
     """
-    from config import (LLM_BACKEND, OLLAMA_API_URL, OLLAMA_MODEL,
-                        OPENAI_MODEL, resolve_api_key)
+    from config import (OLLAMA_API_URL, OLLAMA_MODEL, OPENAI_MODEL,
+                        resolve_api_key, resolve_backend)
     from tools.generation import llm_backends
 
     # `resolve_api_key` is the single place that decides what "no key passed"
     # means (R22); asking the environment directly here would be a second
-    # answer to the same question.
+    # answer to the same question. `resolve_backend` is the same rule for the
+    # rung — this read `LLM_BACKEND` off the module, which was one of four
+    # places answering the same question independently.
     key = resolve_api_key(gemini_key or None)
     openai_key = llm_backends.env_openai_key()
     ollama_up = llm_backends.ollama_is_running(OLLAMA_API_URL)
 
-    configured = (LLM_BACKEND or "auto").lower()
+    configured = resolve_backend(backend, profile)
     if configured in ("auto", ""):
         chosen = llm_backends.detect(gemini_key=key, openai_key=openai_key,
                                      ollama_url=OLLAMA_API_URL)
@@ -610,6 +614,8 @@ class JobScoutOrchestrator:
         max_resumes: Optional[int] = None,
         generate_pdf: bool = True,
         api_key: str = None,
+        backend: str = None,
+        use_cache: bool = True,
     ):
         """
         Initialize orchestrator.
@@ -633,9 +639,19 @@ class JobScoutOrchestrator:
                 API. None falls back to the environment, which is what the CLI
                 wants; a UI collecting a key from a user passes it here and it
                 never touches os.environ.
+            backend: An explicitly chosen rung for this run — the `--backend`
+                flag or a run request. Outranks the environment and the
+                profile; None means "no opinion" and lets those decide.
+            use_cache: If False, every model call is made fresh. A measurement
+                is the caller that most needs this, and until R80 the flag
+                existed only on the generation agent's own `main()` — so the
+                entry point every real run uses could not be told to skip the
+                cache at all.
         """
         self.profile_name = profile_name
         self.api_key = api_key
+        self.backend = backend
+        self.use_cache = use_cache
         self._on_progress = None
         self._on_checkpoint = None
         self.checkpoint = checkpoint
@@ -1153,6 +1169,8 @@ class JobScoutOrchestrator:
             mock_mode=mock_gen,
             generate_pdf=self.generate_pdf,
             api_key=self.api_key,
+            backend=self.backend,
+            use_cache=self.use_cache,
         )
 
         # Pass output_dir (not output_path) — generation agent adds
@@ -1576,6 +1594,21 @@ Examples:
         help="Write .tex only, skip pdflatex compilation"
     )
     parser.add_argument(
+        "--backend",
+        choices=["auto", "gemini", "openai", "ollama", "none"],
+        default=None,
+        help="Which rung rewrites bullets, overriding JOBSCOUT_LLM_BACKEND, "
+             "the profile and detection. 'auto' defers to detection. Omit it "
+             "for no opinion, which is not the same thing."
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Make every model call fresh. A cached reply carries the model "
+             "that wrote it, so a measurement that counts cache hits as model "
+             "answers is fiction."
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging"
@@ -1608,6 +1641,8 @@ Examples:
         input_file=args.input,
         max_resumes=args.max_resumes,
         generate_pdf=not args.no_pdf,
+        backend=args.backend,
+        use_cache=not args.no_cache,
     )
     
     orchestrator.run(max_jobs=args.max_jobs)

@@ -207,7 +207,8 @@ def call_chat_json(prompt: str, base_url: str, model: str, api_key: str = None) 
     return json.loads(_strip_code_fence(text))
 
 
-def complete_json(prompt: str, gemini_key: str = None) -> dict:
+def complete_json(prompt: str, gemini_key: str = None,
+                  backend: str = None, profile=None) -> dict:
     """
     Ask whichever backend is available for a JSON answer.
 
@@ -222,12 +223,22 @@ def complete_json(prompt: str, gemini_key: str = None) -> dict:
     Those were the same return value until R47, which meant "you chose to run
     without a model" and "your model is misconfigured or down" reached the
     caller identically, and every caller guessed the friendlier of the two.
-    """
-    from config import (LLM_BACKEND, OLLAMA_API_URL, OLLAMA_BASE_URL,
-                        OLLAMA_MODEL, OPENAI_BASE_URL, OPENAI_MODEL,
-                        resolve_api_key)
 
-    choice = (LLM_BACKEND or "auto").lower()
+    **Resolves the rung the same way `GenerationAgent` does, through
+    `config.resolve_backend`.** This is the two-paths bug named before it
+    happened: import and generation are the project's two model consumers, and
+    if one obeyed a `--backend` flag while the other went on detecting, a run
+    pinned to Ollama would have imported through Gemini and nothing would have
+    said so. Every previous instance of this shape — the escape table (R69),
+    the experience field order (R70), the selection breakdown (R57) — was
+    found months later by somebody walking the path the author does not.
+    `test_backend_selection.py` holds the two together.
+    """
+    from config import (OLLAMA_API_URL, OLLAMA_BASE_URL,
+                        OLLAMA_MODEL, OPENAI_BASE_URL, OPENAI_MODEL,
+                        resolve_api_key, resolve_backend)
+
+    choice = resolve_backend(backend, profile)
     key = resolve_api_key(gemini_key)
 
     if choice == "auto":

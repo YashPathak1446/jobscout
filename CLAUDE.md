@@ -51,6 +51,14 @@ breakdown (R57), and `graduation_eligibility` / `experience_level` (R66).
 
 When adding a field, wire the consumer in the same change, or do not add it.
 
+**A sixth, and it was committed inside the change that adds a setting (R80).**
+`resolve_backend` was written to hold the precedence chain for the LLM rung
+and its first draft never read `LLM_BACKEND` — the constant whose only purpose
+is to be read there. Reasoning did not catch it; five tests that pin a rung by
+setting that constant fell through to detection and started making real
+network calls, and the suite went from 66 seconds to 197. **A config value you
+just made overridable is a config value with a new way to go unread.**
+
 ## The other recurring bug: two paths, one walked
 
 A fix lands on the path the author uses and not on the twin. Found five times,

@@ -13,6 +13,13 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type Backend, type RunStatus } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -37,6 +44,16 @@ const STAGES = ['discovery', 'enrichment', 'analysis', 'generation'] as const
  * Progress is polled from `data/runs.db`, not held here: the run outlives this
  * page, and a reload has to be able to find it again (R51).
  */
+// The ladder, and what each rung wants if it is not there. `needs` is shown
+// beside a disabled option, because "Ollama (not running)" tells somebody
+// what to do and an absent row tells them nothing.
+const RUNGS = [
+  { value: 'gemini', label: 'Google Gemini', needs: 'needs an API key' },
+  { value: 'ollama', label: 'Ollama, on this machine', needs: 'not running' },
+  { value: 'openai', label: 'An OpenAI-compatible API', needs: 'needs a key' },
+  { value: 'none', label: 'No model — your bullets as written', needs: '' },
+] as const
+
 export function RunStep({
   profile,
   apiKey,
@@ -50,6 +67,11 @@ export function RunStep({
 }) {
   const [health, setHealth] = useState<{ pdflatex: boolean } | null>(null)
   const [backend, setBackend] = useState<Backend | null>(null)
+  // '' is "no opinion" — let the profile or detection decide — and is not
+  // the same as 'auto', which is an opinion that detection should decide.
+  // The control shows the detected rung as its value so the default reads as
+  // what will happen, not as a choice the user made.
+  const [chosen, setChosen] = useState('')
   const [maxJobs, setMaxJobs] = useState(20)
   const [maxResumes, setMaxResumes] = useState(3)
   const [runId, setRunId] = useState<string | null>(null)
@@ -103,6 +125,7 @@ export function RunStep({
       const { run_id } = await api.startRun({
         profile,
         api_key: apiKey,
+        backend: chosen,
         max_jobs: maxJobs,
         max_resumes: maxResumes,
         generate_pdf: health?.pdflatex ?? true,
@@ -153,6 +176,47 @@ export function RunStep({
                 : backend.description}
             </AlertDescription>
           </Alert>
+
+          {/* The rung, choosable rather than merely announced.
+              Until now the ladder decided and there was no way to disagree:
+              anyone with a Gemini key got Gemini forever, and Ollama — free,
+              local, private, and the whole argument for the free tier — was
+              unreachable by the people it was built for.
+
+              Unavailable rungs stay listed and disabled with the reason, not
+              hidden. Hiding them is what kept Ollama a secret; showing it
+              greyed out with "not running" is how somebody finds out it
+              exists. */}
+          <div className="space-y-1.5">
+            <Label htmlFor="rung">Rewrite bullets with</Label>
+            <Select
+              value={chosen || backend.backend}
+              onValueChange={(v) => setChosen(v)}
+            >
+              <SelectTrigger id="rung" className="w-72">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RUNGS.map(({ value, label, needs }) => {
+                  const ready = backend.available?.[value] ?? value === 'none'
+                  return (
+                    <SelectItem key={value} value={value} disabled={!ready}>
+                      {label}
+                      {!ready && (
+                        <span className="text-muted-foreground"> — {needs}</span>
+                      )}
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
+            <p className="text-sm text-muted-foreground">
+              {chosen
+                ? 'Your choice, for this run.'
+                : `Detected on this machine. Change it and the run uses what
+                   you pick instead.`}
+            </p>
+          </div>
 
           {!health.pdflatex && (
             <Alert>

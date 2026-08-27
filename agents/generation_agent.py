@@ -80,7 +80,8 @@ class GenerationAgent:
     
     def __init__(self, profile: UserProfile, resume_parser: ResumeParser,
                  mock_mode: bool = False, use_cache: bool = True,
-                 generate_pdf: bool = True, api_key: str = None):
+                 generate_pdf: bool = True, api_key: str = None,
+                 backend: str = None):
         """
         Initialize Generation Agent.
 
@@ -93,11 +94,16 @@ class GenerationAgent:
             generate_pdf: If True, compile each written .tex to PDF. Silently
                           degrades to .tex-only when no pdflatex is installed.
             api_key: Explicit Gemini key. None falls back to the environment.
+            backend: An explicitly chosen rung for this run, outranking the
+                     environment and the profile. None means "no opinion" and
+                     is not the same as "auto", which is an opinion about who
+                     decides. See `config.resolve_backend`.
         """
         self.profile = profile
         self.resume_parser = resume_parser
         self.mock_mode = mock_mode
         self.api_key = api_key
+        self.backend_choice = backend
 
         self.last_model_used = None
 
@@ -140,6 +146,11 @@ class GenerationAgent:
             cache_dir=LLM_CACHE_DIR,
             enabled=LLM_CACHE_ENABLED and use_cache,
             backend=self.llm_backend,
+            # The model too, for the rungs where two models are two different
+            # answers rather than one chain. Gemini passes nothing and keeps
+            # sharing entries across its fallback chain, which is what that
+            # chain is for. See the module docstring.
+            model=self._cache_model(),
         )
         logger.info(f"Cache: {'enabled' if self.llm_cache.enabled else 'disabled'}")
 
@@ -1255,6 +1266,24 @@ Source bullets:
                         for proj in tailored.get('projects', []) if isinstance(proj, dict)]
             logger.debug(f"   📋 Projects: {', '.join(proj_ids)}")
 
+    def _cache_model(self) -> str:
+        """
+        The model id that belongs in the cache key, or `""` to share entries.
+
+        Empty for Gemini on purpose: `GENERATION_MODELS` is a fallback chain,
+        and flash-lite answering where flash answered yesterday is the
+        behaviour that chain exists to provide. Set for `ollama` and `openai`,
+        where two models are two answers and sharing a key means one of them
+        gets attributed the other's work (R80).
+        """
+        from config import OPENAI_MODEL
+
+        if self.llm_backend == "ollama":
+            return getattr(self, "ollama_model", "") or ""
+        if self.llm_backend == "openai":
+            return OPENAI_MODEL
+        return ""
+
     def _resolve_backend(self, api_key) -> str:
         """
         Pick a rung, say which one out loud (R33), and remember if we fell.
@@ -1266,11 +1295,17 @@ Source bullets:
         and the UI stayed silent about a backend the user had asked for.
 
         `self.downgrade_reason` carries it to `_verbatim_tailor`.
+
+        The choice itself comes from `config.resolve_backend`, which holds the
+        whole precedence chain — flag, environment, profile, then detection.
+        This used to read `LLM_BACKEND` straight off the module, as did three
+        other callers, which was fine while a module constant was the only
+        answer and would have drifted the moment it stopped being.
         """
-        from config import LLM_BACKEND, OLLAMA_API_URL, OLLAMA_MODEL, OPENAI_MODEL
+        from config import OLLAMA_API_URL, OLLAMA_MODEL, OPENAI_MODEL, resolve_backend
         from tools.generation import llm_backends
 
-        choice = (LLM_BACKEND or "auto").lower()
+        choice = resolve_backend(self.backend_choice, self.profile)
         if choice == "auto":
             choice = llm_backends.detect(
                 gemini_key=resolve_api_key(api_key),

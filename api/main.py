@@ -412,6 +412,11 @@ class RunRequest(BaseModel):
     # Not stored anywhere. It reaches the pipeline for this run and is
     # forgotten; a run with no key is a supported configuration, not an error.
     api_key: str = ""
+    # Which rung rewrites bullets, for this run only. Same rule as the key:
+    # it reaches the pipeline and is forgotten. `""` means "no opinion", and
+    # the profile or detection then decides — which is not the same as
+    # "auto", an opinion that detection should decide.
+    backend: str = ""
     max_jobs: int = 20
     max_resumes: int = 3
     generate_pdf: bool = True
@@ -432,6 +437,7 @@ def run_start(request: RunRequest) -> dict:
         max_jobs=request.max_jobs,
         max_resumes=request.max_resumes,
         generate_pdf=request.generate_pdf,
+        backend=request.backend or None,
     )
     return {"run_id": run_id}
 
