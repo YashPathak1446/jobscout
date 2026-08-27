@@ -59,6 +59,33 @@ setting that constant fell through to detection and started making real
 network calls, and the suite went from 66 seconds to 197. **A config value you
 just made overridable is a config value with a new way to go unread.**
 
+## A cache key encodes how much variation lives inside a category
+
+Three times, the same fix one level down, and each was correct when written:
+
+- **R11** — the embedding cache needed the *model* in its key
+- **R45** — the LLM cache needed the *rung*: three llama3.1 replies were
+  served to a run pinned to Gemini and read as a Gemini regression
+- **R80** — the LLM cache needed the *model too*, because `llama3.1:8b` and
+  `qwen2.5:7b` are both the `ollama` rung and shared one key
+
+Nothing edited those decisions and none of them was wrong. What changed was
+**the meaning of the category underneath them**. "Provider" meant Gemini's
+fixed fallback chain, where flash-lite answering for flash is the entire
+point; R37 made it mean "whatever you happened to pull", and the same key
+became a bug without a character of it changing.
+
+The tell was a comment: *"the rung, not the model id, so a fallback within a
+provider still hits."* A correct sentence that stopped being correct while
+nobody was editing it — the same shape as R55's comment crediting a guard that
+never fired.
+
+So when a rung, a provider or a source is added: **ask what the key assumes is
+interchangeable, and whether that is still true.** A key is a claim about which
+differences do not matter, and widening a category is exactly the change that
+falsifies one silently — there is no error, only a table that agrees with
+itself.
+
 ## The other recurring bug: two paths, one walked
 
 A fix lands on the path the author uses and not on the twin. Found five times,
@@ -70,6 +97,15 @@ He reads generated resumes as PDFs, so he never parses one back. Both bugs
 lived exclusively where he does not go, and neither was findable by care on
 the path he does — `test_tex_renderer.py` asserted the correct behaviour the
 whole time, for its own module.
+
+**And the rule is not "check the other one" — it is *count them* (R80).** The
+plan for the backend seam predicted two consumers. The code had four:
+`GenerationAgent._resolve_backend`, `complete_json`, `backend_status`, and a
+caption in `app.py` telling users to edit `config.py`. The count is reliably
+higher than the pair in mind, which is why the closing move is a test that
+fails on a fifth — `test_nothing_outside_config_reads_the_constant` walks the
+syntax tree, not the text, because prose that *explains* the seam is not a
+violation of it.
 
 So: **a test that checks one path against itself proves nothing about the
 other.** Walk both and compare them. The known forks are `.tex` upload vs.

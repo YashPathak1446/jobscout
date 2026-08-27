@@ -7087,9 +7087,20 @@ field order (R70), the selection breakdown (R57), `rarely_include` (R31),
 `scraped_successfully` (R61) — was found months later, by somebody walking the
 path the author does not. **This one was predicted from the shape of the
 change and had a test written against it before either path existed.**
-`backend_status` was a third caller reading the constant directly; all three
-now go through `resolve_backend`, and `test_backend_selection` asserts that
-none of them resolves the rung on its own.
+**The plan predicted two consumers and the code had four.** `backend_status`
+was a third, reading the constant directly; the fourth was a caption in
+`app.py` telling users that `LLM_BACKEND` in `config.py` pinned their rung —
+advice that stopped being true the moment there were four ways to pin it, and
+that pointed a user at a source file when a flag would do.
+
+So the twin rule generalises: it is not "check the other one", it is **count
+them**, and the count is reliably higher than the pair in mind. The seam is
+now closed by a test rather than by vigilance —
+`test_nothing_outside_config_reads_the_constant` walks every module's syntax
+tree and fails on a fifth caller. Parsed rather than grepped, because a text
+search flagged the docstring explaining the chain and the caption above:
+prose that explains a seam is the opposite of bypassing it. Verified by adding
+a fifth import and watching it fail.
 
 Worth recording as evidence the rule is operating rather than merely written
 down.
@@ -7133,6 +7144,20 @@ sharing its chain is for; `ollama` and `openai` pass the resolved id.
 
 R11 said the embedding cache needed the model. R45 said this one needed the
 rung. This says the rung was not enough.
+
+**The pattern, named because it now has three instances and no name.** None of
+those three decisions was wrong when written, and nobody edited any of them.
+What changed was **the meaning of the category underneath them** — "provider"
+meant Gemini's fixed fallback chain until R37 made it mean "whatever you
+happened to pull". A cache key is a claim about which differences do not
+matter, and widening a category falsifies such a claim silently: no error, no
+failing test, just a table that agrees with itself.
+
+The tell was a comment that had quietly stopped being true — the same shape as
+R55's comment crediting a guard that never fired. So when a rung, a provider
+or a source is added, the question to ask is what the key assumes is
+interchangeable, and whether that is still so. Recorded in `CLAUDE.md`, because
+there will be a fifth rung.
 
 ### Verified
 

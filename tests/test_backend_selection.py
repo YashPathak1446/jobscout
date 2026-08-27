@@ -175,18 +175,51 @@ class TestBothModelConsumersResolveTheSameWay(unittest.TestCase):
                 self.assertIn("resolve_backend", body,
                               f"{who} does not go through config.resolve_backend")
 
-    def test_no_consumer_reads_the_constant_directly(self):
+    def test_nothing_outside_config_reads_the_constant(self):
+        r"""
+        The seam, closed the way `test_renderers_agree` closed the section
+        builders — by making a fifth caller fail the build rather than by
+        remembering to check.
+
+        **The plan predicted two consumers and the code had four:**
+        `GenerationAgent._resolve_backend`, `complete_json`, `backend_status`,
+        and a caption in `app.py` telling users to edit `config.py`. The twin
+        rule is not "check the other one", it is **count them**, and the count
+        is reliably higher than the pair in mind.
+
+        Parsed rather than grepped. Prose may name the constant — a docstring
+        explaining the chain and a caption telling a user what pinned their
+        rung are the opposite of bypassing it, and a text search flagged both.
+        Only a real reference in code counts, which is what the syntax tree
+        answers and a substring cannot.
         """
-        The constant is the *default*, and reading it straight is how four
-        callers came to answer the same question independently.
-        """
-        for path in ("tools/generation/llm_backends.py",
-                     "agents/generation_agent.py",
-                     "agents/orchestrator.py"):
-            body = (ROOT / path).read_text(encoding="utf-8")
-            with self.subTest(path=path):
-                self.assertNotIn("LLM_BACKEND or", body,
-                                 f"{path} still resolves the rung on its own")
+        import ast
+
+        offenders = []
+        for path in ROOT.rglob("*.py"):
+            relative = path.relative_to(ROOT).as_posix()
+            if (relative == "config.py" or relative.startswith("tests/")
+                    or "__pycache__" in relative or ".venv" in relative):
+                continue
+            try:
+                tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                named = (isinstance(node, ast.Name) and node.id == "LLM_BACKEND")
+                attribute = (isinstance(node, ast.Attribute)
+                             and node.attr == "LLM_BACKEND")
+                # An `from config import LLM_BACKEND` counts too: importing it
+                # is how every one of the four callers began.
+                imported = (isinstance(node, ast.ImportFrom)
+                            and any(a.name == "LLM_BACKEND" for a in node.names))
+                if named or attribute or imported:
+                    offenders.append(
+                        f"{relative}:{getattr(node, 'lineno', '?')}")
+
+        self.assertEqual(offenders, [], "\n".join(
+            ["these resolve the rung themselves instead of asking "
+             "config.resolve_backend:"] + offenders))
 
     def test_they_agree_on_the_same_inputs(self):
         with no_env():

@@ -466,9 +466,14 @@ def _backend_panel():
             st.caption(cached["description"])
 
         if cached["forced"]:
+            # Was "`LLM_BACKEND` in config.py pins this", which stopped being
+            # true the moment there were four ways to pin it (R80) — and told
+            # a user to edit source when a variable or a flag would do.
             st.caption(
-                f"`LLM_BACKEND` in config.py pins this to **{chosen}**, so "
-                "detection is not choosing it."
+                f"Something has pinned this to **{chosen}**, so detection is "
+                "not choosing it: the `--backend` flag, the "
+                "`JOBSCOUT_LLM_BACKEND` variable, your profile, or "
+                "`LLM_BACKEND` in config.py, in that order."
             )
 
     return key
