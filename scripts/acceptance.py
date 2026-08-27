@@ -81,7 +81,28 @@ FIXTURES = {
 # `none` is the free tier and is not optional: it is the rung a stranger with
 # no key lands on, and the one that produced files that would not compile as
 # recently as R73.
-RUNGS = ("none", "ollama")
+RUNGS = ("none", "gemini", "ollama")
+
+
+def say(text=""):
+    """
+    print(), but a console that cannot encode a character loses the character
+    rather than the report.
+
+    On Windows this script's output is cp1252, and a validation error quoting
+    a bullet contains U+2192. The first Ollama run therefore **crashed while
+    printing the failure it had just found** — the reporting destroying the
+    finding, which is the terminal lesson from R78 arriving at the one place
+    whose whole job is to tell you what broke.
+
+    `agents/orchestrator._console_print` already does this for the same
+    reason; this is the same guard rather than a second answer to it.
+    """
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(str(text).encode(encoding, errors="replace").decode(encoding))
 
 
 class Failure(Exception):
@@ -265,23 +286,23 @@ def main():
 
     for name in names:
         spec = FIXTURES[name]
-        print(f"{name} — {spec['why']}")
+        say(f"{name} — {spec['why']}")
         for rung in rungs:
             label = f"  {rung:<8}"
             try:
-                print(f"{label} {one(name, spec, rung, args.keep)}   PASS")
+                say(f"{label} {one(name, spec, rung, args.keep)}   PASS")
             except Failure as failure:
-                print(f"{label} FAIL: {failure}")
+                say(f"{label} FAIL: {failure}")
                 failures.append((name, rung, str(failure)))
             except Exception as error:   # a crash is a failure, loudly
-                print(f"{label} ERROR: {type(error).__name__}: {error}")
+                say(f"{label} ERROR: {type(error).__name__}: {error}")
                 failures.append((name, rung, f"{type(error).__name__}: {error}"))
-        print()
+        say()
 
     if failures:
-        print(f"FAILED — {len(failures)} of {len(names) * len(rungs)}")
+        say(f"FAILED — {len(failures)} of {len(names) * len(rungs)}")
         return 1
-    print(f"PASSED — {len(names) * len(rungs)} of {len(names) * len(rungs)}")
+    say(f"PASSED — {len(names) * len(rungs)} of {len(names) * len(rungs)}")
     return 0
 
 
