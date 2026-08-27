@@ -1653,96 +1653,27 @@ Source bullets:
 
         latex_content = header_section
 
-        # -------------------------
-        # Experience section
-        # -------------------------
-        latex_content += """%-----------EXPERIENCE-----------
-    \\section{Experience}
-    \\resumeSubHeadingListStart
+        # Both sections are built by `tex_renderer`, which is the only module
+        # that knows how one looks. This agent used to assemble them itself,
+        # and the pair produced four bugs before they were merged: the field
+        # transposition R70 fixed on one side only (R70), the escape tables
+        # that desynchronised twice (R69, R73), an orphan `\section{Projects}`
+        # heading rendered over nothing, and a project link the other builder
+        # silently dropped.
+        #
+        # Empty sections are omitted rather than emitted bare — a heading with
+        # nothing under it is a visible defect on a resume, and it is also
+        # what a reader of this file uses as a parse anchor, so "sometimes
+        # present" was the worst of the three options.
+        from tools.resume import tex_renderer
 
-    """
+        experiences = tex_renderer.experience_block(tailored.get("experiences"))
+        projects = tex_renderer.project_block(tailored.get("projects"))
 
-        for exp in tailored.get('experiences', []):
-            # needs_review resumes are still written to disk, so this runs on
-            # output validation has already rejected. Skip what it cannot
-            # render rather than losing the whole file.
-            if not isinstance(exp, dict):
-                continue
-            title = self._escape_latex(exp.get('title', 'Unknown Title'))
-            company = self._escape_latex(exp.get('company', 'Unknown Company'))
-            dates = self._escape_latex(exp.get('dates', 'Dates'))
-            location = self._escape_latex(exp.get('location', ''))
-            bullets = exp.get('bullets', [])
-
-            # {title}{dates}{company}{location} — the order the master template
-            # means, and the order `tex_renderer._experiences` writes. This
-            # renderer had company and title transposed. The PDF looked fine
-            # either way, which is why it survived: bold-company reads as a
-            # legitimate style. What it broke was reading the file back —
-            # `parse_latex_resume` files argument three as the employer, so
-            # every generated resume named its job titles as companies and two
-            # internships sharing a title collapsed onto one id. Anyone saving
-            # a tailored resume as their new master lost an experience.
-            #
-            # The transposition was found once already and fixed only in the
-            # other renderer (known_questions.md, "The renderer transposed
-            # experience fields"). Fifth time a fix has landed on one of two
-            # paths; `test_tex_renderer.py` and `test_latex_escaping.py` now
-            # hold both to the same rule.
-            latex_content += f"""    \\resumeSubheading
-                {{{title}}}{{{dates}}}
-                {{{company}}}{{{location}}}
-                \\resumeItemListStart
-            """
-
-            for bullet in bullets:
-                escaped_bullet = self._escape_latex(bullet)
-                latex_content += f"        \\resumeItem{{{escaped_bullet}}}\n"
-
-            latex_content += "      \\resumeItemListEnd\n\n"
-
-        # Close Experience section before starting Projects
-        latex_content += "  \\resumeSubHeadingListEnd\n\n\n"
-
-        # -------------------------
-        # Projects section
-        # -------------------------
-        latex_content += """%-----------PROJECTS-----------
-    \\section{Projects}
-    \\resumeSubHeadingListStart
-
-    """
-
-        for proj in tailored.get('projects', []):
-            if not isinstance(proj, dict):
-                continue
-            name = self._escape_latex(proj.get('name', 'Unknown Project'))
-            tech = self._escape_latex(proj.get('tech', ''))
-            dates = self._escape_latex(proj.get('dates', ''))
-            bullets = proj.get('bullets', [])
-
-            # Mock tailoring uses "url"; Gemini may return "link".
-            # Support both so links don't disappear.
-            link = proj.get('url') or proj.get('link') or ''
-
-            if link:
-                proj_heading = f"\\textbf{{\\href{{{link}}}{{\\underline{{{name}}}}}}} $|$ \\emph{{{tech}}}"
-            else:
-                proj_heading = f"\\textbf{{{name}}} $|$ \\emph{{{tech}}}"
-
-            latex_content += f"""    \\resumeProjectHeading
-        {{{proj_heading}}}{{{dates}}}
-        \\resumeItemListStart
-    """
-
-            for bullet in bullets:
-                escaped_bullet = self._escape_latex(bullet)
-                latex_content += f"        \\resumeItem{{{escaped_bullet}}}\n"
-
-            latex_content += "      \\resumeItemListEnd\n\n"
-
-        # Close Projects section before adding Skills/footer
-        latex_content += "  \\resumeSubHeadingListEnd\n\n\n"
+        if experiences:
+            latex_content += "%-----------EXPERIENCE-----------\n" + experiences + "\n"
+        if projects:
+            latex_content += "%-----------PROJECTS-----------\n" + projects + "\n"
 
         # -------------------------
         # Technical Skills section

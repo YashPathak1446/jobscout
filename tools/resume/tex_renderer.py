@@ -118,6 +118,11 @@ def _experiences(entries) -> str:
         return ""
     blocks = []
     for entry in entries:
+        # needs_review resumes are written to disk too, so this runs on output
+        # validation has already rejected. Skip what cannot be rendered rather
+        # than losing the whole file.
+        if not isinstance(entry, dict):
+            continue
         # Argument order differs from Education's and the template gives no
         # hint: experience is {title}{dates}{company}{location} while
         # education is {school}{location}{degree}{dates}. Getting it wrong
@@ -139,12 +144,21 @@ def _projects(entries) -> str:
         return ""
     blocks = []
     for entry in entries:
+        if not isinstance(entry, dict):
+            continue
         name = escape(entry.get("name"))
         # The parser reads the tech stack out of the \emph{...} that follows
         # the name, so this separator is load-bearing rather than decorative.
         tech = escape(entry.get("tech"))
-        heading = f"{{\\textbf{{{name}}} $|$ \\emph{{{tech}}}}}" if tech else \
-                  f"{{\\textbf{{{name}}}}}"
+        # A project's link. This builder did not render one, so a URL typed
+        # into the import confirmation screen was collected and then dropped —
+        # the generation agent next door had always written it. Fourth bug
+        # from this pair of twins, and the reason they now share this code.
+        # Mock tailoring calls it "url" and Gemini sometimes returns "link".
+        link = entry.get("url") or entry.get("link") or ""
+        shown = (f"\\href{{{link}}}{{\\underline{{{name}}}}}" if link else name)
+        heading = f"{{\\textbf{{{shown}}} $|$ \\emph{{{tech}}}}}" if tech else \
+                  f"{{\\textbf{{{shown}}}}}"
         block = ("      \\resumeProjectHeading\n"
                  f"        {heading}{{{escape(entry.get('dates'))}}}")
         bullets = _bullets(entry.get("bullets"))
@@ -190,6 +204,33 @@ def _header(contact) -> str:
             "    \\small "
             + " $|$ ".join(pieces)
             + "\n\\end{center}")
+
+
+def experience_block(entries) -> str:
+    r"""
+    A complete Experience section, or `""` when there is nothing to show.
+
+    The seam the two renderers now share. They each used to assemble this,
+    and the pair has produced four bugs: the field transposition R70 fixed on
+    one side only, the orphan `\section{Projects}` heading this removes, the
+    `-1` header lookup that followed from one of them omitting a section the
+    other treats as an anchor, and the project link dropped below.
+
+    **A section with nothing in it is not emitted.** An empty heading is a
+    visible defect on a resume, and it is also what made a generated file
+    unusable as a master — `_generate_latex_file` locates the header by
+    finding `\section{Experience}`, so a heading that exists only sometimes is
+    a parse anchor that exists only sometimes. Refusing to write an empty one
+    at least makes the two ends agree about when it is there.
+    """
+    body = _experiences(entries)
+    return f"\\section{{Experience}}\n{body}\n" if body else ""
+
+
+def project_block(entries) -> str:
+    """A complete Projects section, or `""` when there is nothing to show."""
+    body = _projects(entries)
+    return f"\\section{{Projects}}\n{body}\n" if body else ""
 
 
 def render(resume: dict) -> str:
