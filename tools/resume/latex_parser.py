@@ -249,6 +249,51 @@ def _extract_keywords(text: str, vocabulary: list[str] | None = None) -> list[st
     return sorted({kw for kw in terms if term_matches(kw, text_lower)})
 
 
+# Math-mode commands, as the plain characters a person would type. The
+# invariant this serves: **an in-memory bullet is plain text.** Not "mostly
+# plain text with the odd math span left in", which is what it used to be —
+# `\%` came back as `%` while `$\sim 503$` came back untouched, so a bullet
+# was neither escaped nor unescaped and no single flag could describe it.
+#
+# That half-and-half string is what `already_latex` existed to paper over, and
+# why the no-model rung wrote resumes that would not compile: the flag said
+# "this is valid LaTeX, do not escape it", the `%` in it said otherwise, and a
+# bare `%` comments out the rest of the line including the closing brace.
+MATH_TO_TEXT = {
+    r"\sim": "~",
+    r"\pm": "±",
+    r"\rightarrow": "→",
+    r"\leftrightarrow": "↔",
+    r"\leq": "≤",
+    r"\geq": "≥",
+    r"\times": "×",
+    r"\ldots": "…",
+    r"\%": "%",
+}
+
+
+def _unwrap_math(text: str) -> str:
+    r"""
+    `$\sim 503$ms` -> `~503ms`, `$CC \leftrightarrow PSTN$` -> `CC ↔ PSTN`.
+
+    Math spans carry real content on a resume — a tilde meaning "about", an
+    arrow meaning "improved to" — so they are translated rather than stripped.
+    The space LaTeX needs after a control word is dropped with it, because
+    `$\sim 503$` means "~503" and not "~ 503".
+    """
+    def convert(match):
+        inner = match.group(1)
+        for command, plain in MATH_TO_TEXT.items():
+            # The keys are LaTeX, so they have to be escaped before they are
+            # used as patterns. `(?![a-zA-Z])` is where a control word ends —
+            # without it a shorter command would match inside a longer one.
+            inner = re.sub(re.escape(command) + r"(?![a-zA-Z])\s*",
+                           lambda _, p=plain: p, inner)
+        return inner.strip()
+
+    return re.sub(r"\$([^$]*)\$", convert, text)
+
+
 def _clean_latex(text: str) -> str:
     """Remove LaTeX formatting commands, return plain text."""
     # Remove common commands but keep content
@@ -263,12 +308,18 @@ def _clean_latex(text: str) -> str:
     text = re.sub(r"\\\$", "$", text)
     text = re.sub(r"\\_", "_", text)
     text = re.sub(r"\\#", "#", text)
+    text = re.sub(r"\\texttt\{([^}]*)\}", r"\1", text)
     text = re.sub(r"\\textasciitilde\{\}", "~", text)
-    # R69 writes a tilde as `$\sim$`, so the round trip has to read it back —
-    # render, re-parse, and "~500 samples" must still say "~500". The older
-    # form above stays because resumes written before it still exist.
-    text = re.sub(r"\$\\sim\$\s*", "~", text)
+    text = re.sub(r"\\textless\{\}", "<", text)
+    text = re.sub(r"\\textgreater\{\}", ">", text)
+    # A lambda, not a template: re.sub reads "\\" in a replacement string as
+    # the start of an escape and rejects it.
+    text = re.sub(r"\\textbackslash\{\}", lambda _: "\\", text)
+    # Every math span, not just the bare `$\sim$` this used to catch. A resume
+    # says `$\sim 503$ms` and `0.17$\rightarrow$1.00`, and leaving those in
+    # meant the string in memory was still partly LaTeX.
     text = re.sub(r"\$\|?\$", "|", text)
+    text = _unwrap_math(text)
     text = re.sub(r"\\small\s*", "", text)
     text = text.replace("--", "–")
     return text.strip()

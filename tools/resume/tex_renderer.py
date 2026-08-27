@@ -53,6 +53,12 @@ _ESCAPES = {
     # resume is a `.tex` that never passes through here, which is why it
     # survived every sweep (R69).
     "<": r"\textless{}", ">": r"\textgreater{}",
+    # The other half of the round trip. `latex_parser` turns math spans into
+    # these characters so that an in-memory bullet is plain text; without the
+    # return journey a re-render would emit a bare `±` or `→`, which is not
+    # representable in OT1 and drops out of the PDF silently.
+    "±": r"$\pm$", "→": r"$\rightarrow$", "↔": r"$\leftrightarrow$",
+    "≤": r"$\leq$", "≥": r"$\geq$", "×": r"$\times$", "…": r"\ldots{}",
 }
 
 _ESCAPE_PATTERN = re.compile("|".join(re.escape(c) for c in _ESCAPES))
@@ -62,9 +68,20 @@ def escape(text) -> str:
     """
     Make arbitrary text safe to place in a LaTeX document.
 
-    Extraction output is prose from a stranger's resume, so it is escaped
-    unconditionally. This is deliberately *not* the generation agent's
-    `already_latex` case (V3): nothing arriving here is trusted markup.
+    Escaped unconditionally, and this is now the only rule in the project.
+
+    There used to be an exception — the generation agent trusted a bullet that
+    came from a master `.tex` and wrote it back unescaped. That rested on the
+    premise that `parse_latex_resume` returns valid LaTeX, and it does not: it
+    returns plain text. The two together guaranteed that any bullet making the
+    round trip came out broken, which is why the no-model rung produced files
+    that would not compile.
+
+    The invariant, stated once: **in memory a bullet is plain text; LaTeX
+    exists only in a rendered file.** Every boundary honours it — the parser
+    converts on the way out, this converts on the way in — so the round trip
+    is closed by construction rather than by a flag naming which half of it
+    the caller happens to be on.
     """
     if text is None:
         return ""

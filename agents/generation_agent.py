@@ -149,66 +149,51 @@ class GenerationAgent:
         logger.info("✅ Ready to generate resumes")
     
     
-    def _escape_latex(self, text: str, already_latex: bool = False) -> str:
+    def _escape_latex(self, text: str) -> str:
+        r"""
+        Escape LaTeX metacharacters. Always. There is no exception.
+
+        There used to be one: `already_latex=True` for the no-model rung, on
+        the premise that the user's own master bullets are valid LaTeX and
+        escaping them would turn `$\sim 503$ms` into visible markup. The
+        premise was half true, which is the worst kind. `parse_latex_resume`
+        unescapes `\%` to `%` and `\_` to `_` while leaving math spans
+        standing, so a bullet in memory was neither escaped nor plain — and a
+        single boolean cannot describe a string that is both.
+
+        The consequence landed on the rung with no model to hide it. A bare
+        `%` written back into a `.tex` comments out the rest of the line
+        including the closing brace, so the free tier produced files that
+        would not compile. The author never saw it because Gemini rewrites his
+        bullets, and rewritten prose routes through this function.
+
+        The fix is the invariant rather than the flag: `latex_parser` now
+        converts math spans to plain characters too, so **in memory a bullet
+        is plain text and LaTeX exists only in a rendered file**. Escaping
+        unconditionally is then correct by construction, and
+        `tex_renderer.escape` has always done exactly this.
         """
-        Escape LaTeX metacharacters — unless the text is already LaTeX.
-
-        `already_latex` exists for the no-model rung. Model output is prose
-        and must be escaped; the user's own master bullets are valid LaTeX
-        already, and escaping them turns a math span such as ~503ms into
-        visible backslash-and-dollar markup in the rendered PDF.
-
-        Found by reading a PDF, not by any test: both paths compiled, both
-        produced one page, and only one of them was readable.
-        """
-        if already_latex:
-            return text or ""
-
         return self._escape_latex_impl(text)
 
     def _escape_latex_impl(self, text: str) -> str:
-        """
-        Escape special LaTeX characters using a single-pass regex.
+        r"""
+        Escape LaTeX metacharacters, using the one table in the project.
 
-        `<` and `>` are the subtle ones and were missing until R53. They are
-        not *errors* in LaTeX — nothing warns, the file compiles, the PDF is
-        one page — but in the default OT1 font encoding a bare `<` renders as
-        an inverted exclamation mark. "p99 query latency of <5ms" shipped as
-        "p99 query latency of ¡5ms" in three resumes before anyone opened the
-        PDF and read it.
+        This used to carry its own copy. R53 added `<` and `>` here and not to
+        `tex_renderer`, so an imported resume rendered "<5ms" as an inverted
+        exclamation mark; R69 found that and synchronised the two by hand.
+        Adding the math characters for the round trip desynchronised them
+        again within the hour — `test_both_tables_cover_the_same_characters`
+        caught it, which is the only reason this is a shared import rather
+        than a third round of copying.
 
-        That is why they are easy to miss: every other character here fails
-        loudly. `%` eats the line, `&` breaks alignment, `#` is a parameter.
-        These two fail silently and only in the render, so no test that checks
-        compilation or page count can see them. Found by a human reading the
-        output.
+        Two tables kept equal by a test is better than two tables. One table
+        is better still: the scorers went the same way when the same pair of
+        twins produced the same class of bug for the third time.
         """
-        if not text:
-            return ""
-        replacements = {
-            '&': r'\&',
-            '%': r'\%',
-            '$': r'\$',
-            '#': r'\#',
-            '_': r'\_',
-            '{': r'\{',
-            '}': r'\}',
-            # `$\sim$`, not `\textasciitilde` (R69). Under this template's OT1
-            # encoding the latter renders as a raised diacritic — "˜2 min"
-            # rather than "~2 min" — and extracts as an unmappable character,
-            # so an ATS reading the PDF as text gets nothing where the number
-            # was qualified. This is the half of the glyph problem R53 could
-            # not fix by escaping, because the escape was the thing rendering
-            # wrong.
-            '~': r'$\sim$',
-            '^': r'\textasciicircum{}',
-            '\\': r'\textbackslash{}',
-            '<': r'\textless{}',
-            '>': r'\textgreater{}',
-        }
-        pattern = re.compile('|'.join(re.escape(key) for key in replacements.keys()))
-        return pattern.sub(lambda match: replacements[match.group()], str(text))
-    
+        from tools.resume.tex_renderer import escape
+        return escape(text)
+
     def generate_resumes(self, analysis_results: List[Dict], output_dir: str = "outputs",
                          on_progress=None) -> List[Dict]:
         """
@@ -1348,7 +1333,6 @@ Source bullets:
                 "dates": exp.dates, "location": exp.location,
                 "bullets": list(exp.bullets)[:keep],
                 # Straight from the user's .tex, so already valid LaTeX.
-                "_already_latex": True,
             })
 
         for proj_id in selected.get("projects", []):
@@ -1360,7 +1344,6 @@ Source bullets:
                 "id": proj.id, "name": proj.name, "url": proj.url,
                 "tech": proj.tech, "dates": proj.dates,
                 "bullets": list(proj.bullets)[:keep],
-                "_already_latex": True,
             })
 
         return self._apply_bullet_fitting(tailored)
@@ -1685,7 +1668,6 @@ Source bullets:
             # render rather than losing the whole file.
             if not isinstance(exp, dict):
                 continue
-            verbatim = bool(exp.get('_already_latex'))
             title = self._escape_latex(exp.get('title', 'Unknown Title'))
             company = self._escape_latex(exp.get('company', 'Unknown Company'))
             dates = self._escape_latex(exp.get('dates', 'Dates'))
@@ -1714,7 +1696,7 @@ Source bullets:
             """
 
             for bullet in bullets:
-                escaped_bullet = self._escape_latex(bullet, already_latex=verbatim)
+                escaped_bullet = self._escape_latex(bullet)
                 latex_content += f"        \\resumeItem{{{escaped_bullet}}}\n"
 
             latex_content += "      \\resumeItemListEnd\n\n"
@@ -1734,7 +1716,6 @@ Source bullets:
         for proj in tailored.get('projects', []):
             if not isinstance(proj, dict):
                 continue
-            verbatim = bool(proj.get('_already_latex'))
             name = self._escape_latex(proj.get('name', 'Unknown Project'))
             tech = self._escape_latex(proj.get('tech', ''))
             dates = self._escape_latex(proj.get('dates', ''))
@@ -1755,7 +1736,7 @@ Source bullets:
     """
 
             for bullet in bullets:
-                escaped_bullet = self._escape_latex(bullet, already_latex=verbatim)
+                escaped_bullet = self._escape_latex(bullet)
                 latex_content += f"        \\resumeItem{{{escaped_bullet}}}\n"
 
             latex_content += "      \\resumeItemListEnd\n\n"

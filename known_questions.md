@@ -6313,6 +6313,89 @@ shape; the widget itself still wants a human click.
 
 ---
 
+## R73. In memory a bullet is plain text; LaTeX exists only in a file
+
+**Decision:** (2026-08-26) Every boundary honours one invariant. The parser
+converts LaTeX to plain text on the way out, the renderer escapes on the way
+in, and nothing asks which of the two a string happens to be. `already_latex`
+is deleted.
+
+**Severity: this made the free tier produce files that will not compile.**
+Not wrong output — no output. `page_count: 0` on a machine with LaTeX
+installed, and the run reported that it had written a resume.
+
+### Three reasonable decisions, one broken product
+
+    tex_renderer.escape      escapes on the way into a file
+    parse_latex_resume       unescapes on the way out
+    _escape_latex(..., True) trusts what it is handed
+
+Each is defensible alone. Together they guarantee that any bullet making the
+round trip comes out broken. The author's master holds five `\%`; the parser
+returns all five bare; the no-model rung writes them straight back. **A bare
+`%` comments out the rest of the line including the closing brace.**
+
+### Why a flag could never have been right
+
+The premise behind `already_latex=True` was "the user's own master bullets are
+valid LaTeX". Measured, that premise was *half* true, which is worse than
+false. `_clean_latex` unescaped `\%`, `\&`, `\_`, `\#` and `\$` while leaving
+math spans and `\texttt{}` standing:
+
+    in the file    ... 94.2\% accuracy ($\pm$0.2\%) ... $\sim 503$ms ...
+    in memory      ... 94.2%  accuracy (  ±  0.2% ) ... $\sim 503$ms ...
+                       ^ plain text                     ^ still LaTeX
+
+One boolean cannot describe a string that is both. Escaping it printed the
+markup; not escaping it broke the file. `already_latex` is the sentinel
+pattern in its purest form — one variable standing for two different truths
+depending on which path built the string.
+
+### The fix is the invariant
+
+`_clean_latex` now converts math spans too, via `MATH_TO_TEXT`: `$\sim 503$`
+becomes `~503`, `$\pm$` becomes `±`, `0.17$\rightarrow$1.00` becomes
+`0.17→1.00`, `$CC \leftrightarrow PSTN$` becomes `CC ↔ PSTN`. The escape table
+gains the return journey for each. Measured across every master on disk:
+**nothing with a backslash or a `$` survives into memory.**
+
+R69's `~` → `$\sim$` mapping is what makes this closed rather than lossy — the
+tilde is a real character on a resume, meaning "about", and it has somewhere
+to go in both directions.
+
+### Two tables became one, on the third offence
+
+Adding the math characters to `tex_renderer` and not to the generation agent
+desynchronised the escape tables **within the hour**, and
+`test_both_tables_cover_the_same_characters` caught it — the test R69 wrote
+after the same pair produced the same class of bug twice. Rather than
+synchronise by hand a third time, `generation_agent._escape_latex_impl` now
+calls `tex_renderer.escape`. Two tables kept equal by a test is better than
+two tables; one table is better still, which is where the scorers ended up
+for the same reason.
+
+### Verified
+
+Generated a keyless resume for both masters and compiled it. Priya
+Raghunathan: no bare `%`, **98,888-byte PDF** where the same path produced
+`page_count: 0` an hour earlier. Extracted text carries every figure —
+`340ms to 48ms`, `12 shards`, `4,200 duplicate charges`, `18K+ merchants`,
+`2.5K requests per second`, `6 hours to 40 minutes`, `31%`. The author's:
+125,417 bytes, exit 0.
+
+`tests/test_latex_round_trip.py` is a property test over every master on disk
+rather than assertions about particular characters — parse, render, parse
+again, and require the bullets identical, the rendered file free of unescaped
+specials, and a second render byte-identical to the first. That closes the
+family; the five percents were never the point.
+
+**Why it was invisible.** Gemini rewrites the author's bullets, and rewritten
+prose routes through the escaper. The no-model rung is the only path that
+writes parser output straight back to the renderer — the free tier, on the
+machine of somebody who has not paid.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format
