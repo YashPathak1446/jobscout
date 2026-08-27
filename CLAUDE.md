@@ -85,6 +85,14 @@ profile cannot**. Four times now:
 That last one is the worst of them in product terms. **A stranger does not
 file a bug report; they close the tab.**
 
+**And a fixture you wrote is a fixture that agrees with you (R77).** Priya was
+invented to test the importer, so she can only contain problems somebody
+thought of. One run of the pattern reader over a real third resume from
+outside the project found four defects at once — a `Research/Projects` heading
+that matched nothing, a `Publications` section filed as project bullets, two
+degrees merged into one wrong record, and `\bmaster\b` never matching
+"Masters". Keep at least one fixture nobody here authored.
+
 So: **build against Priya, not against yourself.** `priya_raghunathan` — six
 years, Boston, Staff Engineer, imported from a PDF this repo did not produce —
 is the default fixture for anything touching profile shape, gates, defaults or

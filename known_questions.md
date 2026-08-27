@@ -6728,6 +6728,125 @@ measured rather than suspected.
 
 ---
 
+## R77. A third resume, and the four things one run of it found
+
+**Decision:** (2026-08-26) The pattern reader recognises a heading by its
+words, ends a section at a heading it does not know, keeps two degrees as two
+degrees, and does not read the link appendix as resume content.
+
+### Why a third resume at all
+
+Yash's is a `.tex` he wrote. Priya's is a PDF, and the whole point of her — but
+**she was invented to test the importer, so she can only ever contain problems
+somebody thought of.** The third is a real resume from outside the project.
+One run of `heuristic_schema` over it found four defects, none of which either
+existing fixture could express.
+
+The method generalises past "build against Priya, not against yourself": a
+fixture you wrote is a fixture that agrees with you.
+
+### 1. `Research/Projects` was not a heading
+
+Section matching was `lowered.startswith(word)`. That line begins with
+"research", so it matched nothing, and **the projects section did not exist**
+— thirty-six lines of projects and the publications below them were filed
+under Experience, the section above, and offered on the confirmation screen as
+work history.
+
+Headings now match on words: every word in a short line must be a section term
+or filler ("technical", "professional", "research", "and"), and at least one
+must be a term. Both halves were learned by breaking the other resume:
+
+* matching a term *anywhere* made `iSteer Technologies Bangalore, India` a
+  skills heading — an employer became a section break and took the experience
+  section with it
+* matching *whole words* made `Skills` stop matching the term `skill`, and
+  Priya's entire skills section vanished
+
+So: prefix per word, whole line accounted for.
+
+### 2. An unknown heading did not end the section above it
+
+`Publications` is not a section this importer wants, and it therefore was not
+a heading, so two conference papers became project bullets. `OTHER_HEADINGS`
+is a closed list of sections that **end** the current one and claim nothing.
+
+Closed, not heuristic, and the reason is measured: on that resume `AI/ML Intern
+Jan 2025 - April 2025` is 34 characters and `iSteer Technologies Bangalore,
+India` is 36. Any rule of the form "a short line is a heading" deletes the
+experience section. `"language"` was dropped from the list on the same
+grounds — it is a skills category label far more often than it is a section.
+
+### 3. Two degrees became one wrong record
+
+`_heuristic_education` built exactly one entry, by construction. A masters and
+a bachelors merged into:
+
+    school: "University of Massachusetts Masters of Science in Computer
+             Science PES University Bangalore, India"
+    degree: "Bachelor of Technology..."   dates: "Aug. 2025 - May 2027"
+
+The bachelors degree under the masters' dates. **Wrong rather than missing**,
+which is the worse of the two — R64's rule applied to a whole record. A blank
+field is visibly blank on the confirmation screen; that is a plausible
+sentence nobody would look at twice.
+
+Entries now flush on conflict: a second date range, a second degree, or a
+school line arriving after the current entry already has both.
+
+### 4. `\bmaster\b` does not match "Masters"
+
+Only "Bachelor of ..." was ever recognised as a degree, which is why the merge
+scrambled the way it did rather than merely splitting badly — the masters line
+was not a degree, fell through to the school name, and took the structure with
+it. Every spelled-out qualification now takes an optional `s`.
+
+Bare `MA` and `BA` stay out of the pattern, because "Boston, MA" is a state,
+and `test_a_city_and_state_is_not_read_as_a_masters` holds that — adding
+plurals is exactly the edit that would put them back.
+
+### 5. An affordance for one path, reaching the path that could not use it
+
+`extract_text` appends the PDF's link targets under `LINKS FOUND IN THIS
+DOCUMENT:` so the **model** can recover a URL the visible text does not carry;
+the extraction prompt says so in as many words. The pattern reader has no such
+instruction. After R75 taught it that `Label: values` is a skill category, the
+appendix arrived on the page as a category named `https` holding three URLs,
+with the marker glued to the end of the real skills.
+
+Twin-path again, in a new direction: not a fix applied to one of two paths,
+but a *feature* built for one and never considered against the other.
+
+### Verified
+
+Both PDFs on disk, before and after. The third: sections went from
+`{education: 4, experiences: 36}` — everything after Experience swallowed — to
+`{education: 4, experiences: 17, projects: 13, skills: 4}`, two education
+entries with the right degree against the right dates, four real skill
+categories and no `https`. Priya: unchanged, one education entry, the same four
+categories. 954 tests, three baselines. Each new test was run against the old
+code first: 13 of 19 fail there.
+
+### Left standing, measured
+
+* **Non-US locations.** `_CITY_STATE` requires `City, ST`, so "Bristol, United
+  Kingdom" is not a location and stays glued to the school name. Fixing it
+  needs a country vocabulary, not a looser regex — the comment on that pattern
+  already records what a looser class did.
+* **A school name leaking into the location.** `Northeastern University Boston,
+  MA` with no separator gives up its name to the location field; with " - " it
+  does not, which is why Priya never showed it. Asserted as observed.
+* **Kerning splits in labels and project names** — `F rameworks`, `Developer
+  T ools`, `T railSpecies`. The extraction prompt already tells the *model* to
+  repair these and names `"W ebApp"` as an example. The floor cannot, so this
+  is another defect that exists only for the tier without a key.
+* **Mojibake.** En-dashes, `R²` and `×10` arrive as `�` from this
+  particular PDF, past everything `_tidy` knows about.
+* **A standalone `Research` heading** would not be recognised, because
+  "research" had to become filler for `Research/Projects` to work.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

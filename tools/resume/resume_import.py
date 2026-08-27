@@ -256,6 +256,33 @@ SECTION_HEADINGS = {
     "skills": ("skill", "technical skill", "technologies"),
 }
 
+# Headings this importer has nothing to do with, listed so that reaching one
+# **ends** the section above it. Without them a heading it does not recognise
+# is not a heading at all, so everything under it joins whatever came before:
+# a resume with `Publications` after `Research/Projects` filed two conference
+# papers as project bullets.
+#
+# A closed list rather than "a short line is a heading", and the difference is
+# not fussiness. On the resume that found this, `AI/ML Intern Jan 2025 - April
+# 2025` is 34 characters and `iSteer Technologies Bangalore, India` is 36 —
+# every job title and employer line would have become a section break and
+# taken the experience section with it.
+OTHER_HEADINGS = (
+    "publication", "award", "honor", "certification", "licence", "license",
+    "interest", "hobb", "reference", "volunteer", "activit", "leadership",
+    "coursework", "summary", "objective", "profile",
+)
+
+# Not part of the resume: `extract_text` appends the PDF's link targets under
+# this line so the *model* can recover a URL the visible text does not carry.
+# The pattern reader has no such instruction and read them as resume content —
+# after R75 taught it that `label: values` is a skill category, the appendix
+# arrived on the page as a category named `https` holding three URLs, with
+# `LINKS FOUND IN THIS DOCUMENT:` glued to the end of the real skills.
+#
+# An affordance built for one path, reaching a path that could not use it.
+LINKS_MARKER = "links found in this document"
+
 
 _MONTH = (r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)"
           r"[a-z]*\.?\s+")
@@ -274,8 +301,13 @@ _CITY_STATE = re.compile(
 # something else. Bare "MA" and "BA" are deliberately absent: "Boston, MA" is
 # a state, and reading it as a Master of Arts put an entire university line in
 # the degree field on the first resume this was tried against.
+# The plurals are not decoration. `\bmaster\b` does not match "Masters", and
+# "Masters of Science in Computer Science" is how most people write it — so
+# the line was not a degree, fell through to the school name, and took the
+# entry's structure with it. Every spelled-out qualification here can take an
+# `s`, and only "Bachelor of ..." was ever being found.
 _DEGREE_WORDS = re.compile(
-    r"\b(bachelor|master|associate|doctorate|doctor of|ph\.?d|"
+    r"\b(bachelors?|masters?|associates?|doctorates?|doctor of|ph\.?d|"
     r"b\.?sc\.?|m\.?sc\.?|b\.s\.?|m\.s\.?|b\.a\.?|m\.a\.?|"
     r"b\.eng|m\.eng|mba|diploma)\b",
     re.I)
@@ -308,16 +340,30 @@ def _heuristic_education(lines) -> list:
     if not lines:
         return []
 
+    entries, school_parts = [], []
     entry = {"school": "", "location": "", "degree": "", "dates": ""}
-    school_parts = []
+
+    def flush():
+        """Close the entry being built and start another."""
+        nonlocal entry, school_parts
+        entry["school"] = " ".join(school_parts).strip()
+        if any(entry.values()):
+            entries.append(entry)
+        entry = {"school": "", "location": "", "degree": "", "dates": ""}
+        school_parts = []
 
     for line in lines:
         remaining = line
-        if not entry["dates"]:
-            found = _DATE_RANGE.search(remaining)
-            if found:
-                entry["dates"] = found.group(1).strip()
-                remaining = remaining.replace(found.group(1), " ")
+        dates = _DATE_RANGE.search(remaining)
+        # A second date range means a second qualification. One entry cannot
+        # hold two, and the old code did not try — it kept the first date and
+        # let every later line pile into whichever field was still empty.
+        if dates and entry["dates"]:
+            flush()
+        if dates and not entry["dates"]:
+            entry["dates"] = dates.group(1).strip()
+            remaining = remaining.replace(dates.group(1), " ")
+
         if not entry["location"]:
             found = _CITY_STATE.search(remaining)
             if found:
@@ -329,13 +375,27 @@ def _heuristic_education(lines) -> list:
                            "", remaining).strip()
         if not remaining:
             continue
-        if not entry["degree"] and _DEGREE_WORDS.search(remaining):
+
+        if _DEGREE_WORDS.search(remaining):
+            if entry["degree"]:
+                flush()
             entry["degree"] = remaining
         else:
+            # A school line arriving after the entry already has a degree and
+            # a date is the next school, not more of this one's name. This is
+            # the whole of the two-degree fix: without it a masters and a
+            # bachelors merge into a record that is **wrong rather than
+            # missing** — "University of Massachusetts Masters of Science in
+            # Computer Science PES University Bangalore, India" as the school,
+            # with the bachelors degree filed under the masters' dates. A
+            # blank field is visibly blank on the confirmation screen; that is
+            # a plausible sentence nobody would look at twice.
+            if entry["degree"] and entry["dates"]:
+                flush()
             school_parts.append(remaining)
 
-    entry["school"] = " ".join(school_parts).strip()
-    return [entry]
+    flush()
+    return entries
 
 
 # "Languages: Java, Kotlin, Python" — a label, a colon, then the list. Short
@@ -427,21 +487,89 @@ def heuristic_schema(text: str) -> dict:
     }
 
 
+# Words that may share a heading line without carrying its meaning, so that
+# "Technical Skills" and "Research/Projects" are the same headings as "Skills"
+# and "Projects".
+HEADING_FILLER = {
+    "", "and", "other", "additional", "relevant", "core", "key", "selected",
+    "technical", "professional", "personal", "academic", "work", "my",
+    "research", "related", "notable", "select",
+}
+
+
+def _heading_words(text: str) -> list:
+    """The words of a line, with punctuation treated as a separator."""
+    return [w for w in re.split(r"[^a-z]+", text.lower()) if w]
+
+
+def _is_heading(words, terms) -> bool:
+    """
+    Is this line **only** a heading for one of `terms`?
+
+    Every word has to be either a term or filler, and at least one has to be a
+    term. Both halves are load-bearing, and each was learned by breaking the
+    other resume in the repository:
+
+    * matching a term anywhere in the line made `iSteer Technologies
+      Bangalore, India` a skills heading, because "technologies" is one of the
+      words that names that section. An employer became a section break and
+      took the experience section with it.
+    * matching whole words made `Skills` stop being a heading, because the
+      term is `skill` and the line is the plural. Priya's whole skills section
+      vanished.
+
+    So: prefix per word, and the whole line accounted for.
+    """
+    matched = False
+    for word in words:
+        if any(word.startswith(term) for term in terms):
+            matched = True
+        elif word not in HEADING_FILLER:
+            return False
+    return matched
+
+
 def _split_sections(lines) -> dict:
-    """Group lines under whichever known heading most recently appeared."""
+    """
+    Group lines under whichever known heading most recently appeared.
+
+    Headings are matched on **words**, not on prefixes. `Research/Projects` is
+    a projects heading and did not start with "project", so the section did
+    not exist as far as this function was concerned and thirty-six lines of
+    projects and publications were filed under Experience — the section above
+    it — where the confirmation screen offered them as work history.
+
+    Three rules, and the third is the one that keeps the other two safe:
+
+    * a known section word appearing as a word makes the line that section
+    * a heading from `OTHER_HEADINGS` ends the current section and claims
+      nothing
+    * **nothing else is a heading.** A short line is not a heading, because on
+      a real resume the short lines are job titles and employers.
+    """
     sections, current = {}, None
 
     for line in lines:
         lowered = line.lower().strip(" :")
-        heading = next(
-            (name for name, words in SECTION_HEADINGS.items()
-             if len(lowered) < 40 and any(lowered.startswith(w) for w in words)),
-            None,
-        )
-        if heading:
-            current = heading
-            sections.setdefault(current, [])
+        if len(lowered) < 40:
+            words = _heading_words(lowered)
+            heading = next(
+                (name for name, terms in SECTION_HEADINGS.items()
+                 if _is_heading(words, terms)),
+                None,
+            )
+            if heading:
+                current = heading
+                sections.setdefault(current, [])
+                continue
+            if _is_heading(words, OTHER_HEADINGS):
+                current = None
+                continue
+
+        if lowered.startswith(LINKS_MARKER):
+            current = None
             continue
+
         if current:
             sections[current].append(line)
 
