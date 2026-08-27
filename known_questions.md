@@ -679,6 +679,38 @@ stopped inflating the rendered length; a later measurement should revisit it.
 
 # Active questions
 
+## Q24. What stops a hosted run from costing money?
+
+**Status:** Not urgent today, and it has a date. Recorded 2026-08-27 so it is
+a known state rather than something to re-verify later.
+
+**Today: a Gemini free-tier key with no billing enabled.** The worst case is a
+quota refusal, which the ladder already handles — `classify_api_error` treats
+quota as fall-through, the model chain moves to the next entry, and a run that
+exhausts every entry falls to the verbatim rung and says so (R47, R79). No
+path currently spends money.
+
+**The date this changes: the Phase 1 deploy.** The moment a stranger can
+trigger an API call against a server the author pays for, the free tier stops
+being a safety property and becomes a shared quota that anyone can exhaust —
+denial of service before it is ever a bill. Two separate things are then
+needed and neither exists:
+
+- a **spend ceiling** on the key: a Cloud budget alert plus a hard quota, so a
+  bug cannot become an invoice. OOS5 sets the ceiling at $10/month until there
+  is revenue.
+- **per-account metering**, which is Phase 4's real content. A resume runs
+  2-3c; 200 a month on a $10 plan is fine and 2,000 is not.
+
+**Do not attach billing to the key before both exist.** A free-tier key that
+refuses is a bounded failure; a billed key with no quota is an unbounded one,
+and the difference is one settings page.
+
+Related: Q15 item 4 — one key, shared quota, users competing — which is the
+same fact seen from the multi-user side rather than the cost side.
+
+---
+
 ## Q23. The board cannot say when a job was posted
 
 **Status:** Open. Surfaced 2026-08-26 while building R64, when freshness turned
