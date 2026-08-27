@@ -57,16 +57,15 @@ outputs/
 /.cache/
 
 # Master resumes - personal data
-# Everything a resume can arrive as, not just the format the author uses.
-# This rule was written when a master resume was always a hand-written .tex.
+# Every format a resume can arrive as, not just the one the author uses.
+# This rule was written when a master resume was always a hand-written .tex;
 # R38 added PDF and Word import, which writes the upload into this same
-# directory — so a stranger's resume was tracked while the author's was
-# ignored, and the first `git add -A` would have committed their CV.
-# By pattern, not by extension, for the same reason. The list above named
-# four formats and missed everything else a person's resume can be saved as —
-# and missed a `.tex.pre-skills-fix` backup written next to one, which is how
-# it was noticed. A directory the app writes to gets the directory.
+# directory — so a stranger's CV was trackable while the author's was ignored.
 data/master_resumes/*
+data/master_resumes/*.tex
+data/master_resumes/*.pdf
+data/master_resumes/*.docx
+data/master_resumes/*.doc
 !data/master_resumes/*.example.tex
 !data/master_resumes/.gitkeep
 
@@ -74,10 +73,9 @@ data/master_resumes/*
 # The durable job store: personal, unbounded, rebuildable by discovery.
 # Every store, not the one that existed when this line was written.
 # `data/jobs.db` was ignored by name; `data/runs.db` arrived with R51 four
-# months later and nobody added a second line, so a live database holding the
-# author's own run history — profile name, local filesystem paths, timestamps
-# — was tracked while its twin was not. Both are built by CREATE TABLE IF NOT
-# EXISTS; neither ever needed to be in the repo.
+# months later and nobody added a second line, so a live database holding real
+# run history was tracked while its twin was not. Both are built by
+# CREATE TABLE IF NOT EXISTS; neither ever needed to be in the repo.
 data/*.db
 
 
