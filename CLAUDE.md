@@ -135,6 +135,13 @@ Every screen in the wizard displays data that loads after it mounts, so this
 will keep firing. A loading state is not an empty state, an empty state is not
 a zero, and a zero is not a "no".
 
+**The sharpest form of it, found by R75:** the preferences Save button was
+gated on the levels a profile's years imply, and an unanswered years field
+implies none — so the fix for R72's dead button rebuilt the same dead button
+one field over, on both UIs, and the test could not see it because it walked
+`range(0, 41)` and never `None`. **Any test that walks a range is a test that
+has not walked the absence.**
+
 Related and older: **a filter that removes things must say how many.** The
 board hides jobs the gates reject (R62) and states the count under the current
 filters — 59 of 136, and 14 of 19 when narrowed to one company. Silent

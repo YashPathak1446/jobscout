@@ -369,12 +369,19 @@ export function PreferencesStep({
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
-        {/* Gated on the levels in force, never on the override box — that is
+        {/* Gated on target roles alone. Never on the override box — that is
             empty for everyone who has not overridden, and gating on it left
-            the Streamlit button dead for every new profile. */}
+            the Streamlit button dead for every new profile (R72). And no
+            longer on the levels in force either: those are empty whenever the
+            years are unanswered and nothing is overridden, which is a
+            legitimate state. `/api/levels` returns `derived: []` for an
+            unanswered profile on purpose, the caption reads "any level", and
+            `_tolerated_years` treats it as the widest tolerance rather than
+            as zero. Gating on it rebuilt the same silent wall one field
+            over. */}
         <Button
           onClick={save}
-          disabled={!prefs.target_roles.length || !inForce.length || saving}
+          disabled={!prefs.target_roles.length || saving}
         >
           {saving ? 'Saving…' : 'Save and continue'}
         </Button>

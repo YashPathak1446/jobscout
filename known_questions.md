@@ -6505,6 +6505,145 @@ which is the trade `test_stranger_import` already refused for the glued email.
 
 ---
 
+## R75. The sweep, and the wall that was rebuilt one field over
+
+**Decision:** (2026-08-26) A focused pass over the recurring bug class rather
+than over a diff. Seven candidates went in; **two were already dead**, one was
+mis-stated, and the pass turned up **two the list did not have** — including a
+regression of R72 that shipped in the fix for R72.
+
+Recorded because the yield of the sweep was in the checking, not the list. Two
+candidates had been fixed by earlier work and would have been "fixed" a second
+time by anyone who trusted the note; the highest-severity finding was not on
+the list at all and was reached by following a field rather than a hunch.
+
+### Already dead, and worth saying so
+
+* `already_latex` — deleted by R73. It survives only in comments explaining
+  its absence and in `test_nothing_asks_whether_text_is_already_latex`, which
+  fails if it returns.
+* `--popover`'s undefined tokens — defined in both themes, with
+  `test_theme_is_complete` holding the whole token set.
+
+Two of seven. This is the doc going stale in the direction that costs the most
+— a candidate list is a claim about the present, and this one was three
+commits old.
+
+### Mis-stated: the header location
+
+Filed as "collected on import, never rendered". It is neither.
+`CONTACT_PATTERNS` has no location pattern, so nothing collects it; the line
+it sits on is the one that glues `Boston, MA` onto the email
+(`test_stranger_import` documents why that is not repaired). A resume for
+someone whose location decides half their matches prints no location at all.
+That is a **missing feature**, not a dropped field, and it needs the header
+and the parser to learn a field together.
+
+### 1. The wall R72 tore down, rebuilt one field over — both UIs
+
+R72's finding: the Save button on the preferences screen was gated on the
+seniority override, which is empty for every profile a new user builds, so the
+button was dead for everyone but the author. The fix moved the gate to the
+levels *in force*.
+
+`derived_levels(None)` is `[]`. `/api/levels` returns `derived: []` for an
+unanswered profile **on purpose**, and its docstring tells the caller to
+"render that as a question rather than as a level". Both callers fed it
+straight into the gate. So anyone who declines to state their years — a field
+with a placeholder, no required marker, and a legitimate unknown state — met
+the same dead button, with nothing on screen saying why.
+
+`test_preferences_gate` could not see it: `test_every_plausible_number_of_years
+_derives_something` walks `range(0, 41)` and never `None`. **A test that walks
+every answer and never the absence of one.** Ninth instance of the invariant,
+and the first to be reintroduced by the fix for a previous instance.
+
+Both gates are now on target roles alone. "Any level" is a real state — the
+caption says so, `_tolerated_years` reads it as the widest tolerance rather
+than as zero, and the run works.
+
+### 2. `int(years or 0)` — the twin path, with a note attached
+
+The Streamlit field did `value=int(current.get("years_experience") or 0)`, and
+`st.number_input` has no unanswered state to return, so **saving the screen
+wrote the zero back**. A six-year engineer who never touched the field was
+filtered as a new grad from then on. Not a display bug: a write.
+
+The React field next door has been correct since it was written, and its
+comment names this exact line as the thing it is not doing. Fixed on the path
+being built, left standing on the path being replaced — the two-path bug with
+a signed confession beside it.
+
+`st.number_input(value=None)` returns `None` untouched and the number after
+(verified with `AppTest`), which is why `requirements.txt` now floors
+Streamlit at 1.31 rather than 1.30.
+
+### 3. The skills section was printed and never offered
+
+The React confirmation screen showed skills as the number `4` and nothing
+else, on a screen headed *correct anything that is wrong*. The section reaches
+the employer verbatim and was the only one nobody could touch — while the
+Streamlit screen has had an editable skills field the whole time.
+
+This is what makes `A WS` matter. The kerning artifact in Priya's own PDF is
+not repairable in code (repairing spaces inside words guesses at content, the
+trade already refused for the glued email), and that is survivable **only**
+because R33 puts every field in front of its owner. Skills were the exception,
+so the one defect that needed the mitigation was the one that did not have it.
+
+### 4. `contact.portfolio`, and `from_parsed` dropping `url`
+
+`portfolio` appeared **once in the entire repository**: as a labelled input on
+the confirmation screen. Nothing extracted it, nothing stored it, `_header`
+does not print it. Removed rather than rendered — printing it honestly needs a
+parser counterpart, and `latex_parser` recovers GitHub and LinkedIn by
+matching the domain, which an arbitrary portfolio URL has no way to do. It
+would print once and vanish on the next round trip.
+
+`from_parsed` omitted `url`, so every project link died on a re-render — and
+because `from_parsed` is what the round-trip test renders through, **the test
+was blind to the loss it existed to catch**. Both sides agreed on nothing
+being there. A round trip that compares only what the bridge carries certifies
+the bridge.
+
+### The test that closes the class
+
+`tests/test_form_and_renderer_agree.py` asserts both directions:
+
+* every field the renderer **prints** is offered by the form
+* every field the form **offers** is printed by the renderer
+
+The read-set is *measured*, not read: each field is rendered with a sentinel
+and the output searched for it, so it describes what `tex_renderer` prints
+rather than what its source appears to say. Grepping a renderer for
+`.get('url')` passes the moment somebody renames the accessor — testing a path
+against itself, again. The form side is extracted from the `.tsx` and **raises
+rather than returning an empty set**, so it cannot pass by comparing nothing
+to nothing.
+
+Verified to bite in both directions and on the skills case, by reintroducing
+each defect and watching the right test fail.
+
+### Verified in a browser, not only in tests
+
+The class this pass is about includes the one that passes contract tests and
+fails in front of a person. So: years cleared on the preferences screen →
+caption reads "Answer the years above and the levels follow from it", **Save
+enabled**, click, and `years_experience` on disk is `null` — not `0` — with
+`derive_levels` reading it back as no opinion. Import screen: contact shows
+five fields and no Portfolio; Skills renders four editable groups; editing a
+value updates state and blanking a label drops the header count 4 → 3, which
+is `skillsFromRows()` driving what gets saved.
+
+925 tests, three baselines clean.
+
+**Still open.** The header prints no location. Priya's page remains about half
+full (Q3). And `test_every_plausible_number_of_years_derives_something` is
+worth reading as a pattern rather than a fixed test: **any test that walks a
+range is a test that has not walked the absence.**
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

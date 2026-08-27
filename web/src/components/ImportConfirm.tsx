@@ -40,6 +40,40 @@ export function ImportConfirm({
     JSON.parse(JSON.stringify(schema)),
   )
 
+  // Skills are held as rows rather than as the object they will become,
+  // because renaming a key while somebody is typing it drops every keystroke
+  // that leaves the object momentarily invalid.
+  //
+  // They were not on this screen at all — a count in the header and nothing
+  // else, on a screen headed "Correct anything that is wrong". So the section
+  // that reaches the employer verbatim was the one section nobody could see,
+  // let alone fix. Priya's PDF extracts `A WS` for AWS, a kerning artifact of
+  // her file; the email glued to the line above it is flagged and correctable
+  // and this was not, though both come from the same reader and land on the
+  // same page. The Streamlit screen has had a skills field the whole time,
+  // which is the tell: two screens, one walked.
+  const [skillRows, setSkillRows] = useState<{ label: string; value: string }[]>(
+    () => Object.entries(schema.skills ?? {}).map(([label, value]) => ({ label, value })),
+  )
+
+  /** The rows back into the schema's shape, dropping any left blank. */
+  function skillsFromRows(): Record<string, string> {
+    const out: Record<string, string> = {}
+    for (const { label, value } of skillRows) {
+      const name = label.trim()
+      const listed = value.trim()
+      if (!name || !listed) continue
+      out[name] = out[name] ? `${out[name]}, ${listed}` : listed
+    }
+    return out
+  }
+
+  function setSkillRow(index: number, field: 'label' | 'value', next: string) {
+    setSkillRows((rows) =>
+      rows.map((row, i) => (i === index ? { ...row, [field]: next } : row)),
+    )
+  }
+
   const leftovers = Object.entries(draft._unparsed ?? {}).filter(
     ([, lines]) => lines && lines.length,
   )
@@ -130,7 +164,7 @@ export function ImportConfirm({
       <div className="flex flex-wrap gap-6 rounded-lg border bg-card p-4 text-sm">
         <Stat label="Experiences" value={experiences.length} />
         <Stat label="Projects" value={projects.length} />
-        <Stat label="Skill groups" value={Object.keys(draft.skills ?? {}).length} />
+        <Stat label="Skill groups" value={Object.keys(skillsFromRows()).length} />
       </div>
 
       {leftovers.length > 0 && (
@@ -163,8 +197,21 @@ export function ImportConfirm({
           word “GitHub” rather than the address. Check the email especially —
           PDFs often run it together with the line above.
         </p>
+        {/* Exactly the fields the header renders. `portfolio` used to be here
+            and appeared nowhere else in the repository — nothing extracted it,
+            nothing stored it, and `_header` does not print it, so a URL typed
+            into a labelled box on a screen headed "correct anything that is
+            wrong" was collected and dropped. Same shape as the project link
+            (R74) and the education degree before it.
+
+            Removed rather than rendered, because rendering it honestly needs
+            a parser counterpart: `latex_parser` recovers GitHub and LinkedIn
+            from the href by matching the domain, and an arbitrary portfolio
+            URL has no pattern to match, so it would print once and vanish on
+            the next round trip. A field that does nothing is better gone than
+            left on screen implying otherwise. */}
         <div className="grid gap-3 sm:grid-cols-2">
-          {['name', 'email', 'phone', 'github', 'linkedin', 'portfolio'].map(
+          {['name', 'email', 'phone', 'github', 'linkedin'].map(
             (field) => (
               <div key={field} className="space-y-1.5">
                 <Label htmlFor={`contact-${field}`} className="capitalize">
@@ -312,8 +359,68 @@ export function ImportConfirm({
         )
       })}
 
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="font-medium">Skills</h3>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              setSkillRows((rows) => [...rows, { label: '', value: '' }])
+            }
+          >
+            <Plus className="size-4" /> Add a skill group
+          </Button>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          One group per line — a heading, then the skills in it. This is
+          printed on your resume as you leave it here.
+        </p>
+        {skillRows.length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            Nothing was read out of a skills section. Add a group if your
+            resume has one.
+          </p>
+        )}
+        {skillRows.map((row, index) => (
+          <div key={index} className="flex flex-wrap items-end gap-3">
+            <div className="w-48 space-y-1.5">
+              <Label htmlFor={`skill-label-${index}`}>Group</Label>
+              <Input
+                id={`skill-label-${index}`}
+                value={row.label}
+                placeholder="Languages"
+                onChange={(e) => setSkillRow(index, 'label', e.target.value)}
+              />
+            </div>
+            <div className="min-w-64 flex-1 space-y-1.5">
+              <Label htmlFor={`skill-value-${index}`}>Skills</Label>
+              <Input
+                id={`skill-value-${index}`}
+                value={row.value}
+                placeholder="Java, Kotlin, Python"
+                onChange={(e) => setSkillRow(index, 'value', e.target.value)}
+              />
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Remove this skill group"
+              onClick={() =>
+                setSkillRows((rows) => rows.filter((_, i) => i !== index))
+              }
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </div>
+        ))}
+      </section>
+
       <div className="flex items-center gap-3 border-t pt-4">
-        <Button onClick={() => onConfirm(draft)} disabled={busy}>
+        <Button
+          onClick={() => onConfirm({ ...draft, skills: skillsFromRows() })}
+          disabled={busy}
+        >
           {busy ? 'Building your profile…' : 'This is right — build my profile'}
         </Button>
         <Button variant="ghost" onClick={onCancel} disabled={busy}>

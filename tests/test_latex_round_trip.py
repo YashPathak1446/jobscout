@@ -123,6 +123,27 @@ class TestTheRoundTripIsClosed(unittest.TestCase):
                     list(a.bullets or []), list(landed[a.id].bullets or []),
                     f"{master.name}: {a.id} changed on the way through")
 
+    def test_a_project_link_survives_the_round_trip(self):
+        """
+        It did not, and this test could not see that it did not: `from_parsed`
+        never carried `url`, so both sides of the comparison agreed on nothing
+        being there. Every project on the author's master has a link, and a
+        re-render dropped all three.
+
+        The bullets check above is the same shape and is why this one is
+        written by field rather than by whole component — a round trip that
+        compares only what the bridge happens to carry is a round trip that
+        certifies the bridge.
+        """
+        for master in MASTERS:
+            first, second, _ = self._round_trip(master)
+            landed = {p.id: p for p in second.projects}
+            for project in first.projects:
+                if not project.url:
+                    continue
+                self.assertEqual(project.url, landed[project.id].url,
+                                 f"{master.name}: {project.id} lost its link")
+
     def test_the_rendered_file_escapes_everything_it_should(self):
         for master in MASTERS:
             _, _, rendered = self._round_trip(master)

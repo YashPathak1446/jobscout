@@ -56,6 +56,20 @@ class TestTheLevelsInForceAreNeverEmpty(unittest.TestCase):
                 f"{years} years derives no levels, so a button gated on them "
                 "would be disabled with no way to proceed")
 
+    def test_an_unanswered_number_of_years_derives_nothing_on_purpose(self):
+        """
+        The hole in the test above: it walks every *answer* and never the
+        absence of one. `derived_levels(None)` is `[]` by design — `/api/levels`
+        says so in as many words — so a gate on the levels in force is dead for
+        anyone who declines to state their years, which is a state the field
+        allows and the pipeline handles.
+
+        Stated here rather than fixed, because `[]` is the correct answer. What
+        was wrong was the gate reading it as "not ready".
+        """
+        self.assertEqual(derived_levels(None), [])
+        self.assertEqual(in_force([], None), [])
+
     def test_a_profile_that_never_overrode_still_has_levels_in_force(self):
         """The new-user case, which is the one that was broken."""
         self.assertTrue(in_force([], 0))
@@ -76,8 +90,17 @@ class TestTheLevelsInForceAreNeverEmpty(unittest.TestCase):
 class TestTheSaveGateLetsANewProfileThrough(unittest.TestCase):
 
     def gate_disabled(self, roles, stored_seniority, years):
-        """The button's own condition, as `app.py` now spells it."""
-        return not (roles and in_force(stored_seniority, years))
+        """
+        The button's own condition, as both screens now spell it: target roles
+        and nothing else.
+
+        `in_force` was in here, and it is empty whenever the years are
+        unanswered and nothing is overridden — so the wall R72 tore down was
+        rebuilt one field over, silently, on both UIs at once. The arguments
+        are kept in the signature because the tests below are about who gets
+        through, and the point is that these two no longer decide it.
+        """
+        return not roles
 
     def test_a_freshly_imported_profile_can_continue(self):
         """
@@ -103,6 +126,23 @@ class TestTheSaveGateLetsANewProfileThrough(unittest.TestCase):
     def test_no_target_roles_still_blocks(self):
         """The gate must still gate. An empty search is not a search."""
         self.assertTrue(self.gate_disabled([], [], 6))
+
+    def test_declining_to_state_your_years_does_not_block(self):
+        """
+        The second wall, and the one this fix is for. Years unanswered, no
+        override, two target roles — the caption reads "any level", the filter
+        reads it as the widest tolerance rather than as zero, and the run
+        works. There was nothing to fix on that screen and no way off it.
+        """
+        self.assertFalse(self.gate_disabled(["Software Engineer"], [], None))
+
+    def test_the_second_gate_would_have_blocked_that_profile(self):
+        """The regression, stated so it cannot come back quietly either."""
+        roles, stored, years = ["Software Engineer"], [], None
+        second_gate_disabled = not (roles and in_force(stored, years))
+        self.assertTrue(second_gate_disabled,
+                        "this test no longer describes the bug it guards")
+        self.assertFalse(self.gate_disabled(roles, stored, years))
 
     def test_the_author_profile_was_never_blocked(self):
         """

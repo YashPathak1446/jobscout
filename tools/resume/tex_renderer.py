@@ -342,7 +342,14 @@ def from_parsed(parsed) -> dict:
             "location": e.location, "bullets": list(e.bullets),
         } for e in parsed.experiences],
         "projects": [{
-            "name": p.name, "tech": p.tech, "dates": p.dates,
+            # The link, which this omitted. The parser reads it out of the
+            # `\href` and `_projects` writes it back, so the only thing
+            # standing between the two was this dict — and because the round
+            # trip test is what declares the renderer trustworthy, the field
+            # it forgot to carry was the field nothing could check. A test
+            # blind to a value proves the value is preserved exactly as well
+            # as no test at all.
+            "name": p.name, "url": p.url, "tech": p.tech, "dates": p.dates,
             "bullets": list(p.bullets),
         } for p in parsed.projects],
         "skills": dict(parsed.skills.categories or {}),
