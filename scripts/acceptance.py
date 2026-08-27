@@ -52,28 +52,32 @@ sys.path.insert(0, str(ROOT))
 # one — every JD it generates says "entry-level position perfect for new
 # graduates", which is the author's own shape baked into the test data.
 #
-# So corpora are named per fixture. They are run outputs and are gitignored,
-# which is a known gap: this script is meant to run against a deployed
-# instance at the end of Phase 1, and it cannot do that while its inputs live
-# only on one laptop. Logged rather than solved here — solving it is Phase 1.
+# One corpus, committed, covering the shapes the gates need: a years floor, an
+# entry-level exclusion, a clearance line, a non-US location, a remote role,
+# and an ordinary mid-level posting where nothing should fire. Built by
+# `scripts/build_acceptance_corpus.py`, which explains why it is written
+# rather than scraped or mocked.
+#
+# It replaces two gitignored run outputs. Those worked on one laptop and could
+# never have verified a deployed instance, which is what this run has to do at
+# the end of Phase 1.
+
+CORPUS = ROOT / "tests" / "fixtures" / "acceptance_jobs.json"
 
 FIXTURES = {
     "priya": {
         "resume": ROOT / "data" / "master_resumes" / "priya_raghunathan.pdf",
         "profile": "priya_raghunathan",
-        "corpus": ROOT / "outputs" / "2026-08-26" / "enriched_jobs.json",
         "why": "six years, Boston, imported from a PDF this repo did not make",
     },
     "two_degrees": {
         "resume": ROOT / "tests" / "fixtures" / "resume_two_degrees_non_us.txt",
         "profile": "acceptance_two_degrees",
-        "corpus": ROOT / "outputs" / "2026-08-26" / "enriched_jobs.json",
         "why": "a masters in progress, a bachelors abroad, Research/Projects",
     },
     "glued_runs": {
         "resume": ROOT / "tests" / "fixtures" / "resume_glued_runs_six_roles.txt",
         "profile": "acceptance_glued_runs",
-        "corpus": ROOT / "baselines" / "2026-08-23-post-r27" / "enriched_jobs.json",
         "why": "six roles, an expected graduation, bold runs with no spaces",
     },
 }
@@ -290,7 +294,7 @@ def one(name, spec, rung, keep):
             check(spec["profile"] in list_available_profiles(),
                   f"profile '{spec['profile']}' does not exist and this "
                   f"script does not own it")
-            state = run_pipeline(spec["profile"], spec["corpus"], rung,
+            state = run_pipeline(spec["profile"], CORPUS, rung,
                                  workspace / "outputs")
         count, review, best = assert_the_frozen_list(state, rung)
         # The quarantined count is always stated, never implied by silence.

@@ -164,6 +164,25 @@ anything read through a shell, a log line, or a screenshot — R74's own note
 says a screenshot is not a measurement, and this is that rule pointed at
 encodings.
 
+**And it applies hardest to the tools that do the measuring (R81).** The
+acceptance run crashed while printing its first real finding: a validation
+error quoting a bullet contained `→`, the console was cp1252, and the report
+died on the thing it existed to report. **A measurement tool that fails on
+some findings is worse than no tool**, because it does not fail uniformly —
+it reports success on exactly the cases it cannot render, and those are
+correlated with the interesting ones. Two other page-count reads and one log
+parse in this repo have had the same shape. Any harness that prints what it
+found needs the encoding guard `agents/orchestrator._console_print` already
+carries.
+
+**The other half: check the instrument before trusting the reading.** R81
+recorded Ollama at 0 of 3, and re-scoring the same output against a corrected
+bar made it 1 of 3 — no change to the model or the code. The first number was
+an artifact of the measuring bar, and had it been accepted it would have
+entered the log as fact and survived there the way R44's verdict did for four
+months. **When a result is bad enough to close a direction, re-derive it once
+before writing it down.**
+
 ## The pattern reader never guesses at content
 
 It surfaces what it cannot resolve, for a person or a model to fix. Stated once

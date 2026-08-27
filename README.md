@@ -303,10 +303,19 @@ This is an active project. Current state (August 2026):
 - ✅ Persistent caches (embeddings, scraped JDs, LLM responses by prompt hash)
 - ✅ Multi-source discovery (GitHub repos active; Serper/Adzuna wired but inactive)
 - ✅ PDF output via pdflatex (skips cleanly when no LaTeX is installed)
-- ✅ One-page enforcement — resumes that render to 2+ pages are demoted to
-  `needs_review/` rather than shipped
-- 🚧 Working on: format-agnostic resume parsing (PDF/DOCX inputs), profile
-  auto-derivation from the master resume, wider discovery sources
+- ✅ One-page enforcement — resumes that render to 2+ pages, or whose page
+  count cannot be read, are demoted to `needs_review/` rather than shipped
+- ✅ Import from PDF, Word or LaTeX, with every extracted field shown for
+  correction before anything is written
+- ✅ A profile derived from your own resume — keyword vocabulary, component
+  importance and JD triggers, none of it hand-authored
+- ✅ A choosable model backend: `--backend`, `JOBSCOUT_LLM_BACKEND`, a profile
+  field or detection, and every run records which one actually wrote it
+- ✅ `python scripts/acceptance.py` — the fixed checklist this project means
+  by "working": three resumes it did not author, both supported rungs, ending
+  in compiled one-page PDFs
+- 🚧 Working on: a hosted version — accounts, per-user storage, server-side
+  LaTeX. The local CLI stays.
 - 📋 Tracked in `known_questions.md`
 
 ### PDF output
