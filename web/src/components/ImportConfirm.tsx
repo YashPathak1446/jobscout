@@ -58,6 +58,30 @@ export function ImportConfirm({
    * and gave them nowhere to type. Priya Raghunathan walked five screens and
    * a full pipeline from there to a 574-byte file with no work history on it.
    */
+  function setEducation(index: number, field: string, value: string) {
+    setDraft((d) => ({
+      ...d,
+      education: (d.education ?? []).map((row, i) =>
+        i === index ? { ...row, [field]: value } : row,
+      ),
+    }))
+  }
+
+  function addEducation() {
+    setDraft((d) => ({
+      ...d,
+      education: [...(d.education ?? []),
+                  { school: '', location: '', degree: '', dates: '' }],
+    }))
+  }
+
+  function dropEducation(index: number) {
+    setDraft((d) => ({
+      ...d,
+      education: (d.education ?? []).filter((_, i) => i !== index),
+    }))
+  }
+
   function addEntry(section: 'experiences' | 'projects') {
     const blank =
       section === 'experiences'
@@ -156,6 +180,53 @@ export function ImportConfirm({
             ),
           )}
         </div>
+      </section>
+
+      {/* Education was not on this screen at all, which is how a degree went
+          missing without anybody being able to put it back. The pattern
+          reader hands over one entry with whatever it could place, and the
+          four fields here are exactly the four `tex_renderer` writes and the
+          parser reads — no more, no less, so nothing can be typed in that the
+          renderer will drop. */}
+      <section className="space-y-3">
+        <div className="flex items-center gap-3">
+          <h3 className="font-medium">Education</h3>
+          <Button variant="outline" size="sm" onClick={addEducation}>
+            <Plus className="size-4" />
+            Add a school
+          </Button>
+        </div>
+        {(draft.education ?? []).length === 0 && (
+          <p className="text-sm text-muted-foreground">
+            Nothing was read as education.
+          </p>
+        )}
+        {(draft.education ?? []).map((row, index) => (
+          <div key={index} className="flex items-start gap-3 rounded-lg border p-4">
+            <div className="grid flex-1 gap-3 sm:grid-cols-2">
+              {['school', 'degree', 'location', 'dates'].map((field) => (
+                <div key={field} className="space-y-1.5">
+                  <Label htmlFor={`education-${index}-${field}`} className="capitalize">
+                    {field}
+                  </Label>
+                  <Input
+                    id={`education-${index}-${field}`}
+                    value={String(row[field] ?? '')}
+                    onChange={(e) => setEducation(index, field, e.target.value)}
+                  />
+                </div>
+              ))}
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Remove this school"
+              onClick={() => dropEducation(index)}
+            >
+              <Trash2 className="size-4" />
+            </Button>
+          </div>
+        ))}
       </section>
 
       {/* Both sections always render, empty or not. An empty section with an

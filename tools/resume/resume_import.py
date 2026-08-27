@@ -257,6 +257,87 @@ SECTION_HEADINGS = {
 }
 
 
+_MONTH = (r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)"
+          r"[a-z]*\.?\s+")
+_DATE_RANGE = re.compile(
+    rf"((?:{_MONTH})?\d{{4}}\s*[-–—]\s*"
+    rf"(?:(?:{_MONTH})?\d{{4}}|Present|Current))",
+    re.I)
+# At most three capitalised words before the comma, and no hyphen inside.
+# A looser class walks backwards through "Northeastern University - Boston,
+# MA" and claims the whole thing as the location, leaving the school empty —
+# the greedy match is anchored on the state code, so it grows leftwards until
+# it runs out of allowed characters.
+_CITY_STATE = re.compile(
+    r"\b([A-Z][A-Za-z.]*(?:\s+[A-Z][A-Za-z.]*){0,2},\s*[A-Z]{2})\b")
+# Spelled-out qualifications and the abbreviations that cannot be mistaken for
+# something else. Bare "MA" and "BA" are deliberately absent: "Boston, MA" is
+# a state, and reading it as a Master of Arts put an entire university line in
+# the degree field on the first resume this was tried against.
+_DEGREE_WORDS = re.compile(
+    r"\b(bachelor|master|associate|doctorate|doctor of|ph\.?d|"
+    r"b\.?sc\.?|m\.?sc\.?|b\.s\.?|m\.s\.?|b\.a\.?|m\.a\.?|"
+    r"b\.eng|m\.eng|mba|diploma)\b",
+    re.I)
+
+
+def _heuristic_education(lines) -> list:
+    """
+    One education entry with all four fields, from however many lines.
+
+    The floor used to be `[{"school": line} for line in lines[:1]]`, which is
+    two bugs in one expression. It kept the first line only — so "Bachelor of
+    Science in Computer Engineering", sitting on the second line, was
+    **discarded** rather than missing — and it put the whole remaining line
+    into `school`, so the renderer emitted `{Northeastern University - Boston,
+    MA Sep 2014 - May 2018}{}{}{}` and the degree appeared nowhere.
+
+    The four fields are not an arity guess: `tex_renderer._education` writes
+    exactly `{school}{location}{degree}{dates}` and the parser reads exactly
+    those four back, so this returns the shape both ends already agree on.
+
+    Shapes first, vocabulary second. A date range and a "City, ST" can be
+    recognised by their form and are pulled out of **every** line before
+    anything is classified — an earlier version classified a line as the
+    degree and stopped, so a line holding all three kept all three. What
+    remains is a degree if it names a qualification and part of the school
+    name otherwise. Nothing is discarded: unplaced text lands in `school`,
+    where it is visible on the confirmation screen (R33).
+    """
+    lines = [line.strip() for line in (lines or []) if line and line.strip()]
+    if not lines:
+        return []
+
+    entry = {"school": "", "location": "", "degree": "", "dates": ""}
+    school_parts = []
+
+    for line in lines:
+        remaining = line
+        if not entry["dates"]:
+            found = _DATE_RANGE.search(remaining)
+            if found:
+                entry["dates"] = found.group(1).strip()
+                remaining = remaining.replace(found.group(1), " ")
+        if not entry["location"]:
+            found = _CITY_STATE.search(remaining)
+            if found:
+                entry["location"] = found.group(1).strip()
+                remaining = remaining.replace(found.group(1), " ")
+
+        remaining = re.sub(r"\s{2,}", " ", remaining)
+        remaining = re.sub(r"^\s*[-–—|,]\s*|\s*[-–—|,]\s*$",
+                           "", remaining).strip()
+        if not remaining:
+            continue
+        if not entry["degree"] and _DEGREE_WORDS.search(remaining):
+            entry["degree"] = remaining
+        else:
+            school_parts.append(remaining)
+
+    entry["school"] = " ".join(school_parts).strip()
+    return [entry]
+
+
 def heuristic_schema(text: str) -> dict:
     """
     Contact details by pattern, sections by heading. No model.
@@ -286,7 +367,7 @@ def heuristic_schema(text: str) -> dict:
 
     return {
         "contact": contact,
-        "education": [{"school": s} for s in sections.get("education", [])[:1]],
+        "education": _heuristic_education(sections.get("education", [])),
         "experiences": [],
         "projects": [],
         "skills": ({"Skills": ", ".join(sections["skills"])}
