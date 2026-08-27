@@ -297,6 +297,37 @@ _DATE_RANGE = re.compile(
 # it runs out of allowed characters.
 _CITY_STATE = re.compile(
     r"\b([A-Z][A-Za-z.]*(?:\s+[A-Z][A-Za-z.]*){0,2},\s*[A-Z]{2})\b")
+
+# A word with a capital letter buried in it after a lowercase one — the shape
+# PDF extraction leaves when two runs of text touch with no space between
+# them. Real resumes produce `Lakeside UniversityFairview, IL` and
+# `atMeridian Exchangebuilding`.
+#
+# It is a *rejection* rule and never a repair. Splitting on the boundary would
+# also split PostgreSQL, JavaScript, LinkedIn, GitHub and McDonald; the
+# extraction prompt asks the model to repair these because the model can tell
+# the difference and this cannot.
+_GLUED_WORD = re.compile(r"[a-z][A-Z]")
+
+# A lone month and year, which is how an expected graduation is written:
+# "Expected: June 2027", "Anticipated May 2026", "Graduating Dec. 2025". Only
+# consulted when no range was found, so a real range always wins.
+_SINGLE_DATE = re.compile(
+    rf"((?:{_MONTH})\d{{4}})", re.I)
+
+# What a PDF leaves at the head of a bullet once the glyph survives extraction.
+_BULLET_PREFIX = re.compile(r"^\s*[•●▪·\-–—]\s+")
+
+# About where a line of this template reaches the page margin. A line at least
+# this long that is followed by another has almost certainly wrapped, and the
+# two are one line of the resume. Measured: the real bullets that wrap on the
+# resumes in `tests/fixtures` run 100-112 characters.
+_WRAP_WIDTH = 90
+
+# The label in front of a graduation date, left behind once the date itself is
+# lifted out: "... (Major GPA: 4.0/4.0) Expected:" as the degree.
+_DATE_LABEL = re.compile(
+    r"\s*\b(expected|anticipated|graduating|graduation|exp\.?)\s*:?\s*$", re.I)
 # Spelled-out qualifications and the abbreviations that cannot be mistaken for
 # something else. Bare "MA" and "BA" are deliberately absent: "Boston, MA" is
 # a state, and reading it as a Master of Arts put an entire university line in
@@ -342,6 +373,11 @@ def _heuristic_education(lines) -> list:
 
     entries, school_parts = [], []
     entry = {"school": "", "location": "", "degree": "", "dates": ""}
+    # Whether the previous line was a bullet this dropped, and how long it
+    # was. A line that wrapped at the page margin belongs to the line above
+    # it: "...Operating Systems, Machine" / "Learning" is one bullet, and
+    # dropping only the first half left "Learning" behind as a second school.
+    dropped_wrapping = False
 
     def flush():
         """Close the entry being built and start another."""
@@ -353,6 +389,29 @@ def _heuristic_education(lines) -> list:
         school_parts = []
 
     for line in lines:
+        # A bullet under Education is coursework, honours or a thesis line —
+        # content, not one of the four fields. It was being appended to the
+        # school name, so a real resume's school read "• Relevant
+        # Coursework:Deep Learning (Grad), Data Structures and Algorithms,
+        # Operating Systems, Machine Learning".
+        #
+        # Skipped rather than kept, and that is a deliberate loss: the schema
+        # has no coursework field, nothing downstream reads one, and the
+        # generator strips coursework from the rendered resume on purpose.
+        # Carrying it would be a field with no consumer; leaving it where it
+        # was is a school name that is not a school name.
+        if _BULLET_PREFIX.match(line):
+            dropped_wrapping = len(line) >= _WRAP_WIDTH
+            continue
+        if dropped_wrapping:
+            # Only the continuation of a line that reached the margin, and
+            # only immediately after one. A short bullet followed by a second
+            # school must not swallow the school — which is why this is keyed
+            # on the previous line's *length* rather than on "the last line
+            # was a bullet".
+            dropped_wrapping = len(line) >= _WRAP_WIDTH
+            continue
+
         remaining = line
         dates = _DATE_RANGE.search(remaining)
         # A second date range means a second qualification. One entry cannot
@@ -363,14 +422,29 @@ def _heuristic_education(lines) -> list:
         if dates and not entry["dates"]:
             entry["dates"] = dates.group(1).strip()
             remaining = remaining.replace(dates.group(1), " ")
+        elif not entry["dates"]:
+            # No range on this line. An expected graduation is a single month
+            # and year — "Expected: June 2027" — and it was staying inside the
+            # degree string, so the rendered resume showed the date in the
+            # middle of the qualification and nothing in the dates column.
+            single = _SINGLE_DATE.search(remaining)
+            if single:
+                entry["dates"] = single.group(1).strip()
+                remaining = remaining.replace(single.group(1), " ")
 
         if not entry["location"]:
             found = _CITY_STATE.search(remaining)
-            if found:
+            # A candidate containing a glued word is two things touching, not
+            # a place. `Lakeside UniversityFairview, IL` matched whole, so the
+            # location field held the university and the school field held
+            # nothing at all — the greedy match documented in R77 as
+            # "observed, not desired", arriving on a real resume.
+            if found and not _GLUED_WORD.search(found.group(1)):
                 entry["location"] = found.group(1).strip()
                 remaining = remaining.replace(found.group(1), " ")
 
         remaining = re.sub(r"\s{2,}", " ", remaining)
+        remaining = _DATE_LABEL.sub("", remaining)
         remaining = re.sub(r"^\s*[-–—|,]\s*|\s*[-–—|,]\s*$",
                            "", remaining).strip()
         if not remaining:

@@ -1,0 +1,54 @@
+Rohan Deshmukh (they/them)
+413-555-0142 | deshmukhrohan@example.com | www.linkedin.com/in/rohandeshmukh
+Education
+Riverside Institute,Northfield Northfield, MN
+Masters of Science in Computer Science Aug. 2025 – May 2027
+Deccan Institute Bangalore, India
+Bachelor of Technology in Computer Science and Engineering Aug. 2021 – May 2025
+Experience
+AI/ML Intern Jan 2025 – April 2025
+Vertex Technologies Bangalore, India
+• Built Multi Factor Authentication pipeline with behavioral biometrics and device fingerprinting, strengthening
+login security.
+• Developed real-time fraud detection using mouse dynamics, InfluxDB, and Flask, mitigating fraud.
+• Integrated ORB/SIFT for signature verification and React dashboards, improving authentication accuracy.
+Research Project Developer March 2024 – Nov 2024
+Arcline Engineering Bangalore, India
+• Designed XAI-based cost estimation models for aerospace components, enabling interpretable pricing insights.
+• Applied regression and clustering in Python to optimize supply chain workflows, enhancing cost estimation
+accuracy by over 15%.
+• Delivered data driven recommendations to engineering teams, improving decision-making efficiency.
+Business Analyst Intern June 2023 – Aug 2023
+Vertex Technologies Bangalore, India
+• Analyzed requirements and workflows for decentralized crowdfunding platform, completing milestones ahead of
+schedule.
+• Created wireframes, documentation, and process flows, streamlining dev-business collaboration.
+Research/Projects
+T railSpecies Sep 2025 – Dec 2025
+• Developed a full-stack, ecology-focused outdoor exploration web application using Next.js, React, and Supabase to
+provide hikers with local wildlife data and species sightings on specific trails.
+Integrative Prediction of Post-Stroke V ascular Events:A Two Stage ML Approach Jan 2025 – Aug 2025
+• Developed a two-stage machine learning framework using GANs for data augmentation and SHAP/LIME to
+integrate clinical biomarkers with platelet function data for interpretable post-stroke vascular event prediction.
+Cost Estimation in Aerospace Parts Manufacturing Jan 2024 – Dec 2024
+• Developed a Machine Learning and XAI based cost estimation tool for aerospace manufacturing, enhancing
+accuracy by analyzing historical data and adapting to current market fluctuations and project-specific
+requirements.
+Y outube Viralomics May 2024 – Dec 2024
+• Developed a robust ”viralomics” framework to quantify YouTube video virality, achieving an R ² of 0.998 and MSE
+of 3.1908 × 10 through advanced statistical analysis and feature optimization.
+Publications
+• Explainable AI: A Retrieval-Augmented Generation Based Framework for Model Interpretability , ICAART
+2025,Porto,Portugal
+• YouTube Viralomics: A Scoring Framework by Analyzing Engagement Metrics in the Indian Context , IEEE
+ICDDS 2024,Bangalore,India
+Technical Skills
+Languages: Python, JavaScript, C/C++, SQL (Postgres), HTML/CSS, R
+F rameworks: React, Node.js, Flask, FastAPI
+Developer T ools: Git, Docker, VS Code, Visual Studio, PyCharm
+Libraries: NumPy, pandas, Matplotlib, PyTorch
+
+LINKS FOUND IN THIS DOCUMENT:
+https://www.linkedin.com/in/rohandeshmukh/?trk=public-profile-join-page
+https://www.example.org/papers/2025/000000.pdf
+https://example.org/document/0000000

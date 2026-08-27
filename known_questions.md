@@ -6840,10 +6840,127 @@ code first: 13 of 19 fail there.
   T ools`, `T railSpecies`. The extraction prompt already tells the *model* to
   repair these and names `"W ebApp"` as an example. The floor cannot, so this
   is another defect that exists only for the tier without a key.
-* **Mojibake.** En-dashes, `R²` and `×10` arrive as `�` from this
-  particular PDF, past everything `_tidy` knows about.
+* ~~**Mojibake.**~~ **Withdrawn, and it was never true.** Those characters
+  arrive as correct code points — U+2013, U+00B2, U+00D7 — and the `�`
+  was a console that could not print them. `_tidy` had nothing to answer for.
+  A measurement taken through a terminal is a measurement of the terminal;
+  `test_the_characters_are_unicode_and_not_damaged` now asserts the real
+  encoding so the claim cannot come back.
+
+  What is real in the same area: the `•` glyph survives extraction and was
+  reaching resume fields, which R78 fixes for Education.
 * **A standalone `Research` heading** would not be recognised, because
   "research" had to become filler for `Research/Projects` to work.
+
+---
+
+## R78. Two real resumes, kept — and the fourth shape that tested the rule
+
+**Decision:** (2026-08-26) Both real resumes are permanent fixtures, stored
+anonymized as extracted text under `tests/fixtures/`. A fourth resume was run
+to find out whether R77's heading rule generalised or had been fitted to the
+resume that produced it. It generalised, and Education produced three more
+defects.
+
+### The fixtures, and why text rather than PDF
+
+    tests/fixtures/resume_two_degrees_non_us.txt
+    tests/fixtures/resume_glued_runs_six_roles.txt
+
+Both were written by other people for their own job searches. Names, phone
+numbers, emails, links, employers and schools are replaced; **every structural
+artifact is kept exactly** — the glue, the `•` glyphs, the en dashes, the
+margin wraps, the `|` separators, the expected-graduation date with no range.
+What makes them valuable is the shape, and the shape is not personal data.
+
+Storing the PDFs would have meant committing two strangers' contact details to
+a public repository. `test_no_real_contact_details_survive_anonymisation` holds
+that, and `test_the_extraction_artifacts_are_preserved` holds the other half —
+a fixture tidied into cleanliness is a fixture that has stopped testing
+anything.
+
+This also replaces the inline fixture R77's tests used, which was **written
+here from the real one** and therefore had the same defect as Priya: it agreed
+with its author. The tests now read the artifacts themselves.
+
+### The rule generalised
+
+The fourth resume — six roles, an American university, a wholly different
+layout — split into exactly four sections with none merged, all six employers
+in Experience, three skill categories intact. Including `Programming
+Languages:`, which is why `"language"` had to come out of `OTHER_HEADINGS` in
+R77: it is a category label far more often than a section.
+
+### Three more ways a school stopped being one
+
+All in Education, all from the same resume, and all invisible on the two
+resumes that came before it.
+
+**A coursework bullet became the school name.** `• Relevant Coursework:Deep
+Learning (Grad), Data Structures and Algorithms, Operating Systems, Machine
+Learning` was appended to `school`. Bullets under Education are content, not
+one of the four fields. They are now skipped — a deliberate loss, and worth
+stating as one: the schema has no coursework field, nothing downstream reads
+one, and the generator strips coursework from the rendered resume on purpose.
+Carrying it would be a field with no consumer. Leaving it where it was was a
+school name that is not a school name.
+
+**Its margin-wrapped continuation became a second school called "Learning".**
+Dropping a bullet that reached the page margin without dropping the line under
+it leaves half a sentence behind, and the flush-on-conflict rule from R77 then
+made it an entry. Keyed on the previous line's **length** rather than on "the
+last line was a bullet", so a short bullet followed by a second school does
+not swallow the school.
+
+**`Lakeside UniversityFairview, IL` matched the city/state pattern whole**, so
+the location field held the university and the school field held nothing at
+all. A candidate containing a glued word — a capital buried after a lowercase,
+which is what PDF extraction leaves when two runs of text touch — is two
+things touching, not a place. **Rejected, never repaired:** splitting on that
+same boundary splits PostgreSQL, JavaScript, LinkedIn and McDonald. The
+extraction prompt asks the *model* to repair these because the model can tell
+the difference and this cannot.
+
+And one that is not a school: **`Expected: June 2027` is a date.** `_DATE_RANGE`
+wants a range, so an expected graduation stayed inside the degree string and
+the dates column rendered empty. A lone month-and-year is now read when no
+range is present — a range always wins — and the label in front of it is
+stripped.
+
+### A correction to R77
+
+R77 recorded mojibake: "en-dashes, `R²` and `×10` arrive as `�`". **That was
+never true.** They arrive as correct code points; the replacement characters
+were a console that could not print them. The entry is struck through and
+`test_the_characters_are_unicode_and_not_damaged` now asserts the real
+encoding.
+
+A measurement taken through a terminal is a measurement of the terminal. The
+`•` glyph *is* real, survives extraction, and was reaching resume fields —
+which is the defect above.
+
+### Verified
+
+966 tests, three baselines. All three resumes parse sensibly and Priya is
+unchanged: one entry, right degree, right dates.
+
+### Still deferred, and now one piece of work rather than two
+
+`Bristol, United Kingdom` is not recognised as a location, and
+`Lakeside University Fairview, IL` with no separator gives up the school name
+to the location field — seen on two of the three real resumes now. Neither is
+a regex tweak. The shortest match is not the answer either: it turns "San
+Francisco, CA" into "Francisco, CA" and "Salt Lake City, UT" into "City, UT".
+Telling a city from a university, and a country from a state, both want a
+place vocabulary. `test_without_a_separator_the_school_name_still_leaks`
+records the behaviour so the eventual fix has something to change.
+
+**Also still free-tier-only:** the kerning splits. `T railSpecies` is a project
+*name*, and `F rameworks` and `Developer T ools` are skill *category labels* —
+both print. The extraction prompt already tells the model to repair these and
+names `"W ebApp"` as its example, so this is one more defect that exists only
+for the tier without a key. Which is the argument for Ollama, made from the
+data rather than from the roadmap.
 
 ---
 
