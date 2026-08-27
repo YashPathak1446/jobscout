@@ -1167,6 +1167,26 @@ class JobScoutOrchestrator:
 
         self.state['generation_results'] = results
 
+        # What this run actually used, written into the run rather than said
+        # once to a terminal. `configured` is the rung `detect()` chose;
+        # `used` is what wrote each resume, and the two differ whenever a
+        # model was asked and did not answer.
+        #
+        # This exists because two passes over the same profile were compared
+        # against each other and one of them was not the rung it was labelled
+        # with — `detect()` prefers a local Ollama over nothing, so "no key"
+        # is not "no model" on a machine where Ollama is installed. A run that
+        # does not record its own rung cannot be compared with another later.
+        used = {}
+        for record in results:
+            used[record.get("rung") or "unknown"] = (
+                used.get(record.get("rung") or "unknown", 0) + 1)
+        self.state['backend'] = {
+            'configured': getattr(agent, 'llm_backend', 'unknown'),
+            'used': used,
+        }
+        logger.info(f"✍️  Rungs used: {used or 'none — no resumes written'}")
+
         self._store_resumes(results)
 
         valid = sum(1 for r in results if r.get('status') == 'valid')
@@ -1310,7 +1330,19 @@ class JobScoutOrchestrator:
             f.write(f"**Profile:** {self.profile.personal_info.name}\n")
             f.write(f"**Date:** {self.state['timestamp']}\n")
             f.write(f"**Email:** {self.profile.personal_info.email}\n\n")
-            
+
+            # Which rung wrote the bullets, at the top, where somebody
+            # comparing two runs will see it before reading either. A pass
+            # that does not say this cannot be compared with another pass.
+            backend = self.state.get('backend') or {}
+            if backend:
+                used = backend.get('used') or {}
+                f.write(f"**Bullets written by:** "
+                        + (", ".join(f"{rung} ({n})"
+                                     for rung, n in sorted(used.items()))
+                           or "nothing — no resumes were written")
+                        + f"  ·  backend selected: `{backend.get('configured')}`\n\n")
+
             f.write("---\n\n")
             
             # Discovery summary

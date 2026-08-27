@@ -101,6 +101,42 @@ they are strangers' resumes and this repository is public. Keep at least one
 fixture nobody here authored, and do not tidy it — a fixture cleaned up is a
 fixture that has stopped testing anything.
 
+The same trap catches a fixture *derived* from a real one. R77's tests used
+text written here from the real resume, so the thing verifying the heading
+rule was authored by the person the rule existed to escape. If a fixture is a
+paraphrase, it agrees with you too.
+
+## A measurement taken through a terminal is a measurement of the terminal
+
+R77 recorded a data defect that did not exist: en dashes, `²` and `×` "arriving
+as `�`" from a PDF. The code points were correct — U+2013, U+00B2, U+00D7
+— and the console could not print them. Left standing, that entry was an
+invitation to write a repair pass for a problem nobody had.
+
+**Before recording a defect in what a byte says, check what is doing the
+saying.** Assert the code point, not the glyph: `assertIn("–", body)`
+passes or fails on the data, and `print()` does not. The same applies to
+anything read through a shell, a log line, or a screenshot — R74's own note
+says a screenshot is not a measurement, and this is that rule pointed at
+encodings.
+
+## The pattern reader never guesses at content
+
+It surfaces what it cannot resolve, for a person or a model to fix. Stated once
+because it has now been decided three times, identically:
+
+- the glued email (`Boston, MApriya@...`) — every rule that trims the prefix
+  also breaks `JSmith@example.com`
+- `A WS` for AWS — repairing spaces inside words invents content
+- `Lakeside UniversityFairview, IL` — rejected as a location, never split,
+  because the same boundary splits PostgreSQL, JavaScript and LinkedIn
+
+What makes this survivable is R33: every field is shown for correction before
+anything is written. The extraction prompt asks the *model* to repair these,
+and it names `"W ebApp"` as its example — the model can tell the difference and
+a regex cannot. So the floor's job is to be honestly wrong in a visible place,
+never quietly right-looking.
+
 So: **build against Priya, not against yourself.** `priya_raghunathan` — six
 years, Boston, Staff Engineer, imported from a PDF this repo did not produce —
 is the default fixture for anything touching profile shape, gates, defaults or

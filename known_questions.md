@@ -6964,6 +6964,75 @@ data rather than from the roadmap.
 
 ---
 
+## R79. A run records which rung wrote it
+
+**Decision:** (2026-08-26) Every result record carries `rung`, the run state
+carries `backend.configured` and `backend.used`, and `summary.md` says it above
+the fold. A cache hit names the model that wrote the text rather than the word
+"cache".
+
+Written before the Ollama work rather than during it, because otherwise the
+first thing that work would do is compare Ollama against a baseline that was
+already Ollama.
+
+### The ambiguity
+
+`llm_backends.detect()` prefers a local Ollama over nothing whenever no Gemini
+key is present. So on a machine where Ollama is installed — this one —
+**"no key" is not "no model"**, and clearing `GOOGLE_API_KEY` to measure the
+free tier measures Ollama instead. It happened: a run in R76 was labelled the
+free tier, was Ollama, and was only caught because the failure did not look
+like a verbatim failure.
+
+The only trace of which rung ran was one log line. Everything durable the run
+produced — `state.json`, `summary.md`, `analysis_results.json`, the `.tex`
+files themselves — was silent about it.
+
+**A run that does not record its own rung cannot be compared with another one
+later.** Every claim about the free tier in this document is a comparison, and
+until now each one rested on somebody remembering what they had configured.
+
+### Read from what happened
+
+Same rule as R76 and the same reason. `self.llm_backend` is what was
+*configured*; both model rungs fall back to `_verbatim_tailor` when the model
+does not answer, so one run can use more than one rung and the setting
+describes neither. `_rung_used` reads `_verbatim` off the payload first,
+because `last_model_used` is per-agent and still holds the previous job's
+model after a fallback.
+
+### "cache" names the storage, not the writer
+
+The first pass after adding the record reported `cache (5)` — no more legible
+than before, because a cache hit is still an answer from a particular model.
+`LLMCache` was already reading the model off the payload to log it and then
+throwing it away; it now keeps it on `last_model`, and the rung reads
+`llama3.1:latest (cached)`. Consumer wired in the same change, per the rule
+about fields that are computed and never read.
+
+The two runs that were previously indistinguishable now read:
+
+    **Bullets written by:** llama3.1:latest (cached) (5)  ·  backend selected: `ollama`
+    **Bullets written by:** verbatim (5)  ·  backend selected: `none`
+
+### The audit
+
+Every `.tex` under `outputs/` was checked against the masters on disk by
+comparing bullets. All model-path except two runs from May, which are
+verbatim. Nothing in the committed history is mislabelled in a way that would
+mislead a later comparison — the mislabelled passes were this session's, in a
+scratch directory, and were corrected when found.
+
+### Still true, and now the next thing to fix
+
+There is no way to *choose* a rung. `LLM_BACKEND = "auto"`, `OLLAMA_BASE_URL`,
+`OLLAMA_API_URL` and `OLLAMA_MODEL` are hardcoded literals in `config.py` with
+no environment override, so measuring the no-model floor on this machine
+requires a wrapper script that reaches in and sets the module attribute. A run
+can now say what it used; it still cannot be told what to use.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

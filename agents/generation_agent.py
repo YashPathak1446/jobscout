@@ -349,6 +349,11 @@ class GenerationAgent:
                     # outcome when you chose it and a thing you would want to
                     # know about when you did not (R47).
                     "degraded": tailored.get("_verbatim_reason"),
+                    # What wrote this resume's bullets, per resume, because
+                    # one run can use more than one rung. `degraded` above
+                    # says *why* a fallback happened and is absent when the
+                    # keyless rung was chosen on purpose; this is always here.
+                    "rung": self._rung_used(tailored),
                     "validation": {
                         "valid": validation.valid,
                         "errors": validation.errors,
@@ -1143,7 +1148,10 @@ Source bullets:
 
         cached = self.llm_cache.get(prompt)
         if cached is not None:
-            self.last_model_used = "cache"
+            # The model that originally wrote it, not the word "cache". A run
+            # has to be able to say which rung produced a resume, and "cache"
+            # names where the text was kept rather than who wrote it.
+            self.last_model_used = f"{self.llm_cache.last_model} (cached)"
             return cached
 
         client = genai.Client(api_key=resolve_api_key(self.api_key))
@@ -1291,6 +1299,31 @@ Source bullets:
             logger.info("   Add a Gemini key, or run Ollama, to have bullets "
                         "rewritten for each job.")
         return choice
+
+    def _rung_used(self, tailored: Dict) -> str:
+        """
+        What actually wrote these bullets, as one word for the record.
+
+        Not `self.llm_backend`, which is what was *configured*. A run set to
+        Ollama produces verbatim resumes whenever the model does not answer,
+        and until this was written down the only trace of that was a warning
+        line in a log nobody keeps.
+
+        It matters beyond tidiness: every "free tier" measurement taken on a
+        machine with Ollama installed was a measurement of Ollama, because
+        `detect()` prefers it over nothing whenever no Gemini key is present.
+        A run that does not record its own rung cannot be compared with
+        another one later, and two of this project's passes have already been
+        mislabelled that way.
+        """
+        if not isinstance(tailored, dict):
+            return "unknown"
+        if tailored.get("_verbatim"):
+            return "verbatim"
+        # `last_model_used` is per-agent, not per-resume, so it still holds
+        # the previous job's model after a fallback. The check above is what
+        # keeps that from being read as this resume's answer.
+        return self.last_model_used or self.llm_backend or "unknown"
 
     def _rendered_lines(self, text: str, kind: str) -> int:
         """
@@ -1527,7 +1560,10 @@ Source bullets:
 
         cached = self.llm_cache.get(prompt)
         if cached is not None:
-            self.last_model_used = "cache"
+            # The model that originally wrote it, not the word "cache". A run
+            # has to be able to say which rung produced a resume, and "cache"
+            # names where the text was kept rather than who wrote it.
+            self.last_model_used = f"{self.llm_cache.last_model} (cached)"
             return self._apply_bullet_fitting(cached)
 
         try:

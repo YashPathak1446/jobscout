@@ -47,6 +47,12 @@ class LLMCache:
 
         self.hits = 0
         self.misses = 0
+        # The model that produced the last cache hit, read back off the
+        # payload. It was already being logged and thrown away, and a run
+        # reporting "cache" as the rung that wrote a resume names the
+        # storage rather than the writer — the exact ambiguity the rung
+        # record exists to remove.
+        self.last_model = ""
 
     def _key(self, prompt: str) -> str:
         seed = f"{self.backend}|{prompt}"
@@ -76,6 +82,7 @@ class LLMCache:
 
         self.hits += 1
         model = payload.get("model", "unknown")
+        self.last_model = model
         logger.info(f"   💾 Cache hit (originally from {model}) — 0 API requests")
         return payload.get("response")
 
