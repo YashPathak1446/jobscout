@@ -226,7 +226,7 @@ def compile_pdf(
 
     pdf_path = tex_path.with_suffix('.pdf')
     log_excerpt = _read_log_excerpt(log_path)
-    pages = _read_page_count(log_path)
+    pages = _read_page_count(log_path, pdf_path)
 
     # Trust the artifact over the exit code: MiKTeX sometimes returns nonzero
     # for warnings it recovered from, and a PDF on disk means it recovered.
@@ -255,20 +255,49 @@ def compile_pdf(
     )
 
 
-def _read_page_count(log_path: Path) -> int:
+def _read_page_count(log_path: Path, pdf_path: Optional[Path] = None) -> int:
     """
-    Page count of the produced PDF, from the log's "Output written" line.
+    Page count of the produced PDF. **Ask the PDF, not the log about the PDF.**
 
-    Returns 0 when it can't be determined.
+    Returns 0 when it genuinely cannot be determined, which callers must treat
+    as *unknown* rather than as zero.
 
-    Whitespace is flattened before matching because pdflatex hard-wraps the
-    log at ~79 columns, which routinely splits "(1 page, 112672 bytes)" in
-    half. Where the break lands depends on the filename length, so the
-    pattern has to tolerate whitespace *inside* the parenthetical too — a
-    long name pushes the wrap to just after the "(", flattening to "( 1 page".
-    Getting this wrong is quiet: pages reads 0 and the one-page gate in
-    generation_agent stops firing for exactly the longest-named resumes.
+    The log was the only source until the acceptance run caught a resume
+    reported as 0 pages that was a perfectly good 1-page PDF on disk. pdflatex
+    hard-wraps its log at ~79 columns and the break had landed **inside the
+    word**:
+
+        Output written on Malik_Osei_Nuro_..._2379aef0.pdf (1 pa
+        ge, 111668 bytes).
+
+    Flattening whitespace turns that into "(1 pa ge," and no pattern looking
+    for `page` matches it. The previous fix tolerated wraps *between* tokens
+    and this one splits a token, so the next filename length would have found
+    a third variant. The log is a rendering of the fact; the PDF is the fact.
+
+    Same rule as asserting a code point rather than a printed glyph: measure
+    the artifact, not something's description of it. The log parse stays as a
+    fallback for the case where the PDF cannot be opened at all.
     """
+    if pdf_path is not None and Path(pdf_path).exists():
+        try:
+            from pypdf import PdfReader
+
+            # pypdf logs "EOF marker not found" and similar at warning level
+            # for files it can still read. This function is *allowed* to be
+            # handed something unreadable — that is what the fallback below is
+            # for — so its complaints are not the caller's problem and would
+            # otherwise print on every successful compile.
+            noise = logging.getLogger("pypdf")
+            was = noise.level
+            noise.setLevel(logging.ERROR)
+            try:
+                return len(PdfReader(str(pdf_path)).pages)
+            finally:
+                noise.setLevel(was)
+        except Exception:      # encrypted, truncated, pypdf missing
+            pass
+
     if not log_path.exists():
         return 0
 

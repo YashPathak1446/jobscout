@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.generation.pdf_builder import (  # noqa: E402
+    _read_page_count,
     compile_pdf,
     find_pdflatex,
 )
@@ -178,6 +179,90 @@ class TestCompilePdf(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestThePageCountComesFromThePdf(unittest.TestCase):
+    r"""
+    Ask the PDF, not the log about the PDF.
+
+    Caught by the first run of `scripts/acceptance.py`: a resume reported as
+    **0 pages** that was a perfectly good one-page PDF sitting on disk.
+    pdflatex hard-wraps its log at ~79 columns and the break had landed inside
+    the word itself —
+
+        Output written on Malik_Osei_Nuro_..._2379aef0.pdf (1 pa
+        ge, 111668 bytes).
+
+    — so flattening whitespace produced `(1 pa ge,` and nothing looking for
+    `page` could match. An earlier fix had already taught the pattern to
+    tolerate wraps *between* tokens; this one splits a token, and the next
+    filename length would have produced a third variant. The log is a
+    rendering of the fact and the PDF is the fact.
+
+    It mattered because `page_count` feeds the one-page gate, and that gate
+    asks `> 1` — so an uncountable resume passed as fine. A two-page resume
+    with an unlucky filename length would have shipped.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _log(self, body):
+        path = self.tmp / "resume.log"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def _pdf(self, pages):
+        """A real PDF, because the point is that the artifact is consulted."""
+        from pypdf import PdfWriter
+
+        path = self.tmp / "resume.pdf"
+        writer = PdfWriter()
+        for _ in range(pages):
+            writer.add_blank_page(width=612, height=792)
+        with open(path, "wb") as handle:
+            writer.write(handle)
+        return path
+
+    def test_a_wrap_inside_the_word_page_no_longer_hides_the_count(self):
+        """The exact log that shipped a 0."""
+        log = self._log(
+            "Output written on Malik_Osei_Nuro_Software_Engineer_Autonomy"
+            "_2379aef0.pdf (1 pa\nge, 111668 bytes).\nPDF statistics:\n")
+        self.assertEqual(_read_page_count(log, self._pdf(1)), 1)
+
+    def test_the_log_is_not_consulted_when_the_pdf_can_be_read(self):
+        """A log claiming three pages loses to a PDF that has two."""
+        log = self._log("Output written on resume.pdf (3 pages, 9 bytes).\n")
+        self.assertEqual(_read_page_count(log, self._pdf(2)), 2)
+
+    def test_a_two_page_resume_is_still_reported_as_two(self):
+        """The gate this feeds exists to catch exactly this."""
+        self.assertEqual(_read_page_count(self._log(""), self._pdf(2)), 2)
+
+    def test_the_log_still_answers_when_there_is_no_pdf(self):
+        """The fallback, for a compile that produced a log and nothing else."""
+        log = self._log("Output written on resume.pdf (1 page, 5 bytes).\n")
+        self.assertEqual(_read_page_count(log, self.tmp / "missing.pdf"), 1)
+
+    def test_an_unreadable_pdf_falls_back_rather_than_raising(self):
+        broken = self.tmp / "broken.pdf"
+        broken.write_bytes(b"not a pdf at all")
+        log = self._log("Output written on resume.pdf (1 page, 5 bytes).\n")
+        self.assertEqual(_read_page_count(log, broken), 1)
+
+    def test_nothing_to_read_is_zero_which_means_unknown(self):
+        """
+        Zero is the *unknown* answer, not a page count. The caller in
+        `generation_agent` now demotes on it rather than reading it as "fits".
+        """
+        self.assertEqual(
+            _read_page_count(self.tmp / "missing.log", self.tmp / "missing.pdf"),
+            0)
 
 
 class TestVerbatimLatexIsNotDoubleEscaped(unittest.TestCase):

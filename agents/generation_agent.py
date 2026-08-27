@@ -334,7 +334,31 @@ class GenerationAgent:
                 # Page count is the one quality gate that can't be checked
                 # before rendering. A 2-page new-grad resume is a real defect,
                 # and content validation has no way to see it.
-                if status == "valid" and page_count > 1:
+                #
+                # `page_count == 0` after a PDF was written means **could not
+                # be counted**, not "zero pages" — the tenth costume of the
+                # invariant, and this gate read it as fine because 0 is not
+                # greater than 1. It happened: a hard wrap inside the word
+                # "page" in pdflatex's log made a real one-page resume report
+                # 0, and had that resume been two pages it would have shipped.
+                # Counting now reads the PDF itself, so this is the guard for
+                # when even that fails.
+                if status == "valid" and pdf_path and not page_count:
+                    logger.warning(
+                        "   ⚠️  Wrote a PDF whose page count could not be "
+                        "read — demoting to needs_review rather than assuming "
+                        "it fits"
+                    )
+                    status = "needs_review"
+                    validation.add_error(
+                        "The PDF was written but its page count could not be "
+                        "determined, so the one-page rule could not be "
+                        "checked. Open it and look."
+                    )
+                    latex_path, pdf_path = self._demote_to_review(
+                        latex_path, pdf_path, review_path
+                    )
+                elif status == "valid" and page_count > 1:
                     logger.warning(
                         f"   ⚠️  Renders to {page_count} pages, expected 1 — "
                         f"demoting to needs_review"
