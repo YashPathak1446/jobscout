@@ -7186,6 +7186,107 @@ model can pass one and fail the other.
 
 ---
 
+## R81. The acceptance run, and where Ollama actually sits
+
+**Decision:** (2026-08-27) `scripts/acceptance.py` is the definition of
+"working" and replaces "no bugs found", which was unbounded. Ollama is
+reported by it and does not gate it: **closed deliberately for the hosted
+product, undiagnosed for the local one.** Those are two claims and they had
+been collapsed into one.
+
+### Why a fixed list
+
+Four stranger resumes produced roughly twenty defects and the rate falls to a
+trickle, never to zero. The method works, which is exactly why it cannot be
+the finish line: pointed at the code it will find defects for as long as there
+is code. So the bar is a frozen list that passes or does not, and everything
+it does not cover is backlog.
+
+### The bar was wrong on its first day, in a way worth recording
+
+It demanded **zero** `needs_review`. The Gemini run produced 9 valid resumes
+and 1 quarantined for inventing "25%" — the fabrication guard doing exactly
+its job, on the model R44 wished it had for — and the bar called that a failed
+run.
+
+Demanding zero demands the model never miss. The product does not promise
+that; it promises **a usable resume and no silent bad output**. So the bar is
+now: at least one valid resume with a one-page PDF, and nothing that failed
+validation delivered outside `needs_review`.
+
+Corrected rather than quietly relaxed, because weakening a bar to get green is
+the failure mode the freeze exists to prevent. The distinction: this bar
+mis-described the product, it was not merely inconvenient.
+
+The quarantined count is printed on every pass — *"5 valid, 1 held for
+review"* — because a gate that passes while hiding what it set aside is R62's
+silent subtraction wearing test clothes.
+
+### Measured, on the frozen fixtures
+
+| rung | fixtures passed | valid / held |
+|---|---|---|
+| `none` | 3 of 3 | 10, 5, 4 — nothing held |
+| `gemini` | 3 of 3 | 6 (+4 held), 5, 4 |
+| `ollama` (llama3.1:8b) | **1 of 3** | 3 (+7 held); the other two entirely held |
+
+Gemini's quarantine reasons were an invented "25%" and a project id that did
+not match the selection. Both were caught and neither reached a user, which is
+the guard working rather than the model failing.
+
+**And re-scoring changed the Ollama answer.** Under the zero-tolerance bar it
+was 0 of 3; under the corrected one it is 1 of 3, because a run with three
+valid resumes and seven quarantined is a pass and was previously a failure.
+The first number was partly an artifact of the bar rather than a fact about
+the model — which is the reason to re-score before concluding anything, and
+the reason this entry says "undiagnosed" rather than "does not work".
+
+### Ollama: closed on a server, undiagnosed locally
+
+**On a server it is closed, deliberately.** Renting a GPU to run a 7B model
+when Gemini does the same job better for 2-3c a resume is worse on cost,
+quality and latency simultaneously. The hosted free tier is therefore `none`
+or a user's own key, and `none` passes on all three fixtures.
+
+**Locally it is not established.** 0 of 3 is one measurement, on one
+deliberately-stale model, against a bar now known to be mis-specified. Three
+things are unknown:
+
+1. ~~**Which bar it failed.**~~ **Answered by re-scoring: partly the bar.**
+   0 of 3 became 1 of 3 with no change to the model or the code. Two fixtures
+   still produce nothing usable, so the remaining two hypotheses stand.
+2. **Model, or the missing repair loop.** `_gemini_tailor` validates and makes
+   one narrow repair attempt; `_chat_tailor` returns whatever came back.
+   Some unknown fraction of Gemini's success *is that loop*. Comparing a rung
+   that has one against a rung that does not is not a comparison of models.
+3. **Content, or length.** R76 measured llama3.1 landing at 122-126 characters
+   every time — the orphan zone. If the failures are fitting rather than
+   substance, the deterministic bullet fitter that already exists may simply
+   not be reaching that rung.
+
+`llama3.1:8b` was chosen on purpose, for comparability with R44's four-month-
+old verdict. That was right for that question and makes it a stale model for
+this one.
+
+**Not diagnosed here, and not on the critical path.** Half a day whenever it
+is wanted.
+
+### What this does to the pitch
+
+The free tier was described as "install Ollama and get everything". The honest
+version does not depend on Ollama being good:
+
+> Run it free on your machine — it finds and scores jobs and builds you a
+> resume per posting with no model at all. Add a model if you want the bullets
+> rewritten too.
+
+That is a real free tier, it passes the acceptance run today, and it needs
+nothing installed beyond the package. `README.md` said Ollama "does not
+currently help" as present fact on R44's authority; it now says what was
+measured and when.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

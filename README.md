@@ -96,17 +96,25 @@ cp .env.example .env
 Get a Gemini API key at [aistudio.google.com](https://aistudio.google.com).
 Free tier is sufficient for development.
 
-**Optional.** Discovery, scoring and component selection need no key at all;
-without one, bullets are used exactly as you wrote them rather than rewritten
-per posting. A local [Ollama](https://ollama.com) is the free middle rung, and
-it has now been measured: on **llama3.1:8b it does not currently help**. Its
-rewrites failed to parse, so every resume fell back to your own bullets — the
-same output as running with no model at all, reached the long way round. Worse,
-the replies it did produce invented metrics, dates and technologies that were
-never on the resume, so the parse failure was the only thing keeping fabricated
-content out of the output. See R44 in `known_questions.md`.
+**Optional — and the free tier does not depend on it.** Discovery, scoring,
+component selection, the one-page layout and PDF compilation all need no key
+and no model at all. Without one, your own bullets are used exactly as you
+wrote them rather than rewritten per posting. That is a complete, working
+product: it finds and scores jobs and builds you a tailored resume for each
+one. A model changes the bullets, not whether you get a resume.
 
-Gemini and the no-model floor are the two rungs with measurements behind them.
+Both of those rungs are checked by `python scripts/acceptance.py`, which is
+what this project means by "working".
+
+A local [Ollama](https://ollama.com) sits between them and is **not currently
+recommended**. Measured 2026-08-27 on `llama3.1:8b`: it failed the acceptance
+run on all three fixture resumes, returning the wrong number of bullets per
+component and landing in the orphan length zone. That is one measurement on
+one deliberately-stale model — chosen for comparability with a four-month-old
+result — and three plausible causes are undiagnosed, including that the Ollama
+path lacks the validate-and-retry loop the Gemini path has. See R81 in
+`known_questions.md`. If you have a key, use Gemini; if you do not, the
+no-model floor is the tested option.
 
 ### 3. Set up your profile
 

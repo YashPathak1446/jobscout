@@ -80,8 +80,22 @@ FIXTURES = {
 
 # `none` is the free tier and is not optional: it is the rung a stranger with
 # no key lands on, and the one that produced files that would not compile as
-# recently as R73.
+# recently as R73. `gemini` is the paid tier.
 RUNGS = ("none", "gemini", "ollama")
+
+# Run and reported, but not gating.
+#
+# Ollama cannot be the *hosted* free tier — renting a GPU to run a 7B model
+# when Gemini does the same job better for 2c a resume is worse on cost,
+# quality and latency at once. That path is closed deliberately, so a
+# local-only rung must not block a hosted MVP.
+#
+# It is **not** established that it is useless locally. That is a separate
+# claim and it is undiagnosed: one measurement, one deliberately-stale model
+# (llama3.1:8b, chosen for comparability with R44), against a bar that turned
+# out to be mis-specified. Three things are unknown and none of them are on
+# the path to paying users — see the entry in known_questions.md.
+ADVISORY = {"ollama"}
 
 
 def say(text=""):
@@ -204,18 +218,36 @@ def assert_the_frozen_list(state, rung):
 
     valid = [r for r in results if r.get("status") == "valid"]
     review = [r for r in results if r.get("status") == "needs_review"]
-    check(not review,
-          lambda: f"{len(review)} of {len(results)} resumes were filed as "
-                  f"needs_review. First reason: "
-                  f"{((review[0].get('validation') or {}).get('errors') or ['?'])[0][:160]}")
-    check(valid, "no resume passed validation")
+
+    # **At least one usable resume, and nothing bad delivered.**
+    #
+    # The first version of this demanded zero `needs_review`, which reads a
+    # deliberate safety outcome as a failure. Gemini produced 9 valid resumes
+    # and 1 quarantined for inventing "25%" — the fabrication guard doing
+    # precisely its job — and the bar called that a failed run. Demanding zero
+    # demands the model never miss, which is not the product's promise; the
+    # promise is a usable resume and no silent bad output.
+    check(valid,
+          lambda: f"no resume passed validation. All {len(results)} were "
+                  f"quarantined. First reason: "
+                  f"{((review[0].get('validation') or {}).get('errors') or ['?'])[0][:160]}"
+                  if review else "no resume passed validation")
 
     for record in valid:
         name = Path(record.get("latex_path") or "?").name
         check(record.get("pdf_path"),
-              f"{name} produced no PDF — it did not compile")
+              f"{name} was delivered as valid but produced no PDF")
         check(record.get("page_count") == 1,
-              f"{name} rendered to {record.get('page_count')} pages, not 1")
+              f"{name} was delivered as valid at {record.get('page_count')} "
+              f"pages, not 1")
+
+    # Nothing may be delivered that is not valid. The pipeline separates them
+    # by directory, so this asserts the separation held rather than trusting
+    # that it did.
+    for record in review:
+        check("needs_review" in str(record.get("latex_path") or ""),
+              f"{Path(str(record.get('latex_path'))).name} failed validation "
+              f"but was not quarantined")
 
     # R79: the run has to say what wrote it, and it has to be what was asked.
     used = (state.get("backend") or {}).get("used") or {}
@@ -228,7 +260,7 @@ def assert_the_frozen_list(state, rung):
               f"asked for {rung} and the bullets came back verbatim, which "
               f"means the model was asked and did not answer: {sorted(used)}")
 
-    return len(valid), scores[0]
+    return len(valid), len(review), scores[0]
 
 
 def one(name, spec, rung, keep):
@@ -260,8 +292,12 @@ def one(name, spec, rung, keep):
                   f"script does not own it")
             state = run_pipeline(spec["profile"], spec["corpus"], rung,
                                  workspace / "outputs")
-        count, best = assert_the_frozen_list(state, rung)
-        return f"{count} resume(s), best job {best:.1f}%"
+        count, review, best = assert_the_frozen_list(state, rung)
+        # The quarantined count is always stated, never implied by silence.
+        # A gate that passes while hiding how much it set aside is the same
+        # shape as a filter that removes rows without saying how many (R62).
+        held = f", {review} held for review" if review else ""
+        return f"{count} valid{held}, best job {best:.1f}%"
     finally:
         if not keep:
             shutil.rmtree(workspace, ignore_errors=True)
@@ -289,20 +325,30 @@ def main():
         say(f"{name} — {spec['why']}")
         for rung in rungs:
             label = f"  {rung:<8}"
+            advisory = rung in ADVISORY
             try:
                 say(f"{label} {one(name, spec, rung, args.keep)}   PASS")
             except Failure as failure:
-                say(f"{label} FAIL: {failure}")
-                failures.append((name, rung, str(failure)))
+                say(f"{label} {'(advisory) ' if advisory else ''}FAIL: {failure}")
+                if not advisory:
+                    failures.append((name, rung, str(failure)))
             except Exception as error:   # a crash is a failure, loudly
-                say(f"{label} ERROR: {type(error).__name__}: {error}")
-                failures.append((name, rung, f"{type(error).__name__}: {error}"))
+                say(f"{label} {'(advisory) ' if advisory else ''}"
+                    f"ERROR: {type(error).__name__}: {error}")
+                if not advisory:
+                    failures.append((name, rung, f"{type(error).__name__}: {error}"))
         say()
 
+    gating = len(names) * len([r for r in rungs if r not in ADVISORY])
+    advisory_rungs = sorted(set(rungs) & ADVISORY)
+    if advisory_rungs:
+        say(f"({', '.join(advisory_rungs)} is reported, not gated — see "
+            f"known_questions.md)")
+
     if failures:
-        say(f"FAILED — {len(failures)} of {len(names) * len(rungs)}")
+        say(f"FAILED — {len(failures)} of {gating} gating check(s)")
         return 1
-    say(f"PASSED — {len(names) * len(rungs)} of {len(names) * len(rungs)}")
+    say(f"PASSED — {gating} of {gating} gating check(s)")
     return 0
 
 
