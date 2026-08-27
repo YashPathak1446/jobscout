@@ -39,18 +39,24 @@ from tools.resume.resume_parser import ResumeParser  # noqa: E402
 # Two experiences that share a job title. This is the shape that turns a
 # transposition into data loss rather than a cosmetic swap: filed under the
 # title, both become the same component.
+#
+# Listed newest first, which is the order both renderers now put them in.
+# These tests are about which field lands in which slot, so the fixture is
+# written in rendered order to keep the assertions positional and readable;
+# `test_experiences_are_reverse_chronological` is where the ordering itself
+# is held.
 TWO_INTERNSHIPS = [
-    {
-        "id": "exp_acme", "company": "Acme Corp",
-        "title": "Software Engineer Intern",
-        "dates": "Jun 2024 - Aug 2024", "location": "Remote",
-        "bullets": ["Built a REST API in Python handling 10k requests/day"],
-    },
     {
         "id": "exp_globex", "company": "Globex",
         "title": "Software Engineer Intern",
         "dates": "Jun 2025 - Aug 2025", "location": "Austin, TX",
         "bullets": ["Cut p95 latency by 40% with caching and pooling"],
+    },
+    {
+        "id": "exp_acme", "company": "Acme Corp",
+        "title": "Software Engineer Intern",
+        "dates": "Jun 2024 - Aug 2024", "location": "Remote",
+        "bullets": ["Built a REST API in Python handling 10k requests/day"],
     },
 ]
 
@@ -99,14 +105,14 @@ class TestBothRenderersMeanTheSameThing(unittest.TestCase):
         parsed = self._generated(TWO_INTERNSHIPS)
         companies = [e.company for e in parsed.experiences]
         titles = [e.title for e in parsed.experiences]
-        self.assertEqual(companies, ["Acme Corp", "Globex"])
+        self.assertEqual(companies, ["Globex", "Acme Corp"])
         self.assertEqual(titles, ["Software Engineer Intern"] * 2)
 
     def test_the_import_renderer_does_not_transpose(self):
         """The path where this was already fixed, held in place."""
         parsed = self._imported(TWO_INTERNSHIPS)
         self.assertEqual([e.company for e in parsed.experiences],
-                         ["Acme Corp", "Globex"])
+                         ["Globex", "Acme Corp"])
 
     def test_both_renderers_round_trip_to_the_same_fields(self):
         """
@@ -149,15 +155,18 @@ class TestNoThirdRendererAppearsUnnoticed(unittest.TestCase):
     were two; a third would diverge the same way. This fails if one appears.
     """
 
-    # Every module that encodes the argument order — two writers and the one
-    # reader they both have to agree with. The parser belongs here because it
-    # is the third party to the same contract: it decides which argument is
-    # the employer, and it is what turned the generation renderer's
-    # transposition from a style choice into a lost experience.
+    # Every module that encodes the argument order. There is now **one**
+    # writer and one reader, which is the outcome this class was arguing for:
+    # `agents/generation_agent.py` used to assemble its own sections and has
+    # been merged into `tex_renderer` after the pair produced four bugs — the
+    # transposition R70 fixed on one side, the escape tables that
+    # desynchronised twice (R69, R73), an orphan Projects heading, and a
+    # project link one builder dropped.
+    #
+    # If a second writer reappears here, the merge has been undone.
     KNOWN = {
-        "tools/resume/tex_renderer.py",      # writes: imported PDF/DOCX
-        "agents/generation_agent.py",        # writes: tailored resume
-        "tools/resume/latex_parser.py",      # reads: both of the above
+        "tools/resume/tex_renderer.py",      # writes: the only builder
+        "tools/resume/latex_parser.py",      # reads: what it writes
     }
 
     def test_every_module_writing_a_subheading_is_covered_here(self):

@@ -128,9 +128,53 @@ def _from_docx(path: Path) -> str:
     return _tidy("\n".join(lines))
 
 
+# What a T1-encoded PDF extracts as, measured from a real one.
+#
+# R69 found that loading \usepackage[T1]{fontenc} makes an en-dash extract as
+# \x15, and rejected T1 for *this project's own* template on those grounds.
+# The import path is the same finding arriving from the other side: it accepts
+# PDFs from anywhere, and T1 is what most LaTeX resume advice tells people to
+# load. Their file is not ours to fix, so the damage is undone on the way in.
+#
+# The stakes are higher than they look, because the corruption is quiet. A
+# \x15 in a date is visible on the confirmation screen; "Sta Software
+# Engineer" is a plausible job title, and "congurator" and "Airow" read as
+# typos the owner made. Measured on one six-year resume: one corrupted job
+# title, two corrupted words, and eight control characters headed for profile
+# fields.
+T1_ARTIFACTS = {
+    "\x1b": "ff",   # Staff        -> Sta<ff>
+    "\x1c": "fi",   # configurator -> con<fi>gurator
+    "\x1d": "fl",   # Airflow      -> Air<fl>ow
+    "\x1e": "ffi",
+    "\x1f": "ffl",
+    # Spaced, because PDF layout eats the space on one side: "University\x16
+    # Boston" would otherwise read "University- Boston". The whitespace
+    # collapse below tidies any double it creates.
+    "\x15": " - ",  # en-dash, the one R69 named
+    "\x16": " - ",  # em-dash
+    "\x88": "",     # itemize bullet; the line break already carries it
+}
+
+# Presentation-form ligatures, which is what a PDF *without* T1 emits. Both
+# encodings reach this function; only fi and fl were ever handled.
+UNICODE_LIGATURES = {
+    "\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl",
+    "\ufb03": "ffi", "\ufb04": "ffl",
+}
+
+
 def _tidy(text: str) -> str:
-    """Collapse the whitespace damage that PDF extraction leaves behind."""
-    text = text.replace(" ", " ").replace("ﬁ", "fi").replace("ﬂ", "fl")
+    """Undo what PDF extraction leaves behind: ligatures, controls, space."""
+    text = text.replace("\u00a0", " ")
+    for artifact, plain in {**UNICODE_LIGATURES, **T1_ARTIFACTS}.items():
+        text = text.replace(artifact, plain)
+
+    # Anything left in the control range is an encoding this does not know
+    # about. It must not reach a resume field either way: a job title holding
+    # a raw \x0e survives every downstream check and renders as a box.
+    text = re.sub(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]", "", text)
+
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
@@ -212,6 +256,271 @@ SECTION_HEADINGS = {
     "skills": ("skill", "technical skill", "technologies"),
 }
 
+# Headings this importer has nothing to do with, listed so that reaching one
+# **ends** the section above it. Without them a heading it does not recognise
+# is not a heading at all, so everything under it joins whatever came before:
+# a resume with `Publications` after `Research/Projects` filed two conference
+# papers as project bullets.
+#
+# A closed list rather than "a short line is a heading", and the difference is
+# not fussiness. On the resume that found this, `AI/ML Intern Jan 2025 - April
+# 2025` is 34 characters and `iSteer Technologies Bangalore, India` is 36 —
+# every job title and employer line would have become a section break and
+# taken the experience section with it.
+OTHER_HEADINGS = (
+    "publication", "award", "honor", "certification", "licence", "license",
+    "interest", "hobb", "reference", "volunteer", "activit", "leadership",
+    "coursework", "summary", "objective", "profile",
+)
+
+# Not part of the resume: `extract_text` appends the PDF's link targets under
+# this line so the *model* can recover a URL the visible text does not carry.
+# The pattern reader has no such instruction and read them as resume content —
+# after R75 taught it that `label: values` is a skill category, the appendix
+# arrived on the page as a category named `https` holding three URLs, with
+# `LINKS FOUND IN THIS DOCUMENT:` glued to the end of the real skills.
+#
+# An affordance built for one path, reaching a path that could not use it.
+LINKS_MARKER = "links found in this document"
+
+
+_MONTH = (r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)"
+          r"[a-z]*\.?\s+")
+_DATE_RANGE = re.compile(
+    rf"((?:{_MONTH})?\d{{4}}\s*[-–—]\s*"
+    rf"(?:(?:{_MONTH})?\d{{4}}|Present|Current))",
+    re.I)
+# At most three capitalised words before the comma, and no hyphen inside.
+# A looser class walks backwards through "Northeastern University - Boston,
+# MA" and claims the whole thing as the location, leaving the school empty —
+# the greedy match is anchored on the state code, so it grows leftwards until
+# it runs out of allowed characters.
+_CITY_STATE = re.compile(
+    r"\b([A-Z][A-Za-z.]*(?:\s+[A-Z][A-Za-z.]*){0,2},\s*[A-Z]{2})\b")
+
+# A word with a capital letter buried in it after a lowercase one — the shape
+# PDF extraction leaves when two runs of text touch with no space between
+# them. Real resumes produce `Lakeside UniversityFairview, IL` and
+# `atMeridian Exchangebuilding`.
+#
+# It is a *rejection* rule and never a repair. Splitting on the boundary would
+# also split PostgreSQL, JavaScript, LinkedIn, GitHub and McDonald; the
+# extraction prompt asks the model to repair these because the model can tell
+# the difference and this cannot.
+_GLUED_WORD = re.compile(r"[a-z][A-Z]")
+
+# A lone month and year, which is how an expected graduation is written:
+# "Expected: June 2027", "Anticipated May 2026", "Graduating Dec. 2025". Only
+# consulted when no range was found, so a real range always wins.
+_SINGLE_DATE = re.compile(
+    rf"((?:{_MONTH})\d{{4}})", re.I)
+
+# What a PDF leaves at the head of a bullet once the glyph survives extraction.
+_BULLET_PREFIX = re.compile(r"^\s*[•●▪·\-–—]\s+")
+
+# About where a line of this template reaches the page margin. A line at least
+# this long that is followed by another has almost certainly wrapped, and the
+# two are one line of the resume. Measured: the real bullets that wrap on the
+# resumes in `tests/fixtures` run 100-112 characters.
+_WRAP_WIDTH = 90
+
+# The label in front of a graduation date, left behind once the date itself is
+# lifted out: "... (Major GPA: 4.0/4.0) Expected:" as the degree.
+_DATE_LABEL = re.compile(
+    r"\s*\b(expected|anticipated|graduating|graduation|exp\.?)\s*:?\s*$", re.I)
+# Spelled-out qualifications and the abbreviations that cannot be mistaken for
+# something else. Bare "MA" and "BA" are deliberately absent: "Boston, MA" is
+# a state, and reading it as a Master of Arts put an entire university line in
+# the degree field on the first resume this was tried against.
+# The plurals are not decoration. `\bmaster\b` does not match "Masters", and
+# "Masters of Science in Computer Science" is how most people write it — so
+# the line was not a degree, fell through to the school name, and took the
+# entry's structure with it. Every spelled-out qualification here can take an
+# `s`, and only "Bachelor of ..." was ever being found.
+_DEGREE_WORDS = re.compile(
+    r"\b(bachelors?|masters?|associates?|doctorates?|doctor of|ph\.?d|"
+    r"b\.?sc\.?|m\.?sc\.?|b\.s\.?|m\.s\.?|b\.a\.?|m\.a\.?|"
+    r"b\.eng|m\.eng|mba|diploma)\b",
+    re.I)
+
+
+def _heuristic_education(lines) -> list:
+    """
+    One education entry with all four fields, from however many lines.
+
+    The floor used to be `[{"school": line} for line in lines[:1]]`, which is
+    two bugs in one expression. It kept the first line only — so "Bachelor of
+    Science in Computer Engineering", sitting on the second line, was
+    **discarded** rather than missing — and it put the whole remaining line
+    into `school`, so the renderer emitted `{Northeastern University - Boston,
+    MA Sep 2014 - May 2018}{}{}{}` and the degree appeared nowhere.
+
+    The four fields are not an arity guess: `tex_renderer._education` writes
+    exactly `{school}{location}{degree}{dates}` and the parser reads exactly
+    those four back, so this returns the shape both ends already agree on.
+
+    Shapes first, vocabulary second. A date range and a "City, ST" can be
+    recognised by their form and are pulled out of **every** line before
+    anything is classified — an earlier version classified a line as the
+    degree and stopped, so a line holding all three kept all three. What
+    remains is a degree if it names a qualification and part of the school
+    name otherwise. Nothing is discarded: unplaced text lands in `school`,
+    where it is visible on the confirmation screen (R33).
+    """
+    lines = [line.strip() for line in (lines or []) if line and line.strip()]
+    if not lines:
+        return []
+
+    entries, school_parts = [], []
+    entry = {"school": "", "location": "", "degree": "", "dates": ""}
+    # Whether the previous line was a bullet this dropped, and how long it
+    # was. A line that wrapped at the page margin belongs to the line above
+    # it: "...Operating Systems, Machine" / "Learning" is one bullet, and
+    # dropping only the first half left "Learning" behind as a second school.
+    dropped_wrapping = False
+
+    def flush():
+        """Close the entry being built and start another."""
+        nonlocal entry, school_parts
+        entry["school"] = " ".join(school_parts).strip()
+        if any(entry.values()):
+            entries.append(entry)
+        entry = {"school": "", "location": "", "degree": "", "dates": ""}
+        school_parts = []
+
+    for line in lines:
+        # A bullet under Education is coursework, honours or a thesis line —
+        # content, not one of the four fields. It was being appended to the
+        # school name, so a real resume's school read "• Relevant
+        # Coursework:Deep Learning (Grad), Data Structures and Algorithms,
+        # Operating Systems, Machine Learning".
+        #
+        # Skipped rather than kept, and that is a deliberate loss: the schema
+        # has no coursework field, nothing downstream reads one, and the
+        # generator strips coursework from the rendered resume on purpose.
+        # Carrying it would be a field with no consumer; leaving it where it
+        # was is a school name that is not a school name.
+        if _BULLET_PREFIX.match(line):
+            dropped_wrapping = len(line) >= _WRAP_WIDTH
+            continue
+        if dropped_wrapping:
+            # Only the continuation of a line that reached the margin, and
+            # only immediately after one. A short bullet followed by a second
+            # school must not swallow the school — which is why this is keyed
+            # on the previous line's *length* rather than on "the last line
+            # was a bullet".
+            dropped_wrapping = len(line) >= _WRAP_WIDTH
+            continue
+
+        remaining = line
+        dates = _DATE_RANGE.search(remaining)
+        # A second date range means a second qualification. One entry cannot
+        # hold two, and the old code did not try — it kept the first date and
+        # let every later line pile into whichever field was still empty.
+        if dates and entry["dates"]:
+            flush()
+        if dates and not entry["dates"]:
+            entry["dates"] = dates.group(1).strip()
+            remaining = remaining.replace(dates.group(1), " ")
+        elif not entry["dates"]:
+            # No range on this line. An expected graduation is a single month
+            # and year — "Expected: June 2027" — and it was staying inside the
+            # degree string, so the rendered resume showed the date in the
+            # middle of the qualification and nothing in the dates column.
+            single = _SINGLE_DATE.search(remaining)
+            if single:
+                entry["dates"] = single.group(1).strip()
+                remaining = remaining.replace(single.group(1), " ")
+
+        if not entry["location"]:
+            found = _CITY_STATE.search(remaining)
+            # A candidate containing a glued word is two things touching, not
+            # a place. `Lakeside UniversityFairview, IL` matched whole, so the
+            # location field held the university and the school field held
+            # nothing at all — the greedy match documented in R77 as
+            # "observed, not desired", arriving on a real resume.
+            if found and not _GLUED_WORD.search(found.group(1)):
+                entry["location"] = found.group(1).strip()
+                remaining = remaining.replace(found.group(1), " ")
+
+        remaining = re.sub(r"\s{2,}", " ", remaining)
+        remaining = _DATE_LABEL.sub("", remaining)
+        remaining = re.sub(r"^\s*[-–—|,]\s*|\s*[-–—|,]\s*$",
+                           "", remaining).strip()
+        if not remaining:
+            continue
+
+        if _DEGREE_WORDS.search(remaining):
+            if entry["degree"]:
+                flush()
+            entry["degree"] = remaining
+        else:
+            # A school line arriving after the entry already has a degree and
+            # a date is the next school, not more of this one's name. This is
+            # the whole of the two-degree fix: without it a masters and a
+            # bachelors merge into a record that is **wrong rather than
+            # missing** — "University of Massachusetts Masters of Science in
+            # Computer Science PES University Bangalore, India" as the school,
+            # with the bachelors degree filed under the masters' dates. A
+            # blank field is visibly blank on the confirmation screen; that is
+            # a plausible sentence nobody would look at twice.
+            if entry["degree"] and entry["dates"]:
+                flush()
+            school_parts.append(remaining)
+
+    flush()
+    return entries
+
+
+# "Languages: Java, Kotlin, Python" — a label, a colon, then the list. Short
+# label, because "Built the pipeline in Python: it ingests..." is a sentence
+# and not a category, and a bullet that wandered into this section must not
+# become one.
+_SKILL_CATEGORY = re.compile(r"^([A-Za-z][A-Za-z0-9 &/+-]{0,28}):\s*(.+)$")
+
+
+def _heuristic_skills(lines) -> dict:
+    """
+    The skills section as the categories it was written in.
+
+    This used to be `{"Skills": ", ".join(lines)}` — every line of the section
+    concatenated into a single category. The four labelled rows on Priya's
+    resume came out as one value reading `Languages: Java, Kotlin, Python, Go,
+    SQL, TypeScript, Data: PostgreSQL, ...`, and generation then reordered
+    that bag by JD relevance and cut it to a line, so her resume advertised
+    `Python, Go, TypeScript, mentoring, Kotlin, Spark, contract testing,
+    Languages: Java, SQL`. Both halves of the schema were destroyed by the
+    join: the labels became list items, and the grouping that makes the
+    section readable was gone before anything downstream could use it.
+
+    The structure was there in the source and thrown away, which is the whole
+    bug — `{"Category": "comma, separated"}` is exactly what a `Label: values`
+    line already is.
+
+    A line with no label is not discarded and does not invent one: it joins
+    the category above it, or lands under a plain `Skills` heading when it
+    comes first. Nothing here is guessed at — an unlabelled line is genuinely
+    a list of skills, only one whose grouping the resume did not state.
+    """
+    categories, current = {}, None
+
+    for line in (lines or []):
+        line = line.strip()
+        if not line:
+            continue
+        match = _SKILL_CATEGORY.match(line)
+        if match:
+            label, values = match.group(1).strip(), match.group(2).strip()
+            current = label
+            categories[label] = (categories[label] + ", " + values
+                                 if label in categories else values)
+        else:
+            current = current or "Skills"
+            categories[current] = (categories[current] + ", " + line
+                                   if current in categories else line)
+
+    return categories
+
 
 def heuristic_schema(text: str) -> dict:
     """
@@ -242,32 +551,99 @@ def heuristic_schema(text: str) -> dict:
 
     return {
         "contact": contact,
-        "education": [{"school": s} for s in sections.get("education", [])[:1]],
+        "education": _heuristic_education(sections.get("education", [])),
         "experiences": [],
         "projects": [],
-        "skills": ({"Skills": ", ".join(sections["skills"])}
-                   if sections.get("skills") else {}),
+        "skills": _heuristic_skills(sections.get("skills")),
         # Kept so a confirmation screen can show what could not be split up.
         "_unparsed": {k: v for k, v in sections.items()
                       if k in ("experiences", "projects")},
     }
 
 
+# Words that may share a heading line without carrying its meaning, so that
+# "Technical Skills" and "Research/Projects" are the same headings as "Skills"
+# and "Projects".
+HEADING_FILLER = {
+    "", "and", "other", "additional", "relevant", "core", "key", "selected",
+    "technical", "professional", "personal", "academic", "work", "my",
+    "research", "related", "notable", "select",
+}
+
+
+def _heading_words(text: str) -> list:
+    """The words of a line, with punctuation treated as a separator."""
+    return [w for w in re.split(r"[^a-z]+", text.lower()) if w]
+
+
+def _is_heading(words, terms) -> bool:
+    """
+    Is this line **only** a heading for one of `terms`?
+
+    Every word has to be either a term or filler, and at least one has to be a
+    term. Both halves are load-bearing, and each was learned by breaking the
+    other resume in the repository:
+
+    * matching a term anywhere in the line made `iSteer Technologies
+      Bangalore, India` a skills heading, because "technologies" is one of the
+      words that names that section. An employer became a section break and
+      took the experience section with it.
+    * matching whole words made `Skills` stop being a heading, because the
+      term is `skill` and the line is the plural. Priya's whole skills section
+      vanished.
+
+    So: prefix per word, and the whole line accounted for.
+    """
+    matched = False
+    for word in words:
+        if any(word.startswith(term) for term in terms):
+            matched = True
+        elif word not in HEADING_FILLER:
+            return False
+    return matched
+
+
 def _split_sections(lines) -> dict:
-    """Group lines under whichever known heading most recently appeared."""
+    """
+    Group lines under whichever known heading most recently appeared.
+
+    Headings are matched on **words**, not on prefixes. `Research/Projects` is
+    a projects heading and did not start with "project", so the section did
+    not exist as far as this function was concerned and thirty-six lines of
+    projects and publications were filed under Experience — the section above
+    it — where the confirmation screen offered them as work history.
+
+    Three rules, and the third is the one that keeps the other two safe:
+
+    * a known section word appearing as a word makes the line that section
+    * a heading from `OTHER_HEADINGS` ends the current section and claims
+      nothing
+    * **nothing else is a heading.** A short line is not a heading, because on
+      a real resume the short lines are job titles and employers.
+    """
     sections, current = {}, None
 
     for line in lines:
         lowered = line.lower().strip(" :")
-        heading = next(
-            (name for name, words in SECTION_HEADINGS.items()
-             if len(lowered) < 40 and any(lowered.startswith(w) for w in words)),
-            None,
-        )
-        if heading:
-            current = heading
-            sections.setdefault(current, [])
+        if len(lowered) < 40:
+            words = _heading_words(lowered)
+            heading = next(
+                (name for name, terms in SECTION_HEADINGS.items()
+                 if _is_heading(words, terms)),
+                None,
+            )
+            if heading:
+                current = heading
+                sections.setdefault(current, [])
+                continue
+            if _is_heading(words, OTHER_HEADINGS):
+                current = None
+                continue
+
+        if lowered.startswith(LINKS_MARKER):
+            current = None
             continue
+
         if current:
             sections[current].append(line)
 

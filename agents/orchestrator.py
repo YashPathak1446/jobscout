@@ -281,6 +281,26 @@ def job_history(url: str) -> list:
         store.close()
 
 
+def board_job(url: str):
+    """
+    One stored job in full, posting text included, or None.
+
+    The list facades deliberately hand back every column, which is right for a
+    view that renders a table and wrong for one rendering fifty rows over
+    HTTP — a 50-row page is 336 KB with the descriptions and 44 KB without.
+    So the HTTP boundary drops `full_jd` from list rows and asks here for the
+    one job a reader actually opened. Streamlit never needed this because it
+    renders in-process; a second view is what made the difference visible.
+    """
+    from tools.jobs.job_store import JobStore
+
+    store = JobStore()
+    try:
+        return store.get(url)
+    finally:
+        store.close()
+
+
 def job_selection(url: str):
     """
     Why one job's resume contains what it contains, or None (R57).
@@ -308,7 +328,7 @@ def job_selection(url: str):
 
 
 def start_run(profile_name, api_key="", max_jobs=20, max_resumes=3,
-              generate_pdf=True, output_dir="outputs") -> str:
+              generate_pdf=True, output_dir="outputs", backend=None) -> str:
     """
     Begin a run in the background and return its id immediately (R33).
 
@@ -340,6 +360,7 @@ def start_run(profile_name, api_key="", max_jobs=20, max_resumes=3,
                 max_resumes=max_resumes,
                 generate_pdf=generate_pdf,
                 checkpoint=False,
+                backend=backend,
             )
             state = orchestrator.run(
                 max_jobs=max_jobs,
@@ -348,9 +369,23 @@ def start_run(profile_name, api_key="", max_jobs=20, max_resumes=3,
             )
             results = (state or {}).get("generation_results") or []
             registry.finish(run_id, {
+                # `discovered` and `enriched` are here so a run that produced
+                # nothing can say *which* nothing. "Found no jobs at all",
+                # "found jobs and none scored high enough" and "matched jobs
+                # and wrote no resumes" are three different problems, and the
+                # user can act on the first two. Without these the screen can
+                # only report zero and call it success — which is what it did,
+                # on the last screen a first-time user sees.
+                "discovered": len((state or {}).get("discovered_jobs") or []),
+                "enriched": len((state or {}).get("enriched_jobs") or []),
                 "analysed": len((state or {}).get("analysis_results") or []),
                 "generated": len(results),
                 "valid": sum(1 for r in results if r.get("status") == "valid"),
+                # The bar a job had to clear, so the screen can name the number
+                # rather than telling somebody to go and find it.
+                "threshold": getattr(
+                    getattr(orchestrator.profile, "agent_preferences", None),
+                    "scoring_threshold", None),
                 # Carried out of the run so a reloaded page can say why the
                 # bullets are the user's own without reopening state.json.
                 "degraded": sorted({r["degraded"] for r in results
@@ -476,7 +511,8 @@ def derived_levels(years) -> list:
     return derive_levels(years)
 
 
-def backend_status(gemini_key: str = "") -> dict:
+def backend_status(gemini_key: str = "", backend: str = None,
+                   profile=None) -> dict:
     """
     What will rewrite bullets on the next run, and what that costs.
 
@@ -489,18 +525,20 @@ def backend_status(gemini_key: str = "") -> dict:
     Detection touches the network (it asks whether Ollama is up), so a caller
     rendering on every keystroke should cache it.
     """
-    from config import (LLM_BACKEND, OLLAMA_API_URL, OLLAMA_MODEL,
-                        OPENAI_MODEL, resolve_api_key)
+    from config import (OLLAMA_API_URL, OLLAMA_MODEL, OPENAI_MODEL,
+                        resolve_api_key, resolve_backend)
     from tools.generation import llm_backends
 
     # `resolve_api_key` is the single place that decides what "no key passed"
     # means (R22); asking the environment directly here would be a second
-    # answer to the same question.
+    # answer to the same question. `resolve_backend` is the same rule for the
+    # rung — this read `LLM_BACKEND` off the module, which was one of four
+    # places answering the same question independently.
     key = resolve_api_key(gemini_key or None)
     openai_key = llm_backends.env_openai_key()
     ollama_up = llm_backends.ollama_is_running(OLLAMA_API_URL)
 
-    configured = (LLM_BACKEND or "auto").lower()
+    configured = resolve_backend(backend, profile)
     if configured in ("auto", ""):
         chosen = llm_backends.detect(gemini_key=key, openai_key=openai_key,
                                      ollama_url=OLLAMA_API_URL)
@@ -576,6 +614,8 @@ class JobScoutOrchestrator:
         max_resumes: Optional[int] = None,
         generate_pdf: bool = True,
         api_key: str = None,
+        backend: str = None,
+        use_cache: bool = True,
     ):
         """
         Initialize orchestrator.
@@ -599,9 +639,19 @@ class JobScoutOrchestrator:
                 API. None falls back to the environment, which is what the CLI
                 wants; a UI collecting a key from a user passes it here and it
                 never touches os.environ.
+            backend: An explicitly chosen rung for this run — the `--backend`
+                flag or a run request. Outranks the environment and the
+                profile; None means "no opinion" and lets those decide.
+            use_cache: If False, every model call is made fresh. A measurement
+                is the caller that most needs this, and until R80 the flag
+                existed only on the generation agent's own `main()` — so the
+                entry point every real run uses could not be told to skip the
+                cache at all.
         """
         self.profile_name = profile_name
         self.api_key = api_key
+        self.backend = backend
+        self.use_cache = use_cache
         self._on_progress = None
         self._on_checkpoint = None
         self.checkpoint = checkpoint
@@ -638,8 +688,59 @@ class JobScoutOrchestrator:
         if not Path(resume_path).is_absolute():
             resume_path = str(Path(__file__).parent.parent / resume_path)
         self.resume_path = resume_path
-        
+
         logger.info(f"📄 Resume: {resume_path}")
+        self._refuse_an_empty_resume(resume_path)
+
+    @staticmethod
+    def _refuse_an_empty_resume(resume_path: str) -> None:
+        """
+        Stop before the run rather than after it, if there is nothing to tailor.
+
+        A master with no experiences and no projects is not a degraded resume,
+        it is not a resume — and the pipeline used to accept one, discover
+        jobs, score them, and write a file holding an education line and an
+        empty Experience heading. Priya Raghunathan got 574 bytes with no
+        `\\begin{document}` in it, under a headline saying a resume had been
+        written.
+
+        Nothing along the way was wrong. Import produced what it could, the
+        renderer omitted the sections that were empty, generation filled the
+        two it owns. The product still handed somebody a file that is not a
+        resume, so the refusal belongs here, before the API calls, where the
+        message can name the cause.
+        """
+        from tools.resume.latex_parser import parse_latex_resume
+        from tools.resume import tex_renderer
+
+        try:
+            text = Path(resume_path).read_text(encoding="utf-8", errors="replace")
+            parsed = parse_latex_resume(resume_path)
+        except Exception:
+            # Parsing is the pipeline's own job further down and it reports
+            # its failures properly. This guard only answers one question, so
+            # it must not become the thing that breaks a run it cannot judge.
+            return
+
+        # "This file is not a LaTeX resume" and "this resume has no work on
+        # it" are different failures, and `parse_latex_resume` answers both
+        # with an empty parse. Telling somebody their resume has no experience
+        # when the real problem is that the file is not a resume would be this
+        # same bug wearing the fix's clothes, so only a file that *is* one gets
+        # judged here; anything else goes to the parser, which says so
+        # properly.
+        if not tex_renderer.looks_like_latex(text):
+            return
+
+        if parsed.experiences or parsed.projects:
+            return
+
+        raise ValueError(
+            f"{Path(resume_path).name} has no experience and no projects, so "
+            "there is nothing to tailor. If you imported a PDF or Word file, "
+            "some of it could not be read into separate entries — go back to "
+            "the resume step and add them, or edit the .tex directly."
+        )
     
     def run(
         self,
@@ -1068,6 +1169,8 @@ class JobScoutOrchestrator:
             mock_mode=mock_gen,
             generate_pdf=self.generate_pdf,
             api_key=self.api_key,
+            backend=self.backend,
+            use_cache=self.use_cache,
         )
 
         # Pass output_dir (not output_path) — generation agent adds
@@ -1081,6 +1184,26 @@ class JobScoutOrchestrator:
         self._emit("generation", len(results), len(results), f"wrote {len(results)} resumes")
 
         self.state['generation_results'] = results
+
+        # What this run actually used, written into the run rather than said
+        # once to a terminal. `configured` is the rung `detect()` chose;
+        # `used` is what wrote each resume, and the two differ whenever a
+        # model was asked and did not answer.
+        #
+        # This exists because two passes over the same profile were compared
+        # against each other and one of them was not the rung it was labelled
+        # with — `detect()` prefers a local Ollama over nothing, so "no key"
+        # is not "no model" on a machine where Ollama is installed. A run that
+        # does not record its own rung cannot be compared with another later.
+        used = {}
+        for record in results:
+            used[record.get("rung") or "unknown"] = (
+                used.get(record.get("rung") or "unknown", 0) + 1)
+        self.state['backend'] = {
+            'configured': getattr(agent, 'llm_backend', 'unknown'),
+            'used': used,
+        }
+        logger.info(f"✍️  Rungs used: {used or 'none — no resumes written'}")
 
         self._store_resumes(results)
 
@@ -1225,7 +1348,19 @@ class JobScoutOrchestrator:
             f.write(f"**Profile:** {self.profile.personal_info.name}\n")
             f.write(f"**Date:** {self.state['timestamp']}\n")
             f.write(f"**Email:** {self.profile.personal_info.email}\n\n")
-            
+
+            # Which rung wrote the bullets, at the top, where somebody
+            # comparing two runs will see it before reading either. A pass
+            # that does not say this cannot be compared with another pass.
+            backend = self.state.get('backend') or {}
+            if backend:
+                used = backend.get('used') or {}
+                f.write(f"**Bullets written by:** "
+                        + (", ".join(f"{rung} ({n})"
+                                     for rung, n in sorted(used.items()))
+                           or "nothing — no resumes were written")
+                        + f"  ·  backend selected: `{backend.get('configured')}`\n\n")
+
             f.write("---\n\n")
             
             # Discovery summary
@@ -1459,6 +1594,21 @@ Examples:
         help="Write .tex only, skip pdflatex compilation"
     )
     parser.add_argument(
+        "--backend",
+        choices=["auto", "gemini", "openai", "ollama", "none"],
+        default=None,
+        help="Which rung rewrites bullets, overriding JOBSCOUT_LLM_BACKEND, "
+             "the profile and detection. 'auto' defers to detection. Omit it "
+             "for no opinion, which is not the same thing."
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Make every model call fresh. A cached reply carries the model "
+             "that wrote it, so a measurement that counts cache hits as model "
+             "answers is fiction."
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable verbose logging"
@@ -1491,6 +1641,8 @@ Examples:
         input_file=args.input,
         max_resumes=args.max_resumes,
         generate_pdf=not args.no_pdf,
+        backend=args.backend,
+        use_cache=not args.no_cache,
     )
     
     orchestrator.run(max_jobs=args.max_jobs)

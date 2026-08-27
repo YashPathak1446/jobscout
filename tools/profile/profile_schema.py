@@ -197,6 +197,49 @@ class AgentPreferences(BaseModel):
     fallback_to_snippet: bool = True
     comments: Optional[str] = None
 
+    # Which rung rewrites this person's bullets, when they have said.
+    #
+    # `None` is the third case and the important one: **not stated**, distinct
+    # from `"none"` (a stated preference for no model) and from `"auto"` (a
+    # stated preference for detection). `resolve_backend` falls through to
+    # detection on `None`, exactly as `years_experience: None` derives its
+    # levels rather than claiming zero.
+    llm_backend: Optional[str] = None
+
+    @field_validator('llm_backend')
+    @classmethod
+    def _a_stored_backend_is_a_real_one(cls, value):
+        """
+        Refuse `"auto"` here, and refuse a rung that does not exist.
+
+        Storing `"auto"` would be writing the not-stated state as a value —
+        this project's most-repeated bug, committed deliberately, in the field
+        added to argue against it. There would then be two ways to spell "I
+        have not chosen" and only one of them would be absent, which is how
+        `location_score == 0` and `years_required: None` each started.
+
+        `"auto"` stays valid as an *instruction* on the CLI flag and the
+        environment variable, where it means "this run defers to detection"
+        and is never persisted.
+        """
+        from config import BACKEND_CHOICES
+
+        if value is None:
+            return None
+        choice = str(value).strip().lower()
+        if not choice:
+            return None
+        if choice == "auto":
+            raise ValueError(
+                "llm_backend cannot be stored as 'auto'. Leave it unset to "
+                "let detection choose — absent is how a profile says it has "
+                "no preference.")
+        if choice not in BACKEND_CHOICES:
+            raise ValueError(
+                f"llm_backend '{value}' is not a backend. Choose one of: "
+                f"{', '.join(c for c in BACKEND_CHOICES if c != 'auto')}.")
+        return choice
+
 
 class TechnicalSkills(BaseModel):
     """Technical skills inventory."""

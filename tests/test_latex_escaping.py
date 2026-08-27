@@ -95,18 +95,59 @@ class TestTheLoudOnesStillWork(unittest.TestCase):
         self.assertEqual(_escape(None), "")
 
 
-class TestTheUsersOwnLatexIsLeftAlone(unittest.TestCase):
-    """
-    The no-model rung passes the master resume's bullets straight through, and
-    those are already valid LaTeX — escaping them would print the markup.
+class TestTheUsersOwnMathSurvivesTheRoundTrip(unittest.TestCase):
+    r"""
+    The concern this class was written for, met a different way.
+
+    The no-model rung passes the master's own bullets through, and a master
+    says `$\sim 503$ms`. Escaping that literally would print the markup, so
+    the rung used to skip escaping — via `already_latex=True` — on the premise
+    that master bullets are valid LaTeX.
+
+    They are not. `parse_latex_resume` unescapes `\%` to `%` on the way out
+    while leaving math spans standing, so a bullet in memory was half of each
+    and the flag was wrong for the other half: a bare `%` written back into a
+    `.tex` comments out the closing brace and the file will not compile.
+
+    The premise is now true instead of assumed. The parser converts math spans
+    to plain characters as well, the escaper converts them back, and nothing
+    asks whether a string is "already LaTeX".
     """
 
-    def test_already_latex_text_is_not_escaped(self):
-        from agents.generation_agent import GenerationAgent
+    def test_the_parser_hands_back_a_tilde_not_a_math_span(self):
+        from tools.resume.latex_parser import _clean_latex
 
-        source = r"returning HTTP 201 in $\sim 503$ms"
-        kept = GenerationAgent._escape_latex(None, source, already_latex=True)
-        self.assertEqual(kept, source)
+        self.assertEqual(
+            _clean_latex(r"returning HTTP 201 in $\sim 503$ms"),
+            "returning HTTP 201 in ~503ms")
+
+    def test_the_escaper_puts_the_math_span_back(self):
+        from tools.resume.tex_renderer import escape
+
+        self.assertEqual(
+            escape("returning HTTP 201 in ~503ms"),
+            r"returning HTTP 201 in $\sim$503ms")
+
+    def test_a_percentage_makes_the_same_journey(self):
+        from tools.resume.latex_parser import _clean_latex
+        from tools.resume.tex_renderer import escape
+
+        self.assertEqual(_clean_latex(r"94.2\% accuracy"), "94.2% accuracy")
+        self.assertEqual(escape("94.2% accuracy"), r"94.2\% accuracy")
+
+    def test_the_two_together_are_the_identity(self):
+        from tools.resume.latex_parser import _clean_latex
+        from tools.resume.tex_renderer import escape
+
+        for original in (r"94.2\% accuracy ($\pm$0.2\%)",
+                         r"carbapenem 0.17$\rightarrow$1.00",
+                         r"a $\sim 3.6$x speedup",
+                         r"60K+ Q\&A pairs",
+                         r"a needs\_review queue"):
+            once = escape(_clean_latex(original))
+            twice = escape(_clean_latex(once))
+            self.assertEqual(once, twice,
+                             f"{original!r} is not stable through the round trip")
 
 
 @unittest.skipUnless(find_pdflatex(), "needs a LaTeX engine")

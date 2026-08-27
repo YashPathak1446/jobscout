@@ -6211,6 +6211,981 @@ pass, baselines clean.
 
 ---
 
+## R72. The template stored instructions where answers go
+
+**Decision:** (2026-08-26) A profile template states nothing it has not been
+told. Blank is how a file says unknown, and a default is not a statement.
+
+**Severity: the worst-consequence defect found in this five-day stretch.**
+Worse than the glyphs (R69), worse than the field transposition (R70). Those
+produce a resume that looks slightly wrong. This one told a stranger they were
+eligible for work they are legally barred from holding.
+
+### The line that did it
+
+    "us_citizen": true
+
+In `user_profiles/template.json`, asserted about every person who ever builds a
+profile. `_is_us_person` in `tools/jobs/job_filter.py` reads it — citizen or
+permanent resident, the ITAR sense — and postings restricted to US persons are
+gated on the answer. So a new user on an H1B who did not walk the About-you
+screen had a profile claiming US citizenship, and JobScout showed them
+ITAR-restricted roles and wrote tailored resumes for them.
+
+Under a paid service that is the failure to be most afraid of. The user spends
+their time, submits, and is rejected on a ground the product could have known
+and in fact claimed to know. Nothing in the output looks wrong.
+
+### The rest of the block
+
+Every field was guidance wearing a value's clothes:
+
+    name            "Your Name"
+    email           "your.email@example.com"
+    location        "City, State"
+    visa_status     "US Citizen | Green Card | F1 OPT | H1B"      <- a menu
+    graduation_date "Month YYYY"
+    target_roles    [..., "Add your target roles here"]           <- a query
+
+`location` is the one that shows what the shape costs. The About-you form
+seeds itself from the stored profile, which is correct — saving a blank form
+over stored answers is a silent revert this wizard has done before. So the box
+arrived pre-filled with `City, State` and Continue was **enabled**: agreeing
+with the screen recorded a location that does not exist, into the exact field
+R55 and R69 score against.
+
+`visa_status` held the option list itself, which matches no option, so the
+Streamlit select fell back to index 0 — "US Citizen" — silently. Two separate
+paths to the same wrong claim.
+
+### The invariant, third costume
+
+R69 named it for rendering: unknown is never displayed as a value. R71's
+sibling finding named it for the frontend. This is the data layer:
+
+- a **placeholder** is not an answer
+- a **default** is not a statement
+- `years_experience: 0` is a claim of new-graduate status; `null` is the truth
+
+Anything downstream that reads a profile cannot tell an instruction from an
+answer, because at the type level there is nothing to tell.
+
+### Why it survived
+
+The template is a frozen artifact from the single-user era. The author's own
+profile predates the wizard and was never rebuilt from it, so nobody had read
+what a fresh profile actually contains since the tool became general. R68 fixed
+the wizard's *offered* exclusions relative to where the user sits and did not
+touch the file the wizard starts from — the same one-of-two-paths shape as R69
+and R70, with the untaken path being "arrive as a new user".
+
+Found by building a stranger — six years, Boston, Staff Engineer, a PDF from a
+template this repo has never produced — and reading the profile that came out.
+It also excluded `senior` and `staff`, the two words in her own job title.
+
+### The fix, and what it is not
+
+Fields blanked, guidance moved to `_comment`, `us_citizen` and
+`permanent_resident` default false, `years_experience` null, one person's
+states removed. False for citizenship is the safe direction on the same
+reasoning the schema already gives for `holds_security_clearance`: it hides
+postings rather than surfacing ones the reader cannot hold.
+
+Blanking is not sufficient on its own. The React About-you screen now **gates
+Continue on work authorisation** rather than defaulting to the first option, so
+an unanswered question stays unanswered rather than being answered by omission.
+
+### Verified
+
+`tests/test_template_presumes_nothing.py` — eleven tests: no level word in the
+exclusions, no instruction text in any value, the two fields a resume cannot
+state are blank, nothing asserted about citizenship, and the guidance still
+exists in `_comment`. Priya's rebuilt profile reads Boston / H1B /
+`us_citizen: false` / `years_experience: null`, with name, email, school and
+degree surviving the nested merge. 813 tests, three baselines clean.
+
+**Open:** the work-authorisation select's click-through is unverified in a
+browser. The bug found in it — `value={x || undefined}` making a Radix Select
+uncontrolled, so the display stops tracking state — is the class that passes
+contract tests and fails in front of a person, and this is the one control
+whose field gates ITAR postings. `tests/test_web_controls.py` holds the source
+shape; the widget itself still wants a human click.
+
+---
+
+## R73. In memory a bullet is plain text; LaTeX exists only in a file
+
+**Decision:** (2026-08-26) Every boundary honours one invariant. The parser
+converts LaTeX to plain text on the way out, the renderer escapes on the way
+in, and nothing asks which of the two a string happens to be. `already_latex`
+is deleted.
+
+**Severity: this made the free tier produce files that will not compile.**
+Not wrong output — no output. `page_count: 0` on a machine with LaTeX
+installed, and the run reported that it had written a resume.
+
+### Three reasonable decisions, one broken product
+
+    tex_renderer.escape      escapes on the way into a file
+    parse_latex_resume       unescapes on the way out
+    _escape_latex(..., True) trusts what it is handed
+
+Each is defensible alone. Together they guarantee that any bullet making the
+round trip comes out broken. The author's master holds five `\%`; the parser
+returns all five bare; the no-model rung writes them straight back. **A bare
+`%` comments out the rest of the line including the closing brace.**
+
+### Why a flag could never have been right
+
+The premise behind `already_latex=True` was "the user's own master bullets are
+valid LaTeX". Measured, that premise was *half* true, which is worse than
+false. `_clean_latex` unescaped `\%`, `\&`, `\_`, `\#` and `\$` while leaving
+math spans and `\texttt{}` standing:
+
+    in the file    ... 94.2\% accuracy ($\pm$0.2\%) ... $\sim 503$ms ...
+    in memory      ... 94.2%  accuracy (  ±  0.2% ) ... $\sim 503$ms ...
+                       ^ plain text                     ^ still LaTeX
+
+One boolean cannot describe a string that is both. Escaping it printed the
+markup; not escaping it broke the file. `already_latex` is the sentinel
+pattern in its purest form — one variable standing for two different truths
+depending on which path built the string.
+
+### The fix is the invariant
+
+`_clean_latex` now converts math spans too, via `MATH_TO_TEXT`: `$\sim 503$`
+becomes `~503`, `$\pm$` becomes `±`, `0.17$\rightarrow$1.00` becomes
+`0.17→1.00`, `$CC \leftrightarrow PSTN$` becomes `CC ↔ PSTN`. The escape table
+gains the return journey for each. Measured across every master on disk:
+**nothing with a backslash or a `$` survives into memory.**
+
+R69's `~` → `$\sim$` mapping is what makes this closed rather than lossy — the
+tilde is a real character on a resume, meaning "about", and it has somewhere
+to go in both directions.
+
+### Two tables became one, on the third offence
+
+Adding the math characters to `tex_renderer` and not to the generation agent
+desynchronised the escape tables **within the hour**, and
+`test_both_tables_cover_the_same_characters` caught it — the test R69 wrote
+after the same pair produced the same class of bug twice. Rather than
+synchronise by hand a third time, `generation_agent._escape_latex_impl` now
+calls `tex_renderer.escape`. Two tables kept equal by a test is better than
+two tables; one table is better still, which is where the scorers ended up
+for the same reason.
+
+### Verified
+
+Generated a keyless resume for both masters and compiled it. Priya
+Raghunathan: no bare `%`, **98,888-byte PDF** where the same path produced
+`page_count: 0` an hour earlier. Extracted text carries every figure —
+`340ms to 48ms`, `12 shards`, `4,200 duplicate charges`, `18K+ merchants`,
+`2.5K requests per second`, `6 hours to 40 minutes`, `31%`. The author's:
+125,417 bytes, exit 0.
+
+`tests/test_latex_round_trip.py` is a property test over every master on disk
+rather than assertions about particular characters — parse, render, parse
+again, and require the bullets identical, the rendered file free of unescaped
+specials, and a second render byte-identical to the first. That closes the
+family; the five percents were never the point.
+
+**Why it was invisible.** Gemini rewrites the author's bullets, and rewritten
+prose routes through the escaper. The no-model rung is the only path that
+writes parser output straight back to the renderer — the free tier, on the
+machine of somebody who has not paid.
+
+---
+
+## R74. Three defects that were the author's own file, used as a ruler
+
+**Decision:** (2026-08-26) The tailored resume is ordered by date, budgeted by
+page rather than by half a page, and keeps the skill categories the source
+document was written in. Priya Raghunathan's free-tier resume goes from three
+bullets in relevance order under a scrambled skills line to eight bullets
+newest-first under four real categories, one page, compiled.
+
+This is the end of the stranger pass on the *output* — R66 fixed what she
+could enter, the score fix (`test_score_shape_independence`) fixed what she
+matched, R73 made the file compile, and this is the page that comes out.
+
+### 1. Relevance is not an order
+
+Selection ranks components by fit to the posting and that ranking reached the
+page untouched, so her resume opened with the job she left in 2020 and buried
+the one she currently holds. The author's own resume had it too — 101gen.ai
+(2024) above Sorenson (2025) — and it is invisible on a page you already know
+the contents of.
+
+`tex_renderer.reverse_chronological` sorts on the **start** date, which is the
+convention and the only thing that separates a job still running from one that
+began later. It lives in `tex_renderer` because both renderers pass through
+it; anywhere else recreates the fork that produced R69 and R70.
+
+**All of them or none of them.** One unreadable date and nothing moves.
+Sorting the rest around an unknown files it under "oldest", which is this
+codebase's oldest mistake wearing yet another hat.
+
+### 2. A page is a page, whatever sections are on it
+
+`exp_budget_table` and `proj_budget_table` were measured in Q3 against resumes
+that have both sections — three experiences and three projects, twelve bullets
+with two spare — so each table describes **half a page**. Priya has no
+projects. The projects half was spent on nothing: three jobs shared six
+bullets and the bottom third of the page stayed blank.
+
+Eighth instance of absence read as a value, and the second one to land on this
+exact resume — the scoring cap divided her three jobs by five for the same
+reason. When one section is empty the other now gets the page, bounded by the
+per-component maximum and by how many bullets the master actually holds.
+
+### 3. `VERBATIM_BULLET_SCALE = 0.5` was a measurement of one man's prose
+
+The no-model rung took `count // 2` bullets because a master bullet "occupies
+roughly twice the space" of a rewritten one. Measured, on the files in the
+repo:
+
+| | bullet length | rendered |
+|---|---|---|
+| Gemini output, all 13 bullets | 195-217 chars | 2 lines |
+| author's master | 220-440 chars | 3 lines |
+| Priya's master | 59-192 chars | 1 line |
+
+So the constant was wrong even for the author (0.67, not 0.5) and inverted for
+Priya, whose bullets are already the size Gemini writes. Halving spent half her
+page on nothing and printed **one bullet per job** — not a thin resume, a
+resume that looks like the person had nothing to say. Her entire master is
+eight bullets and she was sent three.
+
+The replacement is the quantity that was always meant. `line_2` is the zone
+the prompt and the validator both aim at, so **a budget of N bullets is a
+claim on 2N lines**; a rung that cannot shorten a bullet keeps the claim and
+changes the count. Two refinements, both found by reading real output:
+
+- **Zones are measured in characters, not by name.** An `orphan_2` bullet
+  renders two lines, one of them half empty. Treating every unnamed zone as
+  the worst case cost the Toast job a bullet it had room for.
+- **Skipped, not stopped.** 101gen's bullets measure 3, 4, 2, 1, 2 lines
+  against a budget of 6. Stopping at the four-line one shipped a single
+  bullet; three fit exactly. Order is preserved among those kept.
+
+`_bullets_within_lines` is called by both the tailor and the budget, because a
+count computed in one place and a slice taken in another is the shape that has
+produced six bugs here. `_fit_budgets_to_lines` now restates the contract for
+validation *after* tailoring rather than scaling it beforehand, which also
+fixes a Gemini failure falling back to verbatim with unscaled budgets.
+
+### 4. The skills section was destroyed before anything could use it
+
+The no-model import floor read the section as `{"Skills": ", ".join(lines)}`.
+Four labelled rows became one value, and generation — correctly, for a
+category — reordered it by relevance and cut it to a line:
+
+    Skills: Python, Go, TypeScript, mentoring, Kotlin, Spark,
+            contract testing, Languages: Java, SQL
+
+`Languages: Java` offered as a skill, three quarters of what she can do gone.
+Nothing downstream was wrong: the schema is `{"Category": "comma, separated"}`
+and a `Label: values` line already **is** one. The structure was in the source
+and the join threw it away. An unlabelled line joins the category above it or
+lands under the section's own heading — nothing is invented, and a short label
+is required so a stray bullet with a colon in it does not become a category.
+
+### Verified
+
+Priya's free-tier resume, compiled: one page, 98KB, four skill categories,
+three jobs newest-first, all eight of her bullets. The author's, same rung,
+same three postings: 6 bullets to 11, still one page, order corrected. 909
+tests, three baselines clean.
+
+**Left standing, deliberately.** Her page is roughly half full — her master has
+eight bullets and the tool will not invent a ninth. That is Q3's headroom
+question, unchanged. And her PDF's own text layer says `A WS` for AWS, a
+kerning artifact of the file: repairing spaces inside words guesses at content,
+which is the trade `test_stranger_import` already refused for the glued email.
+
+---
+
+## R75. The sweep, and the wall that was rebuilt one field over
+
+**Decision:** (2026-08-26) A focused pass over the recurring bug class rather
+than over a diff. Seven candidates went in; **two were already dead**, one was
+mis-stated, and the pass turned up **two the list did not have** — including a
+regression of R72 that shipped in the fix for R72.
+
+Recorded because the yield of the sweep was in the checking, not the list. Two
+candidates had been fixed by earlier work and would have been "fixed" a second
+time by anyone who trusted the note; the highest-severity finding was not on
+the list at all and was reached by following a field rather than a hunch.
+
+### Already dead, and worth saying so
+
+* `already_latex` — deleted by R73. It survives only in comments explaining
+  its absence and in `test_nothing_asks_whether_text_is_already_latex`, which
+  fails if it returns.
+* `--popover`'s undefined tokens — defined in both themes, with
+  `test_theme_is_complete` holding the whole token set.
+
+Two of seven. This is the doc going stale in the direction that costs the most
+— a candidate list is a claim about the present, and this one was three
+commits old.
+
+### Mis-stated: the header location
+
+Filed as "collected on import, never rendered". It is neither.
+`CONTACT_PATTERNS` has no location pattern, so nothing collects it; the line
+it sits on is the one that glues `Boston, MA` onto the email
+(`test_stranger_import` documents why that is not repaired). A resume for
+someone whose location decides half their matches prints no location at all.
+That is a **missing feature**, not a dropped field, and it needs the header
+and the parser to learn a field together.
+
+### 1. The wall R72 tore down, rebuilt one field over — both UIs
+
+R72's finding: the Save button on the preferences screen was gated on the
+seniority override, which is empty for every profile a new user builds, so the
+button was dead for everyone but the author. The fix moved the gate to the
+levels *in force*.
+
+`derived_levels(None)` is `[]`. `/api/levels` returns `derived: []` for an
+unanswered profile **on purpose**, and its docstring tells the caller to
+"render that as a question rather than as a level". Both callers fed it
+straight into the gate. So anyone who declines to state their years — a field
+with a placeholder, no required marker, and a legitimate unknown state — met
+the same dead button, with nothing on screen saying why.
+
+`test_preferences_gate` could not see it: `test_every_plausible_number_of_years
+_derives_something` walks `range(0, 41)` and never `None`. **A test that walks
+every answer and never the absence of one.** Ninth instance of the invariant,
+and the first to be reintroduced by the fix for a previous instance.
+
+Both gates are now on target roles alone. "Any level" is a real state — the
+caption says so, `_tolerated_years` reads it as the widest tolerance rather
+than as zero, and the run works.
+
+### 2. `int(years or 0)` — the twin path, with a note attached
+
+The Streamlit field did `value=int(current.get("years_experience") or 0)`, and
+`st.number_input` has no unanswered state to return, so **saving the screen
+wrote the zero back**. A six-year engineer who never touched the field was
+filtered as a new grad from then on. Not a display bug: a write.
+
+The React field next door has been correct since it was written, and its
+comment names this exact line as the thing it is not doing. Fixed on the path
+being built, left standing on the path being replaced — the two-path bug with
+a signed confession beside it.
+
+`st.number_input(value=None)` returns `None` untouched and the number after
+(verified with `AppTest`), which is why `requirements.txt` now floors
+Streamlit at 1.31 rather than 1.30.
+
+### 3. The skills section was printed and never offered
+
+The React confirmation screen showed skills as the number `4` and nothing
+else, on a screen headed *correct anything that is wrong*. The section reaches
+the employer verbatim and was the only one nobody could touch — while the
+Streamlit screen has had an editable skills field the whole time.
+
+This is what makes `A WS` matter. The kerning artifact in Priya's own PDF is
+not repairable in code (repairing spaces inside words guesses at content, the
+trade already refused for the glued email), and that is survivable **only**
+because R33 puts every field in front of its owner. Skills were the exception,
+so the one defect that needed the mitigation was the one that did not have it.
+
+### 4. `contact.portfolio`, and `from_parsed` dropping `url`
+
+`portfolio` appeared **once in the entire repository**: as a labelled input on
+the confirmation screen. Nothing extracted it, nothing stored it, `_header`
+does not print it. Removed rather than rendered — printing it honestly needs a
+parser counterpart, and `latex_parser` recovers GitHub and LinkedIn by
+matching the domain, which an arbitrary portfolio URL has no way to do. It
+would print once and vanish on the next round trip.
+
+`from_parsed` omitted `url`, so every project link died on a re-render — and
+because `from_parsed` is what the round-trip test renders through, **the test
+was blind to the loss it existed to catch**. Both sides agreed on nothing
+being there. A round trip that compares only what the bridge carries certifies
+the bridge.
+
+### The test that closes the class
+
+`tests/test_form_and_renderer_agree.py` asserts both directions:
+
+* every field the renderer **prints** is offered by the form
+* every field the form **offers** is printed by the renderer
+
+The read-set is *measured*, not read: each field is rendered with a sentinel
+and the output searched for it, so it describes what `tex_renderer` prints
+rather than what its source appears to say. Grepping a renderer for
+`.get('url')` passes the moment somebody renames the accessor — testing a path
+against itself, again. The form side is extracted from the `.tsx` and **raises
+rather than returning an empty set**, so it cannot pass by comparing nothing
+to nothing.
+
+Verified to bite in both directions and on the skills case, by reintroducing
+each defect and watching the right test fail.
+
+### Verified in a browser, not only in tests
+
+The class this pass is about includes the one that passes contract tests and
+fails in front of a person. So: years cleared on the preferences screen →
+caption reads "Answer the years above and the levels follow from it", **Save
+enabled**, click, and `years_experience` on disk is `null` — not `0` — with
+`derive_levels` reading it back as no opinion. Import screen: contact shows
+five fields and no Portfolio; Skills renders four editable groups; editing a
+value updates state and blanking a label drops the header count 4 → 3, which
+is `skillsFromRows()` driving what gets saved.
+
+925 tests, three baselines clean.
+
+**Still open.** The header prints no location. Priya's page remains about half
+full (Q3). And `test_every_plausible_number_of_years_derives_something` is
+worth reading as a pattern rather than a fixed test: **any test that walks a
+range is a test that has not walked the absence.**
+
+---
+
+## R76. The re-run, and the verdict addressed to somebody who was not there
+
+**Decision:** (2026-08-26) A rung that may not rewrite a bullet is not judged
+as one that may. Priya Raghunathan's free-tier run goes from **0 valid, 5
+needs review** to **5 valid**, on the same five files.
+
+### What the re-run was for, and what it caught
+
+R74's verification ran `_verbatim_tailor` and `_generate_latex_file` by hand
+and checked the PDF. That was true as far as it went — one page, eight
+bullets, correct order — and it skipped `validate_resume_output` entirely. The
+whole pipeline, run end to end for the first time since, filed every one of
+those five PDFs under needs_review.
+
+**A spot-check that walks part of a path is a spot-check that certifies part
+of a path.** The R74 note says the resume was verified; what was verified was
+the file, not the verdict on it.
+
+### 1. The orphan zone was addressed to a model that was not there
+
+`_validate_bullet_length` errors on a bullet in an orphan zone and names two
+target ranges — "either compress to ≤110 or expand to 180-213". Its own
+docstring says why: *"the repair loop is the recovery path... feedback names
+exact target ranges so the LLM can correct on retry."*
+
+On the no-model rung there is no LLM and no retry. The text is the user's own,
+rewriting it is forbidden by the fabrication guard, and `fit_bullet` has
+already tried to compress it and failed. Priya's Toast bullet is 126
+characters. The error's only remaining effect was to condemn a resume she
+would have sent as it was.
+
+So on that rung it is a **warning**: still reported, with advice addressed to
+the only rewriter present ("shortening it by hand would tighten the line"), no
+longer a verdict. **Overflow stays an error on every rung** — a bullet past the
+maximum spills onto a second page, which is a consequence rather than an
+opinion about typography.
+
+This is the rule the codebase keeps rediscovering, in a new place: a check
+belongs to a domain, and this one had drifted outside its own. The zone rule
+governs *text the tool wrote*.
+
+### 2. The rung was read from the settings, not from what happened
+
+`self.llm_backend` is the rung that was **configured**. Both model rungs fall
+back to `_verbatim_tailor` when the model does not answer, so a run set to
+Ollama can produce a verbatim resume and then be validated against a budget
+nothing had spent — every component reported short.
+
+`_verbatim_tailor` now stamps `_verbatim: True` on every payload it produces,
+and both the budget re-fit and the validator read that. The tailor is the only
+thing that knows what it did; asking the settings was asking the wrong object.
+`_verbatim_reason` stays separate and still means "this rung was not the one
+you asked for" (R47), so a free-tier run does not read as a broken paid one.
+
+### Verified, end to end this time
+
+`python -m agents.orchestrator --profile priya_raghunathan --input <cached>`
+on the no-model rung: **5 valid, 0 needs review**, five PDFs, one page each,
+scores 70.0-73.8 against a threshold of 40. The same command before this
+change: 0 valid, 5 needs review. 935 tests, three baselines clean.
+
+### Found on the way, not fixed here
+
+**Ollama has no repair loop.** `_gemini_tailor` validates and makes one narrow
+repair attempt; `_chat_tailor` returns whatever came back. Measured on the
+same five jobs, llama3.1:8b writes bullets at 122-126 characters — the orphan
+zone, every time — and returns the wrong bullet count for at least one
+component. Those are real defects by a model that could be told to try again,
+and nothing tells it. **Twin-path shape, and it lands on the rung that is
+supposed to be the free tier's answer.**
+
+**There is no way to choose a rung.** `LLM_BACKEND = "auto"`,
+`OLLAMA_BASE_URL`, `OLLAMA_API_URL` and `OLLAMA_MODEL` are all hardcoded
+literals in `config.py` with no environment override, so testing the no-model
+floor on a machine with Ollama installed requires a script that reaches in and
+sets the module attribute. Confirmed rather than assumed: `detect()` prefers
+Gemini whenever a key is present, and clearing the key here selected Ollama,
+not `none`.
+
+Both belong to the Ollama work rather than to this fix, and both are now
+measured rather than suspected.
+
+---
+
+## R77. A third resume, and the four things one run of it found
+
+**Decision:** (2026-08-26) The pattern reader recognises a heading by its
+words, ends a section at a heading it does not know, keeps two degrees as two
+degrees, and does not read the link appendix as resume content.
+
+### Why a third resume at all
+
+Yash's is a `.tex` he wrote. Priya's is a PDF, and the whole point of her — but
+**she was invented to test the importer, so she can only ever contain problems
+somebody thought of.** The third is a real resume from outside the project.
+One run of `heuristic_schema` over it found four defects, none of which either
+existing fixture could express.
+
+The method generalises past "build against Priya, not against yourself": a
+fixture you wrote is a fixture that agrees with you.
+
+### 1. `Research/Projects` was not a heading
+
+Section matching was `lowered.startswith(word)`. That line begins with
+"research", so it matched nothing, and **the projects section did not exist**
+— thirty-six lines of projects and the publications below them were filed
+under Experience, the section above, and offered on the confirmation screen as
+work history.
+
+Headings now match on words: every word in a short line must be a section term
+or filler ("technical", "professional", "research", "and"), and at least one
+must be a term. Both halves were learned by breaking the other resume:
+
+* matching a term *anywhere* made `iSteer Technologies Bangalore, India` a
+  skills heading — an employer became a section break and took the experience
+  section with it
+* matching *whole words* made `Skills` stop matching the term `skill`, and
+  Priya's entire skills section vanished
+
+So: prefix per word, whole line accounted for.
+
+### 2. An unknown heading did not end the section above it
+
+`Publications` is not a section this importer wants, and it therefore was not
+a heading, so two conference papers became project bullets. `OTHER_HEADINGS`
+is a closed list of sections that **end** the current one and claim nothing.
+
+Closed, not heuristic, and the reason is measured: on that resume `AI/ML Intern
+Jan 2025 - April 2025` is 34 characters and `iSteer Technologies Bangalore,
+India` is 36. Any rule of the form "a short line is a heading" deletes the
+experience section. `"language"` was dropped from the list on the same
+grounds — it is a skills category label far more often than it is a section.
+
+### 3. Two degrees became one wrong record
+
+`_heuristic_education` built exactly one entry, by construction. A masters and
+a bachelors merged into:
+
+    school: "University of Massachusetts Masters of Science in Computer
+             Science PES University Bangalore, India"
+    degree: "Bachelor of Technology..."   dates: "Aug. 2025 - May 2027"
+
+The bachelors degree under the masters' dates. **Wrong rather than missing**,
+which is the worse of the two — R64's rule applied to a whole record. A blank
+field is visibly blank on the confirmation screen; that is a plausible
+sentence nobody would look at twice.
+
+Entries now flush on conflict: a second date range, a second degree, or a
+school line arriving after the current entry already has both.
+
+### 4. `\bmaster\b` does not match "Masters"
+
+Only "Bachelor of ..." was ever recognised as a degree, which is why the merge
+scrambled the way it did rather than merely splitting badly — the masters line
+was not a degree, fell through to the school name, and took the structure with
+it. Every spelled-out qualification now takes an optional `s`.
+
+Bare `MA` and `BA` stay out of the pattern, because "Boston, MA" is a state,
+and `test_a_city_and_state_is_not_read_as_a_masters` holds that — adding
+plurals is exactly the edit that would put them back.
+
+### 5. An affordance for one path, reaching the path that could not use it
+
+`extract_text` appends the PDF's link targets under `LINKS FOUND IN THIS
+DOCUMENT:` so the **model** can recover a URL the visible text does not carry;
+the extraction prompt says so in as many words. The pattern reader has no such
+instruction. After R75 taught it that `Label: values` is a skill category, the
+appendix arrived on the page as a category named `https` holding three URLs,
+with the marker glued to the end of the real skills.
+
+Twin-path again, in a new direction: not a fix applied to one of two paths,
+but a *feature* built for one and never considered against the other.
+
+### Verified
+
+Both PDFs on disk, before and after. The third: sections went from
+`{education: 4, experiences: 36}` — everything after Experience swallowed — to
+`{education: 4, experiences: 17, projects: 13, skills: 4}`, two education
+entries with the right degree against the right dates, four real skill
+categories and no `https`. Priya: unchanged, one education entry, the same four
+categories. 954 tests, three baselines. Each new test was run against the old
+code first: 13 of 19 fail there.
+
+### Left standing, measured
+
+* **Non-US locations.** `_CITY_STATE` requires `City, ST`, so "Bristol, United
+  Kingdom" is not a location and stays glued to the school name. Fixing it
+  needs a country vocabulary, not a looser regex — the comment on that pattern
+  already records what a looser class did.
+* **A school name leaking into the location.** `Northeastern University Boston,
+  MA` with no separator gives up its name to the location field; with " - " it
+  does not, which is why Priya never showed it. Asserted as observed.
+* **Kerning splits in labels and project names** — `F rameworks`, `Developer
+  T ools`, `T railSpecies`. The extraction prompt already tells the *model* to
+  repair these and names `"W ebApp"` as an example. The floor cannot, so this
+  is another defect that exists only for the tier without a key.
+* ~~**Mojibake.**~~ **Withdrawn, and it was never true.** Those characters
+  arrive as correct code points — U+2013, U+00B2, U+00D7 — and the `�`
+  was a console that could not print them. `_tidy` had nothing to answer for.
+  A measurement taken through a terminal is a measurement of the terminal;
+  `test_the_characters_are_unicode_and_not_damaged` now asserts the real
+  encoding so the claim cannot come back.
+
+  What is real in the same area: the `•` glyph survives extraction and was
+  reaching resume fields, which R78 fixes for Education.
+* **A standalone `Research` heading** would not be recognised, because
+  "research" had to become filler for `Research/Projects` to work.
+
+---
+
+## R78. Two real resumes, kept — and the fourth shape that tested the rule
+
+**Decision:** (2026-08-26) Both real resumes are permanent fixtures, stored
+anonymized as extracted text under `tests/fixtures/`. A fourth resume was run
+to find out whether R77's heading rule generalised or had been fitted to the
+resume that produced it. It generalised, and Education produced three more
+defects.
+
+### The fixtures, and why text rather than PDF
+
+    tests/fixtures/resume_two_degrees_non_us.txt
+    tests/fixtures/resume_glued_runs_six_roles.txt
+
+Both were written by other people for their own job searches. Names, phone
+numbers, emails, links, employers and schools are replaced; **every structural
+artifact is kept exactly** — the glue, the `•` glyphs, the en dashes, the
+margin wraps, the `|` separators, the expected-graduation date with no range.
+What makes them valuable is the shape, and the shape is not personal data.
+
+Storing the PDFs would have meant committing two strangers' contact details to
+a public repository. `test_no_real_contact_details_survive_anonymisation` holds
+that, and `test_the_extraction_artifacts_are_preserved` holds the other half —
+a fixture tidied into cleanliness is a fixture that has stopped testing
+anything.
+
+This also replaces the inline fixture R77's tests used, which was **written
+here from the real one** and therefore had the same defect as Priya: it agreed
+with its author. The tests now read the artifacts themselves.
+
+### The rule generalised
+
+The fourth resume — six roles, an American university, a wholly different
+layout — split into exactly four sections with none merged, all six employers
+in Experience, three skill categories intact. Including `Programming
+Languages:`, which is why `"language"` had to come out of `OTHER_HEADINGS` in
+R77: it is a category label far more often than a section.
+
+### Three more ways a school stopped being one
+
+All in Education, all from the same resume, and all invisible on the two
+resumes that came before it.
+
+**A coursework bullet became the school name.** `• Relevant Coursework:Deep
+Learning (Grad), Data Structures and Algorithms, Operating Systems, Machine
+Learning` was appended to `school`. Bullets under Education are content, not
+one of the four fields. They are now skipped — a deliberate loss, and worth
+stating as one: the schema has no coursework field, nothing downstream reads
+one, and the generator strips coursework from the rendered resume on purpose.
+Carrying it would be a field with no consumer. Leaving it where it was was a
+school name that is not a school name.
+
+**Its margin-wrapped continuation became a second school called "Learning".**
+Dropping a bullet that reached the page margin without dropping the line under
+it leaves half a sentence behind, and the flush-on-conflict rule from R77 then
+made it an entry. Keyed on the previous line's **length** rather than on "the
+last line was a bullet", so a short bullet followed by a second school does
+not swallow the school.
+
+**`Lakeside UniversityFairview, IL` matched the city/state pattern whole**, so
+the location field held the university and the school field held nothing at
+all. A candidate containing a glued word — a capital buried after a lowercase,
+which is what PDF extraction leaves when two runs of text touch — is two
+things touching, not a place. **Rejected, never repaired:** splitting on that
+same boundary splits PostgreSQL, JavaScript, LinkedIn and McDonald. The
+extraction prompt asks the *model* to repair these because the model can tell
+the difference and this cannot.
+
+And one that is not a school: **`Expected: June 2027` is a date.** `_DATE_RANGE`
+wants a range, so an expected graduation stayed inside the degree string and
+the dates column rendered empty. A lone month-and-year is now read when no
+range is present — a range always wins — and the label in front of it is
+stripped.
+
+### A correction to R77
+
+R77 recorded mojibake: "en-dashes, `R²` and `×10` arrive as `�`". **That was
+never true.** They arrive as correct code points; the replacement characters
+were a console that could not print them. The entry is struck through and
+`test_the_characters_are_unicode_and_not_damaged` now asserts the real
+encoding.
+
+A measurement taken through a terminal is a measurement of the terminal. The
+`•` glyph *is* real, survives extraction, and was reaching resume fields —
+which is the defect above.
+
+### Verified
+
+966 tests, three baselines. All three resumes parse sensibly and Priya is
+unchanged: one entry, right degree, right dates.
+
+### Still deferred, and now one piece of work rather than two
+
+`Bristol, United Kingdom` is not recognised as a location, and
+`Lakeside University Fairview, IL` with no separator gives up the school name
+to the location field — seen on two of the three real resumes now. Neither is
+a regex tweak. The shortest match is not the answer either: it turns "San
+Francisco, CA" into "Francisco, CA" and "Salt Lake City, UT" into "City, UT".
+Telling a city from a university, and a country from a state, both want a
+place vocabulary. `test_without_a_separator_the_school_name_still_leaks`
+records the behaviour so the eventual fix has something to change.
+
+**Also still free-tier-only:** the kerning splits. `T railSpecies` is a project
+*name*, and `F rameworks` and `Developer T ools` are skill *category labels* —
+both print. The extraction prompt already tells the model to repair these and
+names `"W ebApp"` as its example, so this is one more defect that exists only
+for the tier without a key. Which is the argument for Ollama, made from the
+data rather than from the roadmap.
+
+---
+
+## R79. A run records which rung wrote it
+
+**Decision:** (2026-08-26) Every result record carries `rung`, the run state
+carries `backend.configured` and `backend.used`, and `summary.md` says it above
+the fold. A cache hit names the model that wrote the text rather than the word
+"cache".
+
+Written before the Ollama work rather than during it, because otherwise the
+first thing that work would do is compare Ollama against a baseline that was
+already Ollama.
+
+### The ambiguity
+
+`llm_backends.detect()` prefers a local Ollama over nothing whenever no Gemini
+key is present. So on a machine where Ollama is installed — this one —
+**"no key" is not "no model"**, and clearing `GOOGLE_API_KEY` to measure the
+free tier measures Ollama instead. It happened: a run in R76 was labelled the
+free tier, was Ollama, and was only caught because the failure did not look
+like a verbatim failure.
+
+The only trace of which rung ran was one log line. Everything durable the run
+produced — `state.json`, `summary.md`, `analysis_results.json`, the `.tex`
+files themselves — was silent about it.
+
+**A run that does not record its own rung cannot be compared with another one
+later.** Every claim about the free tier in this document is a comparison, and
+until now each one rested on somebody remembering what they had configured.
+
+### Read from what happened
+
+Same rule as R76 and the same reason. `self.llm_backend` is what was
+*configured*; both model rungs fall back to `_verbatim_tailor` when the model
+does not answer, so one run can use more than one rung and the setting
+describes neither. `_rung_used` reads `_verbatim` off the payload first,
+because `last_model_used` is per-agent and still holds the previous job's
+model after a fallback.
+
+### "cache" names the storage, not the writer
+
+The first pass after adding the record reported `cache (5)` — no more legible
+than before, because a cache hit is still an answer from a particular model.
+`LLMCache` was already reading the model off the payload to log it and then
+throwing it away; it now keeps it on `last_model`, and the rung reads
+`llama3.1:latest (cached)`. Consumer wired in the same change, per the rule
+about fields that are computed and never read.
+
+The two runs that were previously indistinguishable now read:
+
+    **Bullets written by:** llama3.1:latest (cached) (5)  ·  backend selected: `ollama`
+    **Bullets written by:** verbatim (5)  ·  backend selected: `none`
+
+### The audit
+
+Every `.tex` under `outputs/` was checked against the masters on disk by
+comparing bullets. All model-path except two runs from May, which are
+verbatim. Nothing in the committed history is mislabelled in a way that would
+mislead a later comparison — the mislabelled passes were this session's, in a
+scratch directory, and were corrected when found.
+
+### Still true, and now the next thing to fix
+
+There is no way to *choose* a rung. `LLM_BACKEND = "auto"`, `OLLAMA_BASE_URL`,
+`OLLAMA_API_URL` and `OLLAMA_MODEL` are hardcoded literals in `config.py` with
+no environment override, so measuring the no-model floor on this machine
+requires a wrapper script that reaches in and sets the module attribute. A run
+can now say what it used; it still cannot be told what to use.
+
+---
+
+## R80. A rung can be chosen, and two cache defects found on the way
+
+**Decision:** (2026-08-26) The backend is selectable from a CLI flag, an
+environment variable, a profile field or a run request, with detection as the
+default rather than the answer. `config.resolve_backend` holds the chain and
+is the only place that knows it.
+
+    --backend  >  JOBSCOUT_LLM_BACKEND  >  profile  >  config.LLM_BACKEND  >  detect()
+
+R79 let a run *say* which rung wrote it. This lets it be *told*.
+
+### Why it blocked three things at once
+
+`LLM_BACKEND`, `OLLAMA_API_URL`, `OLLAMA_BASE_URL` and `OLLAMA_MODEL` were
+module constants with no override, so choosing a rung meant editing
+`config.py`. That single gap was:
+
+1. **Ollama could not be measured.** Switching rungs meant a wrapper script
+   that monkeypatched a module attribute — not reproducible, not scriptable,
+   and not something a number could be trusted against.
+2. **Users could not choose.** Anyone with a Gemini key got Gemini forever.
+   The free, local, private rung — the whole argument for the free tier — was
+   unreachable by the people it exists for.
+3. **It foreclosed accounts.** Per-user-per-run selection cannot be expressed
+   by a module constant. The account-readiness audit came back clean because
+   every store takes a path; this was the one subsystem that did not.
+
+### Absent, auto, and none are three different things
+
+`llm_backend: None` on a profile means **nobody has stated a preference**.
+`"auto"` means somebody stated that detection should decide. `"none"` means
+somebody stated they want no model. The field validator **refuses `"auto"` as
+a stored value**, because two spellings of "not chosen" — one absent and one a
+value — is how `location_score == 0` and `years_required: None` began. `"auto"`
+stays valid on the flag and the variable, where it is an instruction and is
+never persisted.
+
+An unknown name raises rather than falling through to detection, and the
+message names which layer said it: `JOBSCOUT_LLM_BACKEND says 'olama', which
+is not a backend`. Silently detecting after being told exactly what to do is
+how a measurement ends up describing a rung it did not use.
+
+### The two-paths bug, named before it happened
+
+`complete_json` serves resume import; `GenerationAgent` serves rewriting. They
+are the project's two model consumers, and if one obeyed the flag while the
+other went on detecting, a run pinned to Ollama would import through Gemini
+and nothing would say so.
+
+Every previous instance of this shape — the escape table (R69), the experience
+field order (R70), the selection breakdown (R57), `rarely_include` (R31),
+`scraped_successfully` (R61) — was found months later, by somebody walking the
+path the author does not. **This one was predicted from the shape of the
+change and had a test written against it before either path existed.**
+**The plan predicted two consumers and the code had four.** `backend_status`
+was a third, reading the constant directly; the fourth was a caption in
+`app.py` telling users that `LLM_BACKEND` in `config.py` pinned their rung —
+advice that stopped being true the moment there were four ways to pin it, and
+that pointed a user at a source file when a flag would do.
+
+So the twin rule generalises: it is not "check the other one", it is **count
+them**, and the count is reliably higher than the pair in mind. The seam is
+now closed by a test rather than by vigilance —
+`test_nothing_outside_config_reads_the_constant` walks every module's syntax
+tree and fails on a fifth caller. Parsed rather than grepped, because a text
+search flagged the docstring explaining the chain and the caption above:
+prose that explains a seam is the opposite of bypassing it. Verified by adding
+a fifth import and watching it fail.
+
+Worth recording as evidence the rule is operating rather than merely written
+down.
+
+### The recurring bug, committed inside the change that adds a setting
+
+The first draft of `resolve_backend` read the environment variable directly
+and never read `LLM_BACKEND` at all — making the constant **computed and never
+read**, this codebase's most-repeated defect, in the function whose entire
+purpose is to be the one place that reads it.
+
+It was not caught by reasoning. Five tests that set `config.LLM_BACKEND =
+"ollama"` to pin a rung fell straight through to detection and made real
+network calls against a deliberately fake URL; the suite went from 66 seconds
+to 197 and returned five failures. The constant is now the last layer of the
+chain — below the profile, because a person's stated preference outranks a
+code default, and above nothing.
+
+### Two cache defects, found while planning the measurement
+
+**`--no-cache` existed on the wrong entry point.** It was on
+`generation_agent.py`'s own `main()`, and its constructor documented itself as
+"wired to the --no-cache CLI flag" — true of one entry point and false of the
+one every real run uses. The orchestrator had no such flag and built its agent
+without `use_cache`, so a full run always cached and could not be told not to.
+A measurement is the caller that most needs it.
+
+**The cache key held the rung but not the model.** R45 put the rung in the key
+after three llama3.1 replies were served to a Gemini run and read as a Gemini
+regression. That module's closing line — "the rung, not the model id, so a
+fallback within a provider still hits" — was written when *provider* meant
+Gemini's model chain, where flash-lite answering for flash is the entire
+point. It does not survive a provider meaning "whatever you happened to pull":
+`llama3.1:8b` and `qwen2.5:7b` are both the `ollama` rung and shared one key.
+
+A two-model comparison would therefore have served the first model's answers
+to the second and produced a table that was perfect, instant and entirely
+fictional. **That failure mode has no error to notice**, which is why it is
+asserted rather than watched for. Gemini passes an empty model and keeps the
+sharing its chain is for; `ollama` and `openai` pass the resolved id.
+
+R11 said the embedding cache needed the model. R45 said this one needed the
+rung. This says the rung was not enough.
+
+**The pattern, named because it now has three instances and no name.** None of
+those three decisions was wrong when written, and nobody edited any of them.
+What changed was **the meaning of the category underneath them** — "provider"
+meant Gemini's fixed fallback chain until R37 made it mean "whatever you
+happened to pull". A cache key is a claim about which differences do not
+matter, and widening a category falsifies such a claim silently: no error, no
+failing test, just a table that agrees with itself.
+
+The tell was a comment that had quietly stopped being true — the same shape as
+R55's comment crediting a guard that never fired. So when a rung, a provider
+or a source is added, the question to ask is what the key assumes is
+interchangeable, and whether that is still so. Recorded in `CLAUDE.md`, because
+there will be a fifth rung.
+
+### Verified
+
+- `--backend none` **with a Gemini key present** → `verbatim (5)`.
+- `--backend ollama` **with a Gemini key present** → `llama3.1:latest (5)`.
+  This is the condition under which the rung has been unreachable for its
+  entire life. Read from `summary.md`, not the console (R78).
+- `JOBSCOUT_LLM_BACKEND=none` reproduces the floor with no wrapper script,
+  which is now deleted.
+- `JOBSCOUT_LLM_BACKEND=olama` fails loudly and names the variable.
+- In a browser: the Run screen lists all four rungs, with the OpenAI rung
+  disabled and reading "needs a key"; selecting Ollama flips the caption from
+  "Detected on this machine" to "Your choice, for this run". Unavailable rungs
+  are shown disabled rather than hidden, because hiding them is what kept
+  Ollama a secret.
+
+996 tests before this entry's own additions, three baselines clean.
+
+### Next
+
+Part 2: the measurement. R44's frozen corpus, four rows — the floor,
+`llama3.1:8b` for comparability with R44's table, one current model for
+whether the rung is viable today, and Gemini as the ceiling — scoring
+extraction and rewriting separately, because they are different tasks and a
+model can pass one and fail the other.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

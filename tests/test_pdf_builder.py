@@ -203,16 +203,24 @@ class TestVerbatimLatexIsNotDoubleEscaped(unittest.TestCase):
         self.assertNotIn("100% ", escaped)
         self.assertIn(r"\%", escaped)
 
-    def test_the_users_own_latex_is_left_alone(self):
-        original = r"reduced latency to $\sim 503$ms"
-        self.assertEqual(
-            self.agent._escape_latex(original, already_latex=True), original)
+    def test_the_users_own_math_arrives_as_a_tilde_and_leaves_as_a_span(self):
+        r"""
+        `already_latex=True` used to protect `$\sim 503$ms` from the escaper.
+        The parser now hands over `~503ms` instead, so there is nothing to
+        protect and the escaper produces the span itself.
+        """
+        from tools.resume.latex_parser import _clean_latex
+
+        plain = _clean_latex(r"reduced latency to $\sim 503$ms")
+        self.assertEqual(plain, "reduced latency to ~503ms")
+        self.assertEqual(self.agent._escape_latex(plain),
+                         r"reduced latency to $\sim$503ms")
 
     def test_escaping_a_math_span_would_have_mangled_it(self):
         """Pins the bug itself, so it cannot come back quietly."""
         mangled = self.agent._escape_latex(r"$\sim 503$ms")
         self.assertIn("textbackslash", mangled)
 
-    def test_empty_input_is_safe_on_both_paths(self):
-        self.assertEqual(self.agent._escape_latex("", already_latex=True), "")
-        self.assertEqual(self.agent._escape_latex(None, already_latex=True), "")
+    def test_empty_input_is_safe(self):
+        self.assertEqual(self.agent._escape_latex(""), "")
+        self.assertEqual(self.agent._escape_latex(None), "")

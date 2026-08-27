@@ -89,7 +89,8 @@ still works if you would rather not install the package.
 
 ```bash
 cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY
+# Fill in GOOGLE_API_KEY — that is the variable the code reads,
+# and .env.example already has the line waiting for it.
 ```
 
 Get a Gemini API key at [aistudio.google.com](https://aistudio.google.com).
@@ -143,6 +144,23 @@ Generated resumes appear in `outputs/<date>/`.
 ```bash
 streamlit run app.py
 ```
+
+The React port is being built alongside it and currently covers the job
+board. It is two processes — an HTTP boundary over the same pipeline, and a
+Vite dev server:
+
+```bash
+python -m uvicorn api.main:app --reload --port 8000
+```
+
+```bash
+npm install --prefix web && npm run dev --prefix web
+```
+
+Both UIs are views of one surface. `api/main.py` calls exactly the functions
+`app.py` calls and imports nothing else from the project, which
+`tests/test_ui_contract.py` enforces for both — the condition R25 accepted
+Streamlit on, now that there is a second view to test it against.
 
 Five screens: upload your resume, answer the two things a resume cannot state
 (where you live, and what you are allowed to work as), pick what you are

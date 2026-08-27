@@ -466,9 +466,14 @@ def _backend_panel():
             st.caption(cached["description"])
 
         if cached["forced"]:
+            # Was "`LLM_BACKEND` in config.py pins this", which stopped being
+            # true the moment there were four ways to pin it (R80) — and told
+            # a user to edit source when a variable or a flag would do.
             st.caption(
-                f"`LLM_BACKEND` in config.py pins this to **{chosen}**, so "
-                "detection is not choosing it."
+                f"Something has pinned this to **{chosen}**, so detection is "
+                "not choosing it: the `--backend` flag, the "
+                "`JOBSCOUT_LLM_BACKEND` variable, your profile, or "
+                "`LLM_BACKEND` in config.py, in that order."
             )
 
     return key
@@ -560,11 +565,25 @@ def screen_preferences():
     # words, and this screen used to ask for those directly — pushing the
     # translation onto the user, when the code translates it straight back to
     # years anyway (R68).
+    # Empty, not zero. `years_experience: None` means nobody has been asked;
+    # zero is the claim "new graduate". `int(current.get(...) or 0)` turned the
+    # first into the second, and because `st.number_input` has no unanswered
+    # state to return, saving the screen **wrote** the zero back — a six-year
+    # engineer who never touched this field was filtered as a new grad from
+    # then on, and nothing on any screen had said so.
+    #
+    # The React field next door has done this correctly since it was written,
+    # and its comment names this line as the thing it is not doing. Fixed on
+    # the path being built, left standing on the path being replaced: the
+    # twin-path bug with a note attached.
+    stated = current.get("years_experience")
     years = st.number_input(
         "Years of professional experience", min_value=0, max_value=40, step=1,
-        value=int(current.get("years_experience") or 0),
+        value=int(stated) if stated is not None else None,
+        placeholder="e.g. 6",
         help="Internships and coursework do not count. This decides which "
-             "postings are worth showing you and which rule you out.",
+             "postings are worth showing you and which rule you out. Leave it "
+             "empty and no level filter is applied.",
     )
 
     levels = seniority_levels()
@@ -632,12 +651,31 @@ def screen_preferences():
         _goto(1)
         st.rerun()
 
+    # Gated on what is *in force*, not on the override box. `seniority` is
+    # deliberately empty whenever the user has not overridden — that is what
+    # lets the levels follow the years — so requiring it disabled this button
+    # for every new profile, permanently, with no explanation. The only way
+    # forward was to open a collapsed expander and pick by hand, which is
+    # precisely the question R68 removed.
+    #
+    # It never showed up because the author's own profile still carries the
+    # seniority list from before R68 changed the question, so his button was
+    # always enabled. Measured: yash_pathak enabled, a freshly imported
+    # profile disabled.
+    # Gated on target roles alone. `in_force` is empty whenever the years are
+    # unanswered and nothing is overridden, and that is a legitimate state —
+    # the caption says "any level", `_tolerated_years` reads it as the widest
+    # tolerance rather than as zero, and the run works. Gating on it put a
+    # silent dead button in front of anyone who declined to state their years,
+    # which is R72's failure through a different field: the same screen, the
+    # same wall, no message either time.
     if forward.button("Save and continue", type="primary",
-                     disabled=not (roles and seniority)):
+                     disabled=not roles):
         update_profile_fields(st.session_state.profile_name, {
             "job_preferences": {
                 "target_roles": roles,
-                "years_experience": int(years),
+                # None stays None. See the number input above.
+                "years_experience": int(years) if years is not None else None,
                 # Written as given: empty when the user did not override, so
                 # `effective_seniority` derives. Nothing writes a derived value
                 # back here, which is what lets an override outlive later edits
@@ -848,8 +886,24 @@ def _render_running(run_id, has_latex):
         return
 
     result = status["result"]
-    st.success(f"Done — {result.get('valid', 0)} valid resume(s) from "
-               f"{result.get('analysed', 0)} scored jobs.")
+    # Green only when something passed. A run that wrote three resumes and
+    # validated none of them is not a success with a caveat, and st.success
+    # around a zero is the same lie the React screen was telling with a tick.
+    valid = result.get("valid", 0)
+    generated = result.get("generated", 0)
+    line = (f"Done — {valid} valid resume(s) from "
+            f"{result.get('analysed', 0)} scored jobs.")
+    if valid:
+        st.success(line)
+        if generated > valid:
+            st.warning(f"{generated - valid} more were written but did not pass "
+                       "validation, and are in needs_review/.", icon="⚠️")
+    elif generated:
+        st.warning(f"{generated} resume(s) were written and none passed "
+                   "validation. They are in needs_review/ — usually a bullet "
+                   "length problem rather than a broken file.", icon="⚠️")
+    else:
+        st.warning(line, icon="⚠️")
     for reason in result.get("degraded") or []:
         st.warning(f"Bullets were not rewritten: {reason}", icon="✍️")
 
@@ -992,7 +1046,19 @@ def _render_results(state, has_latex):
         st.warning("No resumes were generated. Try widening your preferences.")
         return
 
-    st.success(f"{len(results)} resume(s) generated from {len(analysed)} scored jobs.")
+    # `len(results)` counts files written, including the ones that failed
+    # validation and went to needs_review/. Reporting it as success is a count
+    # standing in for an outcome.
+    passed = [r for r in results if r.get("status") == "valid"]
+    if passed:
+        st.success(f"{len(passed)} resume(s) ready from {len(analysed)} scored jobs.")
+        if len(results) > len(passed):
+            st.warning(f"{len(results) - len(passed)} more need review before "
+                       "sending — marked below.", icon="⚠️")
+    else:
+        st.warning(f"{len(results)} resume(s) were written and none passed "
+                   "validation. Each is marked below and saved under "
+                   "needs_review/.", icon="⚠️")
 
     # A run whose model never answered still produces resumes — good ones, in
     # your own words. Saying so is the difference between a floor and a

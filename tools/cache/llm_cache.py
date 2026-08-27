@@ -21,7 +21,21 @@ Gemini's output until the payload's recorded model gave it away (R45). That is
 R11's finding — the embedding cache needed the model in its key — arriving a
 second time in the sibling module that did not get the lesson.
 
-The rung, not the model id, so a fallback within a provider still hits.
+The rung, and — for the rungs where it matters — the model id too.
+
+That last clause is R80, and it is the same finding one level further down.
+"The rung, not the model id, so a fallback within a provider still hits" was
+written when *provider* meant Gemini's model chain, where flash-lite's answer
+substituting for flash's is the entire point. It does not survive a provider
+meaning "whatever you happened to pull": `llama3.1:8b` and `qwen2.5:7b` are
+both the `ollama` rung, shared one key, and a comparison between them would
+have served the first one's answers to the second — perfectly, instantly, and
+entirely fictionally.
+
+So Gemini passes an empty model and keeps the substitution it wants; `ollama`
+and `openai` pass the resolved id, where no substitution is meant. R11 said
+the embedding cache needed the model, R45 said this one needed the rung, and
+this says the rung was not enough.
 """
 
 import hashlib
@@ -38,18 +52,27 @@ class LLMCache:
     """File-backed cache of parsed LLM JSON responses, keyed by prompt hash."""
 
     def __init__(self, cache_dir: str = ".cache/llm", enabled: bool = True,
-                 backend: str = ""):
+                 backend: str = "", model: str = ""):
         self.enabled = enabled
         self.backend = backend or "default"
+        # Empty for Gemini, deliberately: its fallback chain is meant to share
+        # entries. Set for ollama/openai, where two models are two answers.
+        self.model = model or ""
         self.cache_dir = Path(cache_dir)
         if self.enabled:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         self.hits = 0
         self.misses = 0
+        # The model that produced the last cache hit, read back off the
+        # payload. It was already being logged and thrown away, and a run
+        # reporting "cache" as the rung that wrote a resume names the
+        # storage rather than the writer — the exact ambiguity the rung
+        # record exists to remove.
+        self.last_model = ""
 
     def _key(self, prompt: str) -> str:
-        seed = f"{self.backend}|{prompt}"
+        seed = f"{self.backend}|{self.model}|{prompt}"
         return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
 
     def _path(self, prompt: str) -> Path:
@@ -76,6 +99,7 @@ class LLMCache:
 
         self.hits += 1
         model = payload.get("model", "unknown")
+        self.last_model = model
         logger.info(f"   💾 Cache hit (originally from {model}) — 0 API requests")
         return payload.get("response")
 

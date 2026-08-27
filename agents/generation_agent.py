@@ -51,22 +51,19 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-# A master bullet is written to be complete, not to fit a line: this resume's
-# run to about 500 characters where the model path rewrites them to 140-280.
-# So a verbatim bullet occupies roughly twice the space, and using the model
-# path's bullet count verbatim overflows onto a second page — measured, 13
-# bullets rendering to 2 pages and seven of them unable to compress.
+# What the model path spends per bullet, in rendered lines.
 #
-# The one-page rule is the invariant and bullet count is the only lever left
-# when the text cannot be rewritten, so the no-model rung takes fewer bullets
-# and keeps them whole. Chosen by rendering, not by taste.
-VERBATIM_BULLET_SCALE = 0.5
+# Measured, not assumed: every one of the 13 bullets on the last Gemini run
+# came out between 195 and 217 characters, which is `line_2` — the zone the
+# prompt and the validator both aim at. So a budget of N bullets is a claim on
+# 2N lines of page, and that is the quantity the no-model rung has to match.
+MODEL_PATH_LINES_PER_BULLET = 2
 
-
-def _scaled(count: int, scale: float) -> int:
-    """At least one bullet, however hard the budget is squeezed."""
-    import math
-    return max(1, int(math.floor(count * scale)))
+# Where each rendered line ends, in characters, from the zone table
+# `bullet_fit` and `validation` share. A line holds about 106 characters at
+# this template's margins, which is what the last entry extrapolates from.
+_LINE_ENDS = (110, 213, 316)
+_CHARS_PER_LINE = 106
 
 
 class GenerationAgent:
@@ -83,7 +80,8 @@ class GenerationAgent:
     
     def __init__(self, profile: UserProfile, resume_parser: ResumeParser,
                  mock_mode: bool = False, use_cache: bool = True,
-                 generate_pdf: bool = True, api_key: str = None):
+                 generate_pdf: bool = True, api_key: str = None,
+                 backend: str = None):
         """
         Initialize Generation Agent.
 
@@ -96,11 +94,16 @@ class GenerationAgent:
             generate_pdf: If True, compile each written .tex to PDF. Silently
                           degrades to .tex-only when no pdflatex is installed.
             api_key: Explicit Gemini key. None falls back to the environment.
+            backend: An explicitly chosen rung for this run, outranking the
+                     environment and the profile. None means "no opinion" and
+                     is not the same as "auto", which is an opinion about who
+                     decides. See `config.resolve_backend`.
         """
         self.profile = profile
         self.resume_parser = resume_parser
         self.mock_mode = mock_mode
         self.api_key = api_key
+        self.backend_choice = backend
 
         self.last_model_used = None
 
@@ -143,72 +146,62 @@ class GenerationAgent:
             cache_dir=LLM_CACHE_DIR,
             enabled=LLM_CACHE_ENABLED and use_cache,
             backend=self.llm_backend,
+            # The model too, for the rungs where two models are two different
+            # answers rather than one chain. Gemini passes nothing and keeps
+            # sharing entries across its fallback chain, which is what that
+            # chain is for. See the module docstring.
+            model=self._cache_model(),
         )
         logger.info(f"Cache: {'enabled' if self.llm_cache.enabled else 'disabled'}")
 
         logger.info("✅ Ready to generate resumes")
     
     
-    def _escape_latex(self, text: str, already_latex: bool = False) -> str:
+    def _escape_latex(self, text: str) -> str:
+        r"""
+        Escape LaTeX metacharacters. Always. There is no exception.
+
+        There used to be one: `already_latex=True` for the no-model rung, on
+        the premise that the user's own master bullets are valid LaTeX and
+        escaping them would turn `$\sim 503$ms` into visible markup. The
+        premise was half true, which is the worst kind. `parse_latex_resume`
+        unescapes `\%` to `%` and `\_` to `_` while leaving math spans
+        standing, so a bullet in memory was neither escaped nor plain — and a
+        single boolean cannot describe a string that is both.
+
+        The consequence landed on the rung with no model to hide it. A bare
+        `%` written back into a `.tex` comments out the rest of the line
+        including the closing brace, so the free tier produced files that
+        would not compile. The author never saw it because Gemini rewrites his
+        bullets, and rewritten prose routes through this function.
+
+        The fix is the invariant rather than the flag: `latex_parser` now
+        converts math spans to plain characters too, so **in memory a bullet
+        is plain text and LaTeX exists only in a rendered file**. Escaping
+        unconditionally is then correct by construction, and
+        `tex_renderer.escape` has always done exactly this.
         """
-        Escape LaTeX metacharacters — unless the text is already LaTeX.
-
-        `already_latex` exists for the no-model rung. Model output is prose
-        and must be escaped; the user's own master bullets are valid LaTeX
-        already, and escaping them turns a math span such as ~503ms into
-        visible backslash-and-dollar markup in the rendered PDF.
-
-        Found by reading a PDF, not by any test: both paths compiled, both
-        produced one page, and only one of them was readable.
-        """
-        if already_latex:
-            return text or ""
-
         return self._escape_latex_impl(text)
 
     def _escape_latex_impl(self, text: str) -> str:
-        """
-        Escape special LaTeX characters using a single-pass regex.
+        r"""
+        Escape LaTeX metacharacters, using the one table in the project.
 
-        `<` and `>` are the subtle ones and were missing until R53. They are
-        not *errors* in LaTeX — nothing warns, the file compiles, the PDF is
-        one page — but in the default OT1 font encoding a bare `<` renders as
-        an inverted exclamation mark. "p99 query latency of <5ms" shipped as
-        "p99 query latency of ¡5ms" in three resumes before anyone opened the
-        PDF and read it.
+        This used to carry its own copy. R53 added `<` and `>` here and not to
+        `tex_renderer`, so an imported resume rendered "<5ms" as an inverted
+        exclamation mark; R69 found that and synchronised the two by hand.
+        Adding the math characters for the round trip desynchronised them
+        again within the hour — `test_both_tables_cover_the_same_characters`
+        caught it, which is the only reason this is a shared import rather
+        than a third round of copying.
 
-        That is why they are easy to miss: every other character here fails
-        loudly. `%` eats the line, `&` breaks alignment, `#` is a parameter.
-        These two fail silently and only in the render, so no test that checks
-        compilation or page count can see them. Found by a human reading the
-        output.
+        Two tables kept equal by a test is better than two tables. One table
+        is better still: the scorers went the same way when the same pair of
+        twins produced the same class of bug for the third time.
         """
-        if not text:
-            return ""
-        replacements = {
-            '&': r'\&',
-            '%': r'\%',
-            '$': r'\$',
-            '#': r'\#',
-            '_': r'\_',
-            '{': r'\{',
-            '}': r'\}',
-            # `$\sim$`, not `\textasciitilde` (R69). Under this template's OT1
-            # encoding the latter renders as a raised diacritic — "˜2 min"
-            # rather than "~2 min" — and extracts as an unmappable character,
-            # so an ATS reading the PDF as text gets nothing where the number
-            # was qualified. This is the half of the glyph problem R53 could
-            # not fix by escaping, because the escape was the thing rendering
-            # wrong.
-            '~': r'$\sim$',
-            '^': r'\textasciicircum{}',
-            '\\': r'\textbackslash{}',
-            '<': r'\textless{}',
-            '>': r'\textgreater{}',
-        }
-        pattern = re.compile('|'.join(re.escape(key) for key in replacements.keys()))
-        return pattern.sub(lambda match: replacements[match.group()], str(text))
-    
+        from tools.resume.tex_renderer import escape
+        return escape(text)
+
     def generate_resumes(self, analysis_results: List[Dict], output_dir: str = "outputs",
                          on_progress=None) -> List[Dict]:
         """
@@ -250,13 +243,6 @@ class GenerationAgent:
                 # skipping them is why keyless runs used to overflow the page
                 # and land in needs_review.
                 bullet_budgets = self._compute_bullet_budgets(analysis)
-                if self.mock_mode or self.llm_backend == "none":
-                    # Fewer bullets, kept whole. Scaling inside the tailor
-                    # alone would leave validation expecting the model path's
-                    # count and reporting every component as short — the
-                    # budget is the contract, so it is what gets scaled.
-                    bullet_budgets = self._scale_budgets(
-                        bullet_budgets, VERBATIM_BULLET_SCALE)
                 budgeted_components = bullet_budgets.get(
                     "budgeted_components", selected
                 )
@@ -267,6 +253,24 @@ class GenerationAgent:
                     analysis=analysis,
                     bullet_budgets=bullet_budgets,
                 )
+
+                if self.mock_mode or (tailored or {}).get("_verbatim"):
+                    # Every rung is handed the model path's budget; a rung
+                    # that cannot rewrite a bullet spends it on whole ones
+                    # instead, and lands on a different count. Validation has
+                    # to expect that count or it reports every component as
+                    # short — the budget is the contract between tailoring and
+                    # validation, so it is restated here rather than being
+                    # quietly broken in the tailor.
+                    #
+                    # Keyed on what the tailor did, not on `self.llm_backend`.
+                    # `_chat_tailor` and `_gemini_tailor` both fall back here
+                    # when the model does not answer, and that fallback is
+                    # invisible to the setting: the run is configured for
+                    # Ollama and the resume is verbatim. Gating on the setting
+                    # validated those against a budget nothing had spent, and
+                    # reported every component as short.
+                    bullet_budgets = self._fit_budgets_to_lines(bullet_budgets)
 
                 if not tailored:
                     logger.error("   ❌ Tailoring failed")
@@ -356,6 +360,11 @@ class GenerationAgent:
                     # outcome when you chose it and a thing you would want to
                     # know about when you did not (R47).
                     "degraded": tailored.get("_verbatim_reason"),
+                    # What wrote this resume's bullets, per resume, because
+                    # one run can use more than one rung. `degraded` above
+                    # says *why* a fallback happened and is absent when the
+                    # keyless rung was chosen on purpose; this is always here.
+                    "rung": self._rung_used(tailored),
                     "validation": {
                         "valid": validation.valid,
                         "errors": validation.errors,
@@ -724,6 +733,28 @@ class GenerationAgent:
         total_exp_budget = exp_budget_table.get(num_exp, num_exp * 2)
         total_proj_budget = proj_budget_table.get(num_proj, num_proj * 2)
 
+        exp_max = 3
+        proj_max = 2 if num_proj >= 4 else 3
+
+        # A page is a page whatever sections are on it.
+        #
+        # These two tables were measured against resumes that have both
+        # sections (Q3: 3 exp + 3 proj = 12 bullets, two spare), so each one
+        # describes half a page. A resume with no projects therefore spent the
+        # projects half on nothing: Priya's three jobs shared six bullets and
+        # the bottom third of the page stayed blank.
+        #
+        # Eighth instance of the rule. A section the resume does not have is
+        # unknown evidence, not a reason to shrink the section it does have —
+        # the same arithmetic that scored her at 1.8% by dividing three jobs
+        # by a cap of five. When one side is missing the other gets the page,
+        # bounded by what a single component may hold and, below, by how many
+        # bullets the master actually contains.
+        if not num_proj:
+            total_exp_budget = num_exp * exp_max
+        elif not num_exp:
+            total_proj_budget = num_proj * proj_max
+
         # Per-component caps based on importance
         # High importance → can get up to 3 bullets
         # Low importance → capped at 1 bullet regardless of budget
@@ -733,7 +764,7 @@ class GenerationAgent:
             importance=self._promote_on_evidence(
                 selected_exp_ids, exp_importance, conditional_scores),
             total_budget=total_exp_budget,
-            global_max=3,
+            global_max=exp_max,
         )
 
         proj_budgets = self._allocate_with_importance(
@@ -742,7 +773,7 @@ class GenerationAgent:
             importance=self._promote_on_evidence(
                 selected_proj_ids, proj_importance, conditional_scores),
             total_budget=total_proj_budget,
-            global_max=2 if num_proj >= 4 else 3,
+            global_max=proj_max,
         )
 
         actual_exp_total = sum(exp_budgets.values())
@@ -1128,7 +1159,10 @@ Source bullets:
 
         cached = self.llm_cache.get(prompt)
         if cached is not None:
-            self.last_model_used = "cache"
+            # The model that originally wrote it, not the word "cache". A run
+            # has to be able to say which rung produced a resume, and "cache"
+            # names where the text was kept rather than who wrote it.
+            self.last_model_used = f"{self.llm_cache.last_model} (cached)"
             return cached
 
         client = genai.Client(api_key=resolve_api_key(self.api_key))
@@ -1232,6 +1266,24 @@ Source bullets:
                         for proj in tailored.get('projects', []) if isinstance(proj, dict)]
             logger.debug(f"   📋 Projects: {', '.join(proj_ids)}")
 
+    def _cache_model(self) -> str:
+        """
+        The model id that belongs in the cache key, or `""` to share entries.
+
+        Empty for Gemini on purpose: `GENERATION_MODELS` is a fallback chain,
+        and flash-lite answering where flash answered yesterday is the
+        behaviour that chain exists to provide. Set for `ollama` and `openai`,
+        where two models are two answers and sharing a key means one of them
+        gets attributed the other's work (R80).
+        """
+        from config import OPENAI_MODEL
+
+        if self.llm_backend == "ollama":
+            return getattr(self, "ollama_model", "") or ""
+        if self.llm_backend == "openai":
+            return OPENAI_MODEL
+        return ""
+
     def _resolve_backend(self, api_key) -> str:
         """
         Pick a rung, say which one out loud (R33), and remember if we fell.
@@ -1243,11 +1295,17 @@ Source bullets:
         and the UI stayed silent about a backend the user had asked for.
 
         `self.downgrade_reason` carries it to `_verbatim_tailor`.
+
+        The choice itself comes from `config.resolve_backend`, which holds the
+        whole precedence chain — flag, environment, profile, then detection.
+        This used to read `LLM_BACKEND` straight off the module, as did three
+        other callers, which was fine while a module constant was the only
+        answer and would have drifted the moment it stopped being.
         """
-        from config import LLM_BACKEND, OLLAMA_API_URL, OLLAMA_MODEL, OPENAI_MODEL
+        from config import OLLAMA_API_URL, OLLAMA_MODEL, OPENAI_MODEL, resolve_backend
         from tools.generation import llm_backends
 
-        choice = (LLM_BACKEND or "auto").lower()
+        choice = resolve_backend(self.backend_choice, self.profile)
         if choice == "auto":
             choice = llm_backends.detect(
                 gemini_key=resolve_api_key(api_key),
@@ -1277,27 +1335,136 @@ Source bullets:
                         "rewritten for each job.")
         return choice
 
-    def _scale_budgets(self, budgets: Dict, scale: float) -> Dict:
+    def _rung_used(self, tailored: Dict) -> str:
         """
-        Fewer bullets, for a rung that cannot shorten them.
+        What actually wrote these bullets, as one word for the record.
 
-        Returns a copy: the caller's dict is also what validation reads, and
-        mutating it in place would make the two disagree in a way that is
-        tedious to trace.
+        Not `self.llm_backend`, which is what was *configured*. A run set to
+        Ollama produces verbatim resumes whenever the model does not answer,
+        and until this was written down the only trace of that was a warning
+        line in a log nobody keeps.
+
+        It matters beyond tidiness: every "free tier" measurement taken on a
+        machine with Ollama installed was a measurement of Ollama, because
+        `detect()` prefers it over nothing whenever no Gemini key is present.
+        A run that does not record its own rung cannot be compared with
+        another one later, and two of this project's passes have already been
+        mislabelled that way.
         """
-        scaled = dict(budgets)
-        for section in ("experiences", "projects"):
-            scaled[section] = {
-                cid: _scaled(count, scale)
-                for cid, count in (budgets.get(section) or {}).items()
-            }
+        if not isinstance(tailored, dict):
+            return "unknown"
+        if tailored.get("_verbatim"):
+            return "verbatim"
+        # `last_model_used` is per-agent, not per-resume, so it still holds
+        # the previous job's model after a fallback. The check above is what
+        # keeps that from being read as this resume's answer.
+        return self.last_model_used or self.llm_backend or "unknown"
+
+    def _rendered_lines(self, text: str, kind: str) -> int:
+        """
+        How tall one master bullet renders, after the fitter has had it.
+
+        The fitter is deterministic and runs on this rung too, so asking it
+        here gives the same answer the page will.
+
+        Measured in characters rather than by zone name, because the zones
+        that mean "this fits badly" still occupy a whole line: an `orphan_2`
+        bullet is 111-179 characters and renders **two** lines, one of them
+        half empty. Reading the zone label and treating everything unnamed as
+        the worst case counted those as three, which cost Priya's Toast job a
+        bullet it had room for.
+        """
+        if not isinstance(text, str) or not text.strip():
+            return 0
+        length = len(fit_bullet(text, kind).text)
+        for lines, end in enumerate(_LINE_ENDS, start=1):
+            if length <= end:
+                return lines
+        # Longer than the tallest zone: compression could not reach one, so
+        # measure what is actually there rather than capping the estimate.
+        return -(-length // _CHARS_PER_LINE)
+
+    def _bullets_within_lines(self, bullets, kind: str, line_budget: int):
+        """
+        The bullets that fit in `line_budget` rendered lines, in master order.
+
+        **Skipped, not stopped.** A bullet too tall for the room left does not
+        mean the room is spent: 101gen's five bullets measure 3, 4, 2, 1 and 2
+        lines against a budget of 6, and stopping at the four-line one shipped
+        one bullet where three fit exactly. Order is preserved among those
+        kept, so the strongest bullet that fits is still the first on the page.
+
+        Always at least one. A component on the page with nothing under it is
+        worse than one that runs a line long.
+        """
+        chosen, used = [], 0
+        for bullet in bullets or []:
+            lines = self._rendered_lines(bullet, kind)
+            if chosen and used + lines > line_budget:
+                continue
+            used += lines
+            chosen.append(bullet)
+        return chosen or list(bullets or [])[:1]
+
+    def _fit_budgets_to_lines(self, budgets: Dict) -> Dict:
+        """
+        The same page, spent on bullets nobody is going to rewrite.
+
+        A budget of N bullets is a claim on `2N` lines of page, because that
+        is what the model path spends (see `MODEL_PATH_LINES_PER_BULLET`).
+        This rung cannot change how long a bullet is, so it keeps the claim
+        and changes the count: take whole bullets from the master until the
+        line budget is used up.
+
+        It was a flat `count // 2` before, and that constant was the author's
+        resume wearing a number. His master bullets run to 250-440 characters
+        and render three lines each, so halving the count was roughly right
+        *for him* — and wrong in both directions for anyone else. Priya's
+        bullets are 59-192 characters and render one line, so halving spent
+        half her page on nothing and printed **one bullet per job**, which
+        reads as a resume with nothing to say. Sixth time a constant
+        calibrated against the author's own file has decided a stranger's
+        output; this one is measured from the bullets in front of it.
+
+        Note it can also allocate *more* bullets than the model path would,
+        and that is the point rather than a side effect: short bullets buy
+        more of them for the same vertical space.
+
+        **This is validation's copy, not tailoring's.** `_verbatim_tailor`
+        gets the untouched model-path budget and makes the same selection
+        from it through `_bullets_within_lines`; this counts what that
+        selection will contain. Two callers of one function rather than a
+        count computed here and a slice taken there — the shape that has
+        produced six bugs in this repo when the two halves drifted.
+        """
+        fitted = dict(budgets)
+
+        for section, kind, lookup in (
+            ("experiences", "experience", self.resume_parser.get_experience_by_id),
+            ("projects", "project", self.resume_parser.get_project_by_id),
+        ):
+            counts = {}
+            for cid, count in (budgets.get(section) or {}).items():
+                component = lookup(cid)
+                if not component:
+                    # Nothing to measure. Leave the model path's number alone
+                    # rather than inventing one; validation will report the
+                    # missing component, which is the real problem.
+                    counts[cid] = count
+                    continue
+
+                counts[cid] = len(self._bullets_within_lines(
+                    component.bullets, kind,
+                    count * MODEL_PATH_LINES_PER_BULLET))
+            fitted[section] = counts
+
         totals = {
-            "experiences": sum(scaled["experiences"].values()),
-            "projects": sum(scaled["projects"].values()),
+            "experiences": sum(fitted["experiences"].values()),
+            "projects": sum(fitted["projects"].values()),
         }
         totals["overall"] = totals["experiences"] + totals["projects"]
-        scaled["totals"] = totals
-        return scaled
+        fitted["totals"] = totals
+        return fitted
 
     def _verbatim_tailor(self, job: Dict, selected: Dict,
                          bullet_budgets: Dict = None, reason: str = "") -> Dict:
@@ -1330,7 +1497,18 @@ Source bullets:
         exp_budget = budgets.get("experiences", {})
         proj_budget = budgets.get("projects", {})
 
-        tailored = {"experiences": [], "projects": []}
+        # `_verbatim` says which rung wrote this and is set unconditionally;
+        # `_verbatim_reason` says why, and only exists when the rung was not
+        # chosen on purpose.
+        #
+        # The distinction is load-bearing. Everything downstream that needs to
+        # know "were these bullets rewritten" was reading `self.llm_backend`,
+        # which is the rung that was *configured* rather than the one that
+        # ran. Both model rungs fall back here when the model does not answer,
+        # so a run set to Ollama can produce a verbatim resume and be judged
+        # as a rewritten one. Stamping the payload puts the answer where it
+        # cannot disagree with the thing it describes.
+        tailored = {"experiences": [], "projects": [], "_verbatim": True}
         # Carried on the payload rather than returned alongside it, because
         # every caller of this already threads a single dict through fitting,
         # validation and the result record. An out-of-band value would be
@@ -1338,29 +1516,42 @@ Source bullets:
         if reason:
             tailored["_verbatim_reason"] = reason
 
+        def keep(component, budget, kind):
+            """
+            The budget here is the **model path's**, in bullets. This rung
+            cannot shorten a bullet, so it spends the same page — `2N` lines —
+            on however many whole ones fit. `_fit_budgets_to_lines` counts the
+            result of this same call, which is what keeps validation's
+            expectation and the page in agreement.
+
+            A component with no budget entry takes everything it has: that is
+            a component nobody allocated for, and dropping its bullets on the
+            way would be a silent subtraction.
+            """
+            if component.id not in budget:
+                return list(component.bullets)
+            return self._bullets_within_lines(
+                component.bullets, kind,
+                budget[component.id] * MODEL_PATH_LINES_PER_BULLET)
+
         for exp_id in selected.get("experiences", []):
             exp = self.resume_parser.get_experience_by_id(exp_id)
             if not exp:
                 continue
-            keep = exp_budget.get(exp.id, len(exp.bullets))
             tailored["experiences"].append({
                 "id": exp.id, "title": exp.title, "company": exp.company,
                 "dates": exp.dates, "location": exp.location,
-                "bullets": list(exp.bullets)[:keep],
-                # Straight from the user's .tex, so already valid LaTeX.
-                "_already_latex": True,
+                "bullets": keep(exp, exp_budget, "experience"),
             })
 
         for proj_id in selected.get("projects", []):
             proj = self.resume_parser.get_project_by_id(proj_id)
             if not proj:
                 continue
-            keep = proj_budget.get(proj.id, len(proj.bullets))
             tailored["projects"].append({
                 "id": proj.id, "name": proj.name, "url": proj.url,
                 "tech": proj.tech, "dates": proj.dates,
-                "bullets": list(proj.bullets)[:keep],
-                "_already_latex": True,
+                "bullets": keep(proj, proj_budget, "project"),
             })
 
         return self._apply_bullet_fitting(tailored)
@@ -1404,7 +1595,10 @@ Source bullets:
 
         cached = self.llm_cache.get(prompt)
         if cached is not None:
-            self.last_model_used = "cache"
+            # The model that originally wrote it, not the word "cache". A run
+            # has to be able to say which rung produced a resume, and "cache"
+            # names where the text was kept rather than who wrote it.
+            self.last_model_used = f"{self.llm_cache.last_model} (cached)"
             return self._apply_bullet_fitting(cached)
 
         try:
@@ -1632,6 +1826,26 @@ Source bullets:
         if header_end == -1:
             header_end = master_latex.find('\\section{Experience}')
 
+        # `find` answers "not found" with -1, and -1 was being used as a slice
+        # index: `master_latex[:header_end]` silently became everything but
+        # the last character, and the `if header_end != -1` below then threw
+        # the header away entirely. The output had no \documentclass, no
+        # \begin{document}, no name and no education — 574 bytes that will not
+        # compile — and the run reported that it had written a resume.
+        #
+        # A master with no Experience heading is one `tex_renderer` produced
+        # from an import with no experiences, which the orchestrator now
+        # refuses before the run. This is the second line of defence, for a
+        # hand-written master that names the section something else: fail
+        # loudly rather than emit a headless file. Seventh instance of a
+        # not-found sentinel read as a value.
+        if header_end == -1:
+            raise ValueError(
+                "Could not find the Experience section in your master resume, "
+                "so there is no way to tell the header from the body. The "
+                "template expects a line reading \\section{Experience}."
+            )
+
         # Keep everything from Technical Skills onward
         skills_start = master_latex.find('%-----------PROGRAMMING SKILLS-----------')
         if skills_start == -1:
@@ -1650,98 +1864,27 @@ Source bullets:
 
         latex_content = header_section
 
-        # -------------------------
-        # Experience section
-        # -------------------------
-        latex_content += """%-----------EXPERIENCE-----------
-    \\section{Experience}
-    \\resumeSubHeadingListStart
+        # Both sections are built by `tex_renderer`, which is the only module
+        # that knows how one looks. This agent used to assemble them itself,
+        # and the pair produced four bugs before they were merged: the field
+        # transposition R70 fixed on one side only (R70), the escape tables
+        # that desynchronised twice (R69, R73), an orphan `\section{Projects}`
+        # heading rendered over nothing, and a project link the other builder
+        # silently dropped.
+        #
+        # Empty sections are omitted rather than emitted bare — a heading with
+        # nothing under it is a visible defect on a resume, and it is also
+        # what a reader of this file uses as a parse anchor, so "sometimes
+        # present" was the worst of the three options.
+        from tools.resume import tex_renderer
 
-    """
+        experiences = tex_renderer.experience_block(tailored.get("experiences"))
+        projects = tex_renderer.project_block(tailored.get("projects"))
 
-        for exp in tailored.get('experiences', []):
-            # needs_review resumes are still written to disk, so this runs on
-            # output validation has already rejected. Skip what it cannot
-            # render rather than losing the whole file.
-            if not isinstance(exp, dict):
-                continue
-            verbatim = bool(exp.get('_already_latex'))
-            title = self._escape_latex(exp.get('title', 'Unknown Title'))
-            company = self._escape_latex(exp.get('company', 'Unknown Company'))
-            dates = self._escape_latex(exp.get('dates', 'Dates'))
-            location = self._escape_latex(exp.get('location', ''))
-            bullets = exp.get('bullets', [])
-
-            # {title}{dates}{company}{location} — the order the master template
-            # means, and the order `tex_renderer._experiences` writes. This
-            # renderer had company and title transposed. The PDF looked fine
-            # either way, which is why it survived: bold-company reads as a
-            # legitimate style. What it broke was reading the file back —
-            # `parse_latex_resume` files argument three as the employer, so
-            # every generated resume named its job titles as companies and two
-            # internships sharing a title collapsed onto one id. Anyone saving
-            # a tailored resume as their new master lost an experience.
-            #
-            # The transposition was found once already and fixed only in the
-            # other renderer (known_questions.md, "The renderer transposed
-            # experience fields"). Fifth time a fix has landed on one of two
-            # paths; `test_tex_renderer.py` and `test_latex_escaping.py` now
-            # hold both to the same rule.
-            latex_content += f"""    \\resumeSubheading
-                {{{title}}}{{{dates}}}
-                {{{company}}}{{{location}}}
-                \\resumeItemListStart
-            """
-
-            for bullet in bullets:
-                escaped_bullet = self._escape_latex(bullet, already_latex=verbatim)
-                latex_content += f"        \\resumeItem{{{escaped_bullet}}}\n"
-
-            latex_content += "      \\resumeItemListEnd\n\n"
-
-        # Close Experience section before starting Projects
-        latex_content += "  \\resumeSubHeadingListEnd\n\n\n"
-
-        # -------------------------
-        # Projects section
-        # -------------------------
-        latex_content += """%-----------PROJECTS-----------
-    \\section{Projects}
-    \\resumeSubHeadingListStart
-
-    """
-
-        for proj in tailored.get('projects', []):
-            if not isinstance(proj, dict):
-                continue
-            verbatim = bool(proj.get('_already_latex'))
-            name = self._escape_latex(proj.get('name', 'Unknown Project'))
-            tech = self._escape_latex(proj.get('tech', ''))
-            dates = self._escape_latex(proj.get('dates', ''))
-            bullets = proj.get('bullets', [])
-
-            # Mock tailoring uses "url"; Gemini may return "link".
-            # Support both so links don't disappear.
-            link = proj.get('url') or proj.get('link') or ''
-
-            if link:
-                proj_heading = f"\\textbf{{\\href{{{link}}}{{\\underline{{{name}}}}}}} $|$ \\emph{{{tech}}}"
-            else:
-                proj_heading = f"\\textbf{{{name}}} $|$ \\emph{{{tech}}}"
-
-            latex_content += f"""    \\resumeProjectHeading
-        {{{proj_heading}}}{{{dates}}}
-        \\resumeItemListStart
-    """
-
-            for bullet in bullets:
-                escaped_bullet = self._escape_latex(bullet, already_latex=verbatim)
-                latex_content += f"        \\resumeItem{{{escaped_bullet}}}\n"
-
-            latex_content += "      \\resumeItemListEnd\n\n"
-
-        # Close Projects section before adding Skills/footer
-        latex_content += "  \\resumeSubHeadingListEnd\n\n\n"
+        if experiences:
+            latex_content += "%-----------EXPERIENCE-----------\n" + experiences + "\n"
+        if projects:
+            latex_content += "%-----------PROJECTS-----------\n" + projects + "\n"
 
         # -------------------------
         # Technical Skills section

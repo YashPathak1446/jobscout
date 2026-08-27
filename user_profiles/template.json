@@ -3,58 +3,58 @@
   "created": "YYYY-MM-DD",
   "description": "Template profile - copy and customize for each user",
   "personal_info": {
-    "name": "Your Name",
-    "email": "your.email@example.com",
-    "phone": "123-456-7890",
-    "github_url": "https://github.com/yourusername",
-    "linkedin_url": "https://www.linkedin.com/in/yourusername/",
-    "graduation_date": "Month YYYY",
-    "graduation_term": "Spring/Fall YYYY",
-    "school": "Your University",
-    "location": "City, State",
-    "degree": "Bachelor of Science in Computer Science",
-    "visa_status": "US Citizen | Green Card | F1 OPT | H1B",
-    "us_citizen": true,
+    "name": "",
+    "email": "",
+    "phone": "",
+    "github_url": "",
+    "linkedin_url": "",
+    "graduation_date": "",
+    "graduation_term": "",
+    "school": "",
+    "location": "",
+    "degree": "",
+    "visa_status": "",
+    "us_citizen": false,
     "permanent_resident": false,
-    "holds_security_clearance": false
+    "holds_security_clearance": false,
+    "_comment": [
+      "Blank means unknown, and unknown is what a template knows about someone",
+      "it has never met. These fields used to carry instructions as values \u2014",
+      "'Your Name', 'City, State', 'US Citizen | Green Card | F1 OPT | H1B' \u2014",
+      "and nothing downstream could tell an instruction from an answer. The",
+      "wizard pre-filled 'City, State' into the location box and left Continue",
+      "enabled, so agreeing with the form recorded a location that does not",
+      "exist. Everything a resume states is filled in by derive_personal_info();",
+      "what is left is what the About-you screen asks."
+    ]
   },
   "job_preferences": {
     "target_roles": [
       "Software Engineer",
-      "Backend Engineer",
-      "Add your target roles here"
+      "Backend Engineer"
     ],
     "seniority": [],
     "employment_types": [
       "full-time"
     ],
     "exclude_keywords": [
-      "senior",
-      "staff",
-      "principal",
-      "5+ years",
-      "PhD required"
+      "PhD required",
+      "security clearance required"
     ],
     "locations": {
       "countries": [
         "United States"
       ],
       "exclude_countries": [],
-      "states_priority": [
-        "California",
-        "New York"
-      ],
-      "states_acceptable": [
-        "Texas",
-        "Washington"
-      ],
+      "states_priority": [],
+      "states_acceptable": [],
       "cities": [
         "Remote"
       ],
       "remote_ok": true,
       "willing_to_relocate": true
     },
-    "years_experience": 0
+    "years_experience": null
   },
   "resume_preferences": {
     "master_resume_path": "data/master_resumes/YOUR_NAME.tex",

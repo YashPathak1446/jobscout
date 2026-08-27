@@ -149,10 +149,33 @@ def extract_resume(file_bytes: bytes, filename: str) -> dict:
         return {"kind": "latex", "path": source}
 
     schema = resume_import.to_schema(text, agent=llm_backends.complete_json)
-    if not (schema.get("experiences") or schema.get("projects")):
+
+    # Three outcomes, not two.
+    #
+    # This guard used to be `if not (experiences or projects): raise`, and that
+    # made the heuristic floor unreachable. `heuristic_schema` returns
+    # `experiences: []` *by design* — splitting roles apart is the judgement a
+    # regex cannot make — and keeps the section's raw lines under `_unparsed`
+    # so a confirmation screen can show them. `app.py` has had the code to
+    # display exactly that since the screen was written, and its test builds
+    # the `_unparsed` state by hand because the product could not produce it:
+    # with no model the floor always returned zero experiences, so the raise
+    # always fired first.
+    #
+    # The result was that arriving without a key — the configuration a stranger
+    # is most likely to arrive in — turned a readable PDF into "could not read
+    # any experience", while the same file with a key imported three jobs
+    # cleanly. Measured on a six-year Boston resume: contact, education and
+    # four skill categories all read fine, and the error threw them away.
+    salvaged = {k: v for k, v in (schema.get("_unparsed") or {}).items() if v}
+    readable = (schema.get("experiences") or schema.get("projects")
+                or salvaged or schema.get("education")
+                or (schema.get("contact") or {}).get("email"))
+
+    if not readable:
         raise ValueError(
-            f"Could not read any experience or projects out of {source.name}. "
-            "A text-based PDF works best; a scanned image will not."
+            f"Could not read any text out of {source.name}. A text-based PDF "
+            "works best; a scanned image will not."
         )
 
     return {"kind": "extracted", "schema": schema, "source": source}

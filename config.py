@@ -24,6 +24,8 @@ Only the live probe tells the truth.
 # (`resolve_api_key`), and everything imports it, so loading here fixes every
 # entry point at once. `load_dotenv` is idempotent, and it never overrides a
 # variable already set in the real environment.
+import os as _os
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -59,7 +61,14 @@ GENERATION_MODELS = [
 # known_questions.md was taken against it, then a hosted OpenAI-compatible key,
 # then a local Ollama, then "none" — which needs nothing and still produces a
 # correctly targeted resume, just without rewriting.
-LLM_BACKEND = "auto"
+#
+# This is the **default**, not the answer. `resolve_backend` below holds the
+# precedence chain; a CLI flag, an environment variable and a profile field all
+# outrank this literal. It was a bare constant until R80, which meant choosing
+# a rung required editing this file — so the free rung was unreachable by the
+# people it exists for, and measuring it required a script that monkeypatched
+# this module attribute.
+LLM_BACKEND = _os.getenv("JOBSCOUT_LLM_BACKEND") or "auto"
 
 # OpenAI-compatible endpoint, used for "openai". Point it anywhere that speaks
 # /chat/completions: Groq, OpenRouter, Together, DeepSeek, LM Studio.
@@ -67,9 +76,14 @@ OPENAI_BASE_URL = "https://api.openai.com/v1"
 OPENAI_MODEL = "gpt-4o-mini"
 
 # Ollama speaks the same shape on a different port.
-OLLAMA_BASE_URL = "http://localhost:11434/v1"
-OLLAMA_API_URL = "http://localhost:11434"
-OLLAMA_MODEL = "llama3.1"
+#
+# One variable, two forms. They were two literals and nothing tied them
+# together, so pointing Ollama somewhere else meant editing both and getting
+# it right twice — the shape of every ignore-by-filename bug in this project.
+# The `/v1` suffix is derived, so they cannot disagree.
+OLLAMA_API_URL = _os.getenv("JOBSCOUT_OLLAMA_URL") or "http://localhost:11434"
+OLLAMA_BASE_URL = OLLAMA_API_URL.rstrip("/") + "/v1"
+OLLAMA_MODEL = _os.getenv("JOBSCOUT_OLLAMA_MODEL") or "llama3.1"
 
 # Analysis embeddings. gemini-embedding-001 is past its listed shutdown date
 # (2026-07-14) but still serving — Google treats listed dates as the earliest
@@ -178,3 +192,77 @@ def resolve_api_key(explicit: str = None) -> str:
         return explicit
 
     return os.getenv(API_KEY_ENV_VAR) or ""
+
+
+# --- backend resolution -----------------------------------------------------
+
+# Every rung, plus the word that means "decide for me". `auto` is a valid
+# *instruction* and not a valid stored answer — see `AgentPreferences`.
+BACKEND_CHOICES = ("auto", "gemini", "openai", "ollama", "none")
+
+
+class UnknownBackend(ValueError):
+    """A rung nobody has, named as though somebody did."""
+
+
+def resolve_backend(explicit: str = None, profile=None) -> str:
+    """
+    Which rung this run should use, or `"auto"` to let detection decide.
+
+    The precedence chain, highest first:
+
+        CLI --backend  >  JOBSCOUT_LLM_BACKEND  >  profile  >  "auto"
+
+    One function because it is one decision. Four callers used to answer it
+    separately — `GenerationAgent._resolve_backend`, `complete_json`,
+    `backend_status` and the orchestrator — each reading `LLM_BACKEND`
+    straight from this module, which is fine while there is one source and
+    guarantees drift the moment there are four. That is the two-paths bug,
+    and it is being named here before it happens rather than after.
+
+    Note what this does **not** do: it never calls `detect()`. Resolving to
+    `"auto"` means "nobody has stated a preference", and the caller detects.
+    Folding detection in here would make a network probe happen wherever this
+    is called, including in a UI rendering on every keystroke.
+
+    Args:
+        explicit: a flag or a run request. `None` and `""` both mean "no
+            opinion" — not "auto", which is an opinion about who decides.
+        profile: a `UserProfile`, or anything with the same
+            `agent_preferences.llm_backend` shape. `None` means no profile is
+            loaded yet, which is the state resume import runs in.
+
+    Raises:
+        UnknownBackend: on a name no rung has. A typo'd `--backend olama` must
+            not read as `auto` — silently detecting after being told exactly
+            what to do is how a measurement ends up describing the wrong rung.
+    """
+    stored = getattr(
+        getattr(profile, "agent_preferences", None), "llm_backend", None)
+
+    # `LLM_BACKEND` is last and is read here rather than anywhere else. It is
+    # the module's own default — env-backed, and the attribute tests patch to
+    # force a rung. Leaving it out of this chain is how the first draft of
+    # this function made it **computed and never read**: five tests that set
+    # `config.LLM_BACKEND = "ollama"` fell straight through to detection and
+    # made real network calls against a fake URL. The recurring bug of this
+    # codebase, committed inside the change that adds a setting.
+    #
+    # Below the profile, because it is a code default and a person's stated
+    # preference outranks one. Above nothing — when it is still "auto",
+    # nobody has chosen and the caller detects.
+    for candidate, source in ((explicit, "--backend"),
+                              (_os.getenv("JOBSCOUT_LLM_BACKEND"),
+                               "JOBSCOUT_LLM_BACKEND"),
+                              (stored, "the profile"),
+                              (LLM_BACKEND, "config.LLM_BACKEND")):
+        if not candidate:
+            continue
+        choice = str(candidate).strip().lower()
+        if choice not in BACKEND_CHOICES:
+            raise UnknownBackend(
+                f"{source} says '{candidate}', which is not a backend. "
+                f"Choose one of: {', '.join(BACKEND_CHOICES)}.")
+        return choice
+
+    return "auto"

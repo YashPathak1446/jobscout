@@ -61,6 +61,7 @@ outputs/
 # This rule was written when a master resume was always a hand-written .tex;
 # R38 added PDF and Word import, which writes the upload into this same
 # directory — so a stranger's CV was trackable while the author's was ignored.
+data/master_resumes/*
 data/master_resumes/*.tex
 data/master_resumes/*.pdf
 data/master_resumes/*.docx
@@ -104,3 +105,7 @@ applied_jobs.csv
 
 # ADK
 .adk/
+
+# Fixtures staged into the dev server to drive a real upload through the
+# browser. Never part of a build.
+web/public/_fixture_*

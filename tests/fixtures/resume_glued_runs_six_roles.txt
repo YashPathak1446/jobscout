@@ -1,0 +1,58 @@
+Malik Osei
+612-555-0188|oseimalik@u.lakeside.edu |Portfolio |LinkedIn |GitHub
+Education
+Lakeside UniversityFairview, IL
+Bachelor of Science in Computer Science and Math (Major GPA: 4.0/4.0) Expected: June 2027
+• Relevant Coursework:Deep Learning (Grad), Data Structures and Algorithms, Operating Systems, Machine
+Learning
+Experience
+Meridian Exchange Chicago, IL
+Incoming Platform Engineering Intern June 2026
+• Incoming Systems Engineering Intern atMeridian Exchangebuilding infrastructure forKafkaandMQsystems
+underlying core exchange operations.
+SIGNAL Lab, Lakeside UniversityFairview, IL
+Undergraduate Researcher March 2025 – Present
+• ResearchingLLM-driven financial signal generation by parsingSEC filingsand earnings call transcripts
+• Building amodel distillationpipeline to compress frontier model reasoning into low-latency inference
+Lakeside UniversityFairview, IL
+Teaching Assistant - Machine Learning Sep 2025 – Present
+• TA for CS 349: Machine Learning, supporting 100+ students with lectures, office hours, and coding.
+R&D Venture Studio Remote
+Machine Learning Intern Sep 2025 – Dec 2025
+• Built hybrid search withBM25and dense retrieval usingLangChainandChromaDB, improving accuracy 40%
+• DeployedPyTorchML pipeline onAWS Lambdaprocessing 100K documents at 200ms p95 latency for search
+• Architected async RAG system withDocker,Celery, andPostgreSQLfor scalable document processing
+Cedar Home HealthcareMinneapolis, MN
+Software Engineering Intern Jun 2025 – Aug 2025
+• Engineered automatedETLpipelines integrating EVV logs with Corvia APIs, cutting billing delays by over70%
+• Architected fault-tolerantSFTPdata flows eliminating manual entry and enabling real-time claims across the US
+• Implemented retry logic and dead-letter queuing with Redis for pipeline resilience, achieving99.9%uptime
+GreenPlate Fairview, IL
+Team Lead Sep 2024 – May 2025
+• Led team of 4 building a logistics app withcomputer visionmodels for real-time product identification.
+• ArchitectedPythoninventory system with image recognition and time-series forecasting to automate restocking.
+Ardent Capital New York, NY
+AMP Intern Jun 2024 – Aug 2024
+• Learned probabilistic trading and game theory from IMO gold medalists and professional quant traders.
+• Developed pairs trading strategy in Python using statistical arbitrage and mean reversion models.
+Projects
+High-Performance ML Inference Server|C++17, POSIX Sockets, PythonJan 2026-April 2026
+• Built HTTP/1.1 inference server from raw POSIX sockets with no frameworks, hitting21,000 req/sat p99 12ms.
+• Implemented lock-freeMPMC queuevia Vyukov algorithm; yields 2x lower latency vs mutex queues.
+• Designed adaptive size/timeout batcher withkqueueedge I/O; cache-line padding eliminates false sharing.
+Verdantly, 1st Place RiverYouthHacks|React, Express, PostgreSQL, TailwindAug 2025
+• Built CV pipeline extracting product data from images to calculate carbon footprint scores using EPA datasets.
+• Architected AI pipeline integratingGoogle Cloud Vision,LLaMA 3, and web scraping APIs.
+• Engineered full-stack app withExpress,React+Tailwind CSS, andPostgreSQLfor scalable data handling.
+Electronic Trading Bot|PythonJul 2024
+• Created a quantitative trading algorithm to buy and sell commodities against other trading algorithms.
+• Achieved 3rd place out of 50 teams, earning over$10Min estimated PnL.
+Skills
+Programming Languages:Python, C++, JavaScript, TypeScript, SQL
+ML & Data:PyTorch, LangChain, ChromaDB, NumPy, Pandas, Scikit-Learn, Taichi Lang
+Technologies:React, Node.js, FastAPI, Docker, PostgreSQL, AWS Lambda, Git, Celery, WebSockets
+
+LINKS FOUND IN THIS DOCUMENT:
+https://malikosei.example.com
+https://linkedin.com/in/malikosei/
+https://github.com/example-user
