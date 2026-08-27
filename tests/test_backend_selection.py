@@ -194,12 +194,31 @@ class TestBothModelConsumersResolveTheSameWay(unittest.TestCase):
         answers and a substring cannot.
         """
         import ast
+        import subprocess
+
+        # **Ask git which files are the repo's**, rather than walking the
+        # filesystem. `rglob` finds everything under the directory, and the
+        # README tells users to `python -m venv venv` right here — so every
+        # contributor following the install instructions would have had this
+        # fail on somebody else's vendored code. It failed on a nested clone
+        # of this repo inside itself, which is the same shape.
+        #
+        # A test that walks a directory tests whatever happens to be in the
+        # directory. `git ls-files` answers the question actually being asked:
+        # which Python files does this project ship?
+        listed = subprocess.run(
+            ["git", "ls-files", "*.py"],
+            cwd=ROOT, capture_output=True, text=True, check=False)
+        if listed.returncode != 0:
+            self.skipTest("not a git checkout, so the file list is unknowable")
+        tracked = [line for line in listed.stdout.splitlines() if line.strip()]
+        self.assertTrue(tracked, "git listed no Python files at all")
 
         offenders = []
-        for path in ROOT.rglob("*.py"):
-            relative = path.relative_to(ROOT).as_posix()
+        for relative in tracked:
+            path = ROOT / relative
             if (relative == "config.py" or relative.startswith("tests/")
-                    or "__pycache__" in relative or ".venv" in relative):
+                    or not path.exists()):
                 continue
             try:
                 tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))

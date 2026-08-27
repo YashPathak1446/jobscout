@@ -170,10 +170,34 @@ class TestNoThirdRendererAppearsUnnoticed(unittest.TestCase):
     }
 
     def test_every_module_writing_a_subheading_is_covered_here(self):
+        """
+        Asks git for the file list rather than walking the directory.
+
+        `rglob` finds whatever happens to be under the repo, and the README
+        instructs `python -m venv venv` right there — so a contributor
+        following the install steps could fail this on vendored code they
+        never wrote. It was found failing on a nested clone of this repo
+        inside itself, and the exclusion list had grown to `tests/`, `build/`
+        and `site-packages` one discovery at a time, which is the tell.
+
+        A test that walks a directory tests whatever is in the directory.
+        `git ls-files` answers the question actually being asked: which
+        modules does this project ship?
+        """
+        import subprocess
+
+        listed = subprocess.run(
+            ["git", "ls-files", "*.py"],
+            cwd=ROOT, capture_output=True, text=True, check=False)
+        if listed.returncode != 0:
+            self.skipTest("not a git checkout, so the file list is unknowable")
+        tracked = [line for line in listed.stdout.splitlines() if line.strip()]
+        self.assertTrue(tracked, "git listed no Python files at all")
+
         writers = set()
-        for path in ROOT.rglob("*.py"):
-            rel = path.relative_to(ROOT).as_posix()
-            if rel.startswith(("tests/", "build/")) or "site-packages" in rel:
+        for rel in tracked:
+            path = ROOT / rel
+            if rel.startswith("tests/") or not path.exists():
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
