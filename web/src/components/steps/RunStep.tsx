@@ -236,11 +236,32 @@ function outcome(status: RunStatus) {
   const r = status.result
   if (!r) return { tone: 'good' as const, headline: 'Finished', advice: null }
 
-  if (r.generated > 0) {
+  // Success is `valid`, not `generated`. A resume that failed validation is
+  // still written — to needs_review/ — so counting files produced says a run
+  // worked when every one of them has a problem in it. Same shape as the
+  // "Finished" headline one level up: a count standing in for an outcome.
+  if (r.valid > 0) {
+    const held = r.generated - r.valid
     return {
       tone: 'good' as const,
-      headline: `Wrote ${r.generated} resume${r.generated === 1 ? '' : 's'}`,
-      advice: null,
+      headline: `Wrote ${r.valid} resume${r.valid === 1 ? '' : 's'}`,
+      advice:
+        held > 0
+          ? `${held} more ${held === 1 ? 'was' : 'were'} written but did not ` +
+            'pass validation, and are in the needs_review folder.'
+          : null,
+    }
+  }
+  if (r.generated > 0) {
+    return {
+      tone: 'empty' as const,
+      headline:
+        `Wrote ${r.generated} resume${r.generated === 1 ? '' : 's'}, ` +
+        `${r.generated === 1 ? 'it' : 'none of which'} passed validation`,
+      advice:
+        'They are in the needs_review folder rather than beside the others. ' +
+        'Usually it is a length problem — a bullet that lands in an orphan ' +
+        'zone — and the file is still readable, just not ready to send.',
     }
   }
   if (r.discovered === 0) {

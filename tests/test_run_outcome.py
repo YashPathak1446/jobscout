@@ -40,8 +40,13 @@ def outcome(state, result):
         return "failed"
     if not result:
         return "unknown"
-    if result["generated"] > 0:
+    # `valid`, not `generated`. A resume that failed validation is still
+    # written — to needs_review/ — so counting files says a run worked when
+    # every one of them has a problem in it.
+    if result["valid"] > 0:
         return "wrote"
+    if result["generated"] > 0:
+        return "none_valid"
     if result["discovered"] == 0:
         return "nothing_found"
     if result["analysed"] == 0:
@@ -78,6 +83,34 @@ class TestZeroIsNotFinished(unittest.TestCase):
             outcome("finished", run(discovered=5, analysed=1, generated=1, valid=1)),
             "wrote")
 
+    def test_written_but_none_valid_is_not_success(self):
+        """
+        The real keyless run: 5 found, 4 analysed, 1 written, 0 passed. The
+        headline said "Wrote 1 resume" with a green tick over a file nobody
+        should send.
+        """
+        self.assertEqual(
+            outcome("finished", run(discovered=5, analysed=4, generated=1, valid=0)),
+            "none_valid")
+
+    def test_some_valid_and_some_not_is_still_success(self):
+        """Partial is success with a caveat, not failure."""
+        self.assertEqual(
+            outcome("finished", run(discovered=9, analysed=5, generated=3, valid=2)),
+            "wrote")
+
+    def test_a_count_of_files_is_never_the_success_signal(self):
+        """
+        The general form, stated once: `generated` says how many files exist,
+        `valid` says whether any of them are finished. Every case where they
+        disagree must not read as plain success.
+        """
+        for generated in (1, 3, 9):
+            self.assertEqual(
+                outcome("finished",
+                        run(discovered=9, analysed=9, generated=generated, valid=0)),
+                "none_valid")
+
     def test_failure_outranks_everything(self):
         self.assertEqual(outcome("failed", run(discovered=5)), "failed")
 
@@ -87,8 +120,9 @@ class TestZeroIsNotFinished(unittest.TestCase):
             outcome("finished", run(discovered=0)),
             outcome("finished", run(discovered=5)),
             outcome("finished", run(discovered=5, analysed=3)),
+            outcome("finished", run(discovered=5, analysed=3, generated=2)),
         }
-        self.assertEqual(len(answers), 3, answers)
+        self.assertEqual(len(answers), 4, answers)
 
 
 class TestTheRegistryCarriesWhatTheScreenNeeds(unittest.TestCase):
@@ -127,7 +161,8 @@ class TestTheScreenBranchesOnAllThree(unittest.TestCase):
         block = block[:block.index("function Progress(")]
         for headline in ("No jobs found",
                          "none matched you well enough",
-                         "no resumes were written"):
+                         "no resumes were written",
+                         "passed validation"):
             self.assertIn(headline, block,
                           f"the {headline!r} case lost its own wording and now "
                           "shares one with another cause")

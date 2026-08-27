@@ -859,8 +859,24 @@ def _render_running(run_id, has_latex):
         return
 
     result = status["result"]
-    st.success(f"Done — {result.get('valid', 0)} valid resume(s) from "
-               f"{result.get('analysed', 0)} scored jobs.")
+    # Green only when something passed. A run that wrote three resumes and
+    # validated none of them is not a success with a caveat, and st.success
+    # around a zero is the same lie the React screen was telling with a tick.
+    valid = result.get("valid", 0)
+    generated = result.get("generated", 0)
+    line = (f"Done — {valid} valid resume(s) from "
+            f"{result.get('analysed', 0)} scored jobs.")
+    if valid:
+        st.success(line)
+        if generated > valid:
+            st.warning(f"{generated - valid} more were written but did not pass "
+                       "validation, and are in needs_review/.", icon="⚠️")
+    elif generated:
+        st.warning(f"{generated} resume(s) were written and none passed "
+                   "validation. They are in needs_review/ — usually a bullet "
+                   "length problem rather than a broken file.", icon="⚠️")
+    else:
+        st.warning(line, icon="⚠️")
     for reason in result.get("degraded") or []:
         st.warning(f"Bullets were not rewritten: {reason}", icon="✍️")
 
@@ -1003,7 +1019,19 @@ def _render_results(state, has_latex):
         st.warning("No resumes were generated. Try widening your preferences.")
         return
 
-    st.success(f"{len(results)} resume(s) generated from {len(analysed)} scored jobs.")
+    # `len(results)` counts files written, including the ones that failed
+    # validation and went to needs_review/. Reporting it as success is a count
+    # standing in for an outcome.
+    passed = [r for r in results if r.get("status") == "valid"]
+    if passed:
+        st.success(f"{len(passed)} resume(s) ready from {len(analysed)} scored jobs.")
+        if len(results) > len(passed):
+            st.warning(f"{len(results) - len(passed)} more need review before "
+                       "sending — marked below.", icon="⚠️")
+    else:
+        st.warning(f"{len(results)} resume(s) were written and none passed "
+                   "validation. Each is marked below and saved under "
+                   "needs_review/.", icon="⚠️")
 
     # A run whose model never answered still produces resumes — good ones, in
     # your own words. Saying so is the difference between a floor and a
