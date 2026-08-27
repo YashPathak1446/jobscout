@@ -105,12 +105,22 @@ class TestTheRoundTripIsClosed(unittest.TestCase):
         return first, second, rendered
 
     def test_bullets_survive_a_render_and_a_reparse_unchanged(self):
+        """
+        Matched by id rather than by position, because the renderer orders
+        experiences newest first and a master is not always written that way.
+        Pairing on position would report a reordering as a content change —
+        and matching on id is the stronger check anyway: it says every
+        component came back, with its own bullets, wherever it now sits.
+        """
         for master in MASTERS:
             first, second, _ = self._round_trip(master)
-            for a, b in zip(list(first.experiences) + list(first.projects),
-                            list(second.experiences) + list(second.projects)):
+            landed = {c.id: c for c in
+                      list(second.experiences) + list(second.projects)}
+            for a in list(first.experiences) + list(first.projects):
+                self.assertIn(a.id, landed,
+                              f"{master.name}: {a.id} did not survive")
                 self.assertEqual(
-                    list(a.bullets or []), list(b.bullets or []),
+                    list(a.bullets or []), list(landed[a.id].bullets or []),
                     f"{master.name}: {a.id} changed on the way through")
 
     def test_the_rendered_file_escapes_everything_it_should(self):

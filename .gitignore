@@ -62,10 +62,11 @@ outputs/
 # R38 added PDF and Word import, which writes the upload into this same
 # directory — so a stranger's resume was tracked while the author's was
 # ignored, and the first `git add -A` would have committed their CV.
-data/master_resumes/*.tex
-data/master_resumes/*.pdf
-data/master_resumes/*.docx
-data/master_resumes/*.doc
+# By pattern, not by extension, for the same reason. The list above named
+# four formats and missed everything else a person's resume can be saved as —
+# and missed a `.tex.pre-skills-fix` backup written next to one, which is how
+# it was noticed. A directory the app writes to gets the directory.
+data/master_resumes/*
 !data/master_resumes/*.example.tex
 !data/master_resumes/.gitkeep
 

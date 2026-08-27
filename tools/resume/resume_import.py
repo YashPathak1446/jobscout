@@ -338,6 +338,56 @@ def _heuristic_education(lines) -> list:
     return [entry]
 
 
+# "Languages: Java, Kotlin, Python" — a label, a colon, then the list. Short
+# label, because "Built the pipeline in Python: it ingests..." is a sentence
+# and not a category, and a bullet that wandered into this section must not
+# become one.
+_SKILL_CATEGORY = re.compile(r"^([A-Za-z][A-Za-z0-9 &/+-]{0,28}):\s*(.+)$")
+
+
+def _heuristic_skills(lines) -> dict:
+    """
+    The skills section as the categories it was written in.
+
+    This used to be `{"Skills": ", ".join(lines)}` — every line of the section
+    concatenated into a single category. The four labelled rows on Priya's
+    resume came out as one value reading `Languages: Java, Kotlin, Python, Go,
+    SQL, TypeScript, Data: PostgreSQL, ...`, and generation then reordered
+    that bag by JD relevance and cut it to a line, so her resume advertised
+    `Python, Go, TypeScript, mentoring, Kotlin, Spark, contract testing,
+    Languages: Java, SQL`. Both halves of the schema were destroyed by the
+    join: the labels became list items, and the grouping that makes the
+    section readable was gone before anything downstream could use it.
+
+    The structure was there in the source and thrown away, which is the whole
+    bug — `{"Category": "comma, separated"}` is exactly what a `Label: values`
+    line already is.
+
+    A line with no label is not discarded and does not invent one: it joins
+    the category above it, or lands under a plain `Skills` heading when it
+    comes first. Nothing here is guessed at — an unlabelled line is genuinely
+    a list of skills, only one whose grouping the resume did not state.
+    """
+    categories, current = {}, None
+
+    for line in (lines or []):
+        line = line.strip()
+        if not line:
+            continue
+        match = _SKILL_CATEGORY.match(line)
+        if match:
+            label, values = match.group(1).strip(), match.group(2).strip()
+            current = label
+            categories[label] = (categories[label] + ", " + values
+                                 if label in categories else values)
+        else:
+            current = current or "Skills"
+            categories[current] = (categories[current] + ", " + line
+                                   if current in categories else line)
+
+    return categories
+
+
 def heuristic_schema(text: str) -> dict:
     """
     Contact details by pattern, sections by heading. No model.
@@ -370,8 +420,7 @@ def heuristic_schema(text: str) -> dict:
         "education": _heuristic_education(sections.get("education", [])),
         "experiences": [],
         "projects": [],
-        "skills": ({"Skills": ", ".join(sections["skills"])}
-                   if sections.get("skills") else {}),
+        "skills": _heuristic_skills(sections.get("skills")),
         # Kept so a confirmation screen can show what could not be split up.
         "_unparsed": {k: v for k, v in sections.items()
                       if k in ("experiences", "projects")},

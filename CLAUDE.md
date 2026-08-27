@@ -111,7 +111,7 @@ mirror, and the cost lands in a published commit rather than in a test.
 field with a "not yet" state needs a third case — known, absent, and unknown —
 and the code has to carry all three to the place that displays or ranks it.
 
-Four instances, and the fourth is what makes it a rule rather than a run of bad
+Five instances, and the fourth is what makes it a rule rather than a run of bad
 luck:
 
 - `years_required: None` read as "no experience required" (R64)
@@ -122,6 +122,12 @@ luck:
 - the React board rendered every job as **"Not scored"** for the beat before
   the score bands arrived, telling the reader analysis had skipped their whole
   list — a claim, where a placeholder was wanted
+
+- the bullet budget spent half a page on the projects section a resume did
+  not have, so three jobs shared six bullets and the bottom third was blank
+  (R74). Not a display this time — an *allocation*. The rule reaches further
+  than rendering: any budget, quota or average split across sections has to
+  ask whether a section is empty or absent
 
 The fourth appeared within hours of a frontend existing, which is the point:
 **anything that arrives asynchronously has an unknown state by construction.**

@@ -6396,6 +6396,115 @@ machine of somebody who has not paid.
 
 ---
 
+## R74. Three defects that were the author's own file, used as a ruler
+
+**Decision:** (2026-08-26) The tailored resume is ordered by date, budgeted by
+page rather than by half a page, and keeps the skill categories the source
+document was written in. Priya Raghunathan's free-tier resume goes from three
+bullets in relevance order under a scrambled skills line to eight bullets
+newest-first under four real categories, one page, compiled.
+
+This is the end of the stranger pass on the *output* — R66 fixed what she
+could enter, the score fix (`test_score_shape_independence`) fixed what she
+matched, R73 made the file compile, and this is the page that comes out.
+
+### 1. Relevance is not an order
+
+Selection ranks components by fit to the posting and that ranking reached the
+page untouched, so her resume opened with the job she left in 2020 and buried
+the one she currently holds. The author's own resume had it too — 101gen.ai
+(2024) above Sorenson (2025) — and it is invisible on a page you already know
+the contents of.
+
+`tex_renderer.reverse_chronological` sorts on the **start** date, which is the
+convention and the only thing that separates a job still running from one that
+began later. It lives in `tex_renderer` because both renderers pass through
+it; anywhere else recreates the fork that produced R69 and R70.
+
+**All of them or none of them.** One unreadable date and nothing moves.
+Sorting the rest around an unknown files it under "oldest", which is this
+codebase's oldest mistake wearing yet another hat.
+
+### 2. A page is a page, whatever sections are on it
+
+`exp_budget_table` and `proj_budget_table` were measured in Q3 against resumes
+that have both sections — three experiences and three projects, twelve bullets
+with two spare — so each table describes **half a page**. Priya has no
+projects. The projects half was spent on nothing: three jobs shared six
+bullets and the bottom third of the page stayed blank.
+
+Eighth instance of absence read as a value, and the second one to land on this
+exact resume — the scoring cap divided her three jobs by five for the same
+reason. When one section is empty the other now gets the page, bounded by the
+per-component maximum and by how many bullets the master actually holds.
+
+### 3. `VERBATIM_BULLET_SCALE = 0.5` was a measurement of one man's prose
+
+The no-model rung took `count // 2` bullets because a master bullet "occupies
+roughly twice the space" of a rewritten one. Measured, on the files in the
+repo:
+
+| | bullet length | rendered |
+|---|---|---|
+| Gemini output, all 13 bullets | 195-217 chars | 2 lines |
+| author's master | 220-440 chars | 3 lines |
+| Priya's master | 59-192 chars | 1 line |
+
+So the constant was wrong even for the author (0.67, not 0.5) and inverted for
+Priya, whose bullets are already the size Gemini writes. Halving spent half her
+page on nothing and printed **one bullet per job** — not a thin resume, a
+resume that looks like the person had nothing to say. Her entire master is
+eight bullets and she was sent three.
+
+The replacement is the quantity that was always meant. `line_2` is the zone
+the prompt and the validator both aim at, so **a budget of N bullets is a
+claim on 2N lines**; a rung that cannot shorten a bullet keeps the claim and
+changes the count. Two refinements, both found by reading real output:
+
+- **Zones are measured in characters, not by name.** An `orphan_2` bullet
+  renders two lines, one of them half empty. Treating every unnamed zone as
+  the worst case cost the Toast job a bullet it had room for.
+- **Skipped, not stopped.** 101gen's bullets measure 3, 4, 2, 1, 2 lines
+  against a budget of 6. Stopping at the four-line one shipped a single
+  bullet; three fit exactly. Order is preserved among those kept.
+
+`_bullets_within_lines` is called by both the tailor and the budget, because a
+count computed in one place and a slice taken in another is the shape that has
+produced six bugs here. `_fit_budgets_to_lines` now restates the contract for
+validation *after* tailoring rather than scaling it beforehand, which also
+fixes a Gemini failure falling back to verbatim with unscaled budgets.
+
+### 4. The skills section was destroyed before anything could use it
+
+The no-model import floor read the section as `{"Skills": ", ".join(lines)}`.
+Four labelled rows became one value, and generation — correctly, for a
+category — reordered it by relevance and cut it to a line:
+
+    Skills: Python, Go, TypeScript, mentoring, Kotlin, Spark,
+            contract testing, Languages: Java, SQL
+
+`Languages: Java` offered as a skill, three quarters of what she can do gone.
+Nothing downstream was wrong: the schema is `{"Category": "comma, separated"}`
+and a `Label: values` line already **is** one. The structure was in the source
+and the join threw it away. An unlabelled line joins the category above it or
+lands under the section's own heading — nothing is invented, and a short label
+is required so a stray bullet with a colon in it does not become a category.
+
+### Verified
+
+Priya's free-tier resume, compiled: one page, 98KB, four skill categories,
+three jobs newest-first, all eight of her bullets. The author's, same rung,
+same three postings: 6 bullets to 11, still one page, order corrected. 909
+tests, three baselines clean.
+
+**Left standing, deliberately.** Her page is roughly half full — her master has
+eight bullets and the tool will not invent a ninth. That is Q3's headroom
+question, unchanged. And her PDF's own text layer says `A WS` for AWS, a
+kerning artifact of the file: repairing spaces inside words guesses at content,
+which is the trade `test_stranger_import` already refused for the glued email.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

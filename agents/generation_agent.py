@@ -51,22 +51,19 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 
-# A master bullet is written to be complete, not to fit a line: this resume's
-# run to about 500 characters where the model path rewrites them to 140-280.
-# So a verbatim bullet occupies roughly twice the space, and using the model
-# path's bullet count verbatim overflows onto a second page — measured, 13
-# bullets rendering to 2 pages and seven of them unable to compress.
+# What the model path spends per bullet, in rendered lines.
 #
-# The one-page rule is the invariant and bullet count is the only lever left
-# when the text cannot be rewritten, so the no-model rung takes fewer bullets
-# and keeps them whole. Chosen by rendering, not by taste.
-VERBATIM_BULLET_SCALE = 0.5
+# Measured, not assumed: every one of the 13 bullets on the last Gemini run
+# came out between 195 and 217 characters, which is `line_2` — the zone the
+# prompt and the validator both aim at. So a budget of N bullets is a claim on
+# 2N lines of page, and that is the quantity the no-model rung has to match.
+MODEL_PATH_LINES_PER_BULLET = 2
 
-
-def _scaled(count: int, scale: float) -> int:
-    """At least one bullet, however hard the budget is squeezed."""
-    import math
-    return max(1, int(math.floor(count * scale)))
+# Where each rendered line ends, in characters, from the zone table
+# `bullet_fit` and `validation` share. A line holds about 106 characters at
+# this template's margins, which is what the last entry extrapolates from.
+_LINE_ENDS = (110, 213, 316)
+_CHARS_PER_LINE = 106
 
 
 class GenerationAgent:
@@ -235,13 +232,6 @@ class GenerationAgent:
                 # skipping them is why keyless runs used to overflow the page
                 # and land in needs_review.
                 bullet_budgets = self._compute_bullet_budgets(analysis)
-                if self.mock_mode or self.llm_backend == "none":
-                    # Fewer bullets, kept whole. Scaling inside the tailor
-                    # alone would leave validation expecting the model path's
-                    # count and reporting every component as short — the
-                    # budget is the contract, so it is what gets scaled.
-                    bullet_budgets = self._scale_budgets(
-                        bullet_budgets, VERBATIM_BULLET_SCALE)
                 budgeted_components = bullet_budgets.get(
                     "budgeted_components", selected
                 )
@@ -252,6 +242,16 @@ class GenerationAgent:
                     analysis=analysis,
                     bullet_budgets=bullet_budgets,
                 )
+
+                if self.mock_mode or self.llm_backend == "none":
+                    # Every rung is handed the model path's budget; a rung
+                    # that cannot rewrite a bullet spends it on whole ones
+                    # instead, and lands on a different count. Validation has
+                    # to expect that count or it reports every component as
+                    # short — the budget is the contract between tailoring and
+                    # validation, so it is restated here rather than being
+                    # quietly broken in the tailor.
+                    bullet_budgets = self._fit_budgets_to_lines(bullet_budgets)
 
                 if not tailored:
                     logger.error("   ❌ Tailoring failed")
@@ -709,6 +709,28 @@ class GenerationAgent:
         total_exp_budget = exp_budget_table.get(num_exp, num_exp * 2)
         total_proj_budget = proj_budget_table.get(num_proj, num_proj * 2)
 
+        exp_max = 3
+        proj_max = 2 if num_proj >= 4 else 3
+
+        # A page is a page whatever sections are on it.
+        #
+        # These two tables were measured against resumes that have both
+        # sections (Q3: 3 exp + 3 proj = 12 bullets, two spare), so each one
+        # describes half a page. A resume with no projects therefore spent the
+        # projects half on nothing: Priya's three jobs shared six bullets and
+        # the bottom third of the page stayed blank.
+        #
+        # Eighth instance of the rule. A section the resume does not have is
+        # unknown evidence, not a reason to shrink the section it does have —
+        # the same arithmetic that scored her at 1.8% by dividing three jobs
+        # by a cap of five. When one side is missing the other gets the page,
+        # bounded by what a single component may hold and, below, by how many
+        # bullets the master actually contains.
+        if not num_proj:
+            total_exp_budget = num_exp * exp_max
+        elif not num_exp:
+            total_proj_budget = num_proj * proj_max
+
         # Per-component caps based on importance
         # High importance → can get up to 3 bullets
         # Low importance → capped at 1 bullet regardless of budget
@@ -718,7 +740,7 @@ class GenerationAgent:
             importance=self._promote_on_evidence(
                 selected_exp_ids, exp_importance, conditional_scores),
             total_budget=total_exp_budget,
-            global_max=3,
+            global_max=exp_max,
         )
 
         proj_budgets = self._allocate_with_importance(
@@ -727,7 +749,7 @@ class GenerationAgent:
             importance=self._promote_on_evidence(
                 selected_proj_ids, proj_importance, conditional_scores),
             total_budget=total_proj_budget,
-            global_max=2 if num_proj >= 4 else 3,
+            global_max=proj_max,
         )
 
         actual_exp_total = sum(exp_budgets.values())
@@ -1262,27 +1284,111 @@ Source bullets:
                         "rewritten for each job.")
         return choice
 
-    def _scale_budgets(self, budgets: Dict, scale: float) -> Dict:
+    def _rendered_lines(self, text: str, kind: str) -> int:
         """
-        Fewer bullets, for a rung that cannot shorten them.
+        How tall one master bullet renders, after the fitter has had it.
 
-        Returns a copy: the caller's dict is also what validation reads, and
-        mutating it in place would make the two disagree in a way that is
-        tedious to trace.
+        The fitter is deterministic and runs on this rung too, so asking it
+        here gives the same answer the page will.
+
+        Measured in characters rather than by zone name, because the zones
+        that mean "this fits badly" still occupy a whole line: an `orphan_2`
+        bullet is 111-179 characters and renders **two** lines, one of them
+        half empty. Reading the zone label and treating everything unnamed as
+        the worst case counted those as three, which cost Priya's Toast job a
+        bullet it had room for.
         """
-        scaled = dict(budgets)
-        for section in ("experiences", "projects"):
-            scaled[section] = {
-                cid: _scaled(count, scale)
-                for cid, count in (budgets.get(section) or {}).items()
-            }
+        if not isinstance(text, str) or not text.strip():
+            return 0
+        length = len(fit_bullet(text, kind).text)
+        for lines, end in enumerate(_LINE_ENDS, start=1):
+            if length <= end:
+                return lines
+        # Longer than the tallest zone: compression could not reach one, so
+        # measure what is actually there rather than capping the estimate.
+        return -(-length // _CHARS_PER_LINE)
+
+    def _bullets_within_lines(self, bullets, kind: str, line_budget: int):
+        """
+        The bullets that fit in `line_budget` rendered lines, in master order.
+
+        **Skipped, not stopped.** A bullet too tall for the room left does not
+        mean the room is spent: 101gen's five bullets measure 3, 4, 2, 1 and 2
+        lines against a budget of 6, and stopping at the four-line one shipped
+        one bullet where three fit exactly. Order is preserved among those
+        kept, so the strongest bullet that fits is still the first on the page.
+
+        Always at least one. A component on the page with nothing under it is
+        worse than one that runs a line long.
+        """
+        chosen, used = [], 0
+        for bullet in bullets or []:
+            lines = self._rendered_lines(bullet, kind)
+            if chosen and used + lines > line_budget:
+                continue
+            used += lines
+            chosen.append(bullet)
+        return chosen or list(bullets or [])[:1]
+
+    def _fit_budgets_to_lines(self, budgets: Dict) -> Dict:
+        """
+        The same page, spent on bullets nobody is going to rewrite.
+
+        A budget of N bullets is a claim on `2N` lines of page, because that
+        is what the model path spends (see `MODEL_PATH_LINES_PER_BULLET`).
+        This rung cannot change how long a bullet is, so it keeps the claim
+        and changes the count: take whole bullets from the master until the
+        line budget is used up.
+
+        It was a flat `count // 2` before, and that constant was the author's
+        resume wearing a number. His master bullets run to 250-440 characters
+        and render three lines each, so halving the count was roughly right
+        *for him* — and wrong in both directions for anyone else. Priya's
+        bullets are 59-192 characters and render one line, so halving spent
+        half her page on nothing and printed **one bullet per job**, which
+        reads as a resume with nothing to say. Sixth time a constant
+        calibrated against the author's own file has decided a stranger's
+        output; this one is measured from the bullets in front of it.
+
+        Note it can also allocate *more* bullets than the model path would,
+        and that is the point rather than a side effect: short bullets buy
+        more of them for the same vertical space.
+
+        **This is validation's copy, not tailoring's.** `_verbatim_tailor`
+        gets the untouched model-path budget and makes the same selection
+        from it through `_bullets_within_lines`; this counts what that
+        selection will contain. Two callers of one function rather than a
+        count computed here and a slice taken there — the shape that has
+        produced six bugs in this repo when the two halves drifted.
+        """
+        fitted = dict(budgets)
+
+        for section, kind, lookup in (
+            ("experiences", "experience", self.resume_parser.get_experience_by_id),
+            ("projects", "project", self.resume_parser.get_project_by_id),
+        ):
+            counts = {}
+            for cid, count in (budgets.get(section) or {}).items():
+                component = lookup(cid)
+                if not component:
+                    # Nothing to measure. Leave the model path's number alone
+                    # rather than inventing one; validation will report the
+                    # missing component, which is the real problem.
+                    counts[cid] = count
+                    continue
+
+                counts[cid] = len(self._bullets_within_lines(
+                    component.bullets, kind,
+                    count * MODEL_PATH_LINES_PER_BULLET))
+            fitted[section] = counts
+
         totals = {
-            "experiences": sum(scaled["experiences"].values()),
-            "projects": sum(scaled["projects"].values()),
+            "experiences": sum(fitted["experiences"].values()),
+            "projects": sum(fitted["projects"].values()),
         }
         totals["overall"] = totals["experiences"] + totals["projects"]
-        scaled["totals"] = totals
-        return scaled
+        fitted["totals"] = totals
+        return fitted
 
     def _verbatim_tailor(self, job: Dict, selected: Dict,
                          bullet_budgets: Dict = None, reason: str = "") -> Dict:
@@ -1323,27 +1429,42 @@ Source bullets:
         if reason:
             tailored["_verbatim_reason"] = reason
 
+        def keep(component, budget, kind):
+            """
+            The budget here is the **model path's**, in bullets. This rung
+            cannot shorten a bullet, so it spends the same page — `2N` lines —
+            on however many whole ones fit. `_fit_budgets_to_lines` counts the
+            result of this same call, which is what keeps validation's
+            expectation and the page in agreement.
+
+            A component with no budget entry takes everything it has: that is
+            a component nobody allocated for, and dropping its bullets on the
+            way would be a silent subtraction.
+            """
+            if component.id not in budget:
+                return list(component.bullets)
+            return self._bullets_within_lines(
+                component.bullets, kind,
+                budget[component.id] * MODEL_PATH_LINES_PER_BULLET)
+
         for exp_id in selected.get("experiences", []):
             exp = self.resume_parser.get_experience_by_id(exp_id)
             if not exp:
                 continue
-            keep = exp_budget.get(exp.id, len(exp.bullets))
             tailored["experiences"].append({
                 "id": exp.id, "title": exp.title, "company": exp.company,
                 "dates": exp.dates, "location": exp.location,
-                "bullets": list(exp.bullets)[:keep],
-                # Straight from the user's .tex, so already valid LaTeX.
+                "bullets": keep(exp, exp_budget, "experience"),
             })
 
         for proj_id in selected.get("projects", []):
             proj = self.resume_parser.get_project_by_id(proj_id)
             if not proj:
                 continue
-            keep = proj_budget.get(proj.id, len(proj.bullets))
             tailored["projects"].append({
                 "id": proj.id, "name": proj.name, "url": proj.url,
                 "tech": proj.tech, "dates": proj.dates,
-                "bullets": list(proj.bullets)[:keep],
+                "bullets": keep(proj, proj_budget, "project"),
             })
 
         return self._apply_bullet_fitting(tailored)

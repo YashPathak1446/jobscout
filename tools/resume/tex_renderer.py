@@ -113,11 +113,63 @@ def _education(entries) -> str:
             + "\n  \\resumeSubHeadingListEnd")
 
 
+_MONTHS = {m: i for i, m in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun",
+     "jul", "aug", "sep", "oct", "nov", "dec"), start=1)}
+
+_DATE_START = re.compile(
+    r"(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?"
+    r"(\d{4})", re.I)
+
+
+def _started(dates):
+    """
+    When a role began, as `(year, month)`, or `None` when it cannot be read.
+
+    Only the first date in the string is looked at: `"Mar 2023 - Present"`
+    starts in March 2023 and the end is somebody else's problem. A month is
+    optional — a bare `"2023 - 2025"` is a year the code can still order — and
+    a missing one sorts as January, which is the only guess available and
+    cannot reorder two entries that name different years.
+    """
+    found = _DATE_START.search(dates or "")
+    if not found:
+        return None
+    month, year = found.groups()
+    return (int(year), _MONTHS.get((month or "").lower()[:3], 1))
+
+
+def reverse_chronological(entries):
+    """
+    Experiences newest first, or exactly as given when that cannot be decided.
+
+    Selection ranks components by how well they match the job, and that order
+    reached the page unchanged: Priya's resume opened with the job she left in
+    2020 and buried the one she currently holds. Relevance is the right way to
+    choose *which* roles appear and the wrong way to order them once chosen —
+    a reader scanning the left edge of a resume reads the dates as a sequence.
+
+    **All of them or none of them.** If a single entry's dates cannot be
+    parsed there is no honest place to put it, so nothing is moved and the
+    caller's order stands. Sorting the rest around an unknown would state a
+    sequence the data does not support — an unread date is not the year zero.
+    """
+    entries = list(entries or [])
+    keyed = [(_started(e.get("dates")) if isinstance(e, dict) else None, e)
+             for e in entries]
+    if any(key is None for key, _ in keyed):
+        logger.debug("Experience dates could not all be read; order preserved")
+        return entries
+    # Stable, so entries starting in the same month keep the order they came
+    # in — which is selection's ranking, the best tie-break available.
+    return [e for _, e in sorted(keyed, key=lambda pair: pair[0], reverse=True)]
+
+
 def _experiences(entries) -> str:
     if not entries:
         return ""
     blocks = []
-    for entry in entries:
+    for entry in reverse_chronological(entries):
         # needs_review resumes are written to disk too, so this runs on output
         # validation has already rejected. Skip what cannot be rendered rather
         # than losing the whole file.
