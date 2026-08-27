@@ -6644,6 +6644,90 @@ range is a test that has not walked the absence.**
 
 ---
 
+## R76. The re-run, and the verdict addressed to somebody who was not there
+
+**Decision:** (2026-08-26) A rung that may not rewrite a bullet is not judged
+as one that may. Priya Raghunathan's free-tier run goes from **0 valid, 5
+needs review** to **5 valid**, on the same five files.
+
+### What the re-run was for, and what it caught
+
+R74's verification ran `_verbatim_tailor` and `_generate_latex_file` by hand
+and checked the PDF. That was true as far as it went — one page, eight
+bullets, correct order — and it skipped `validate_resume_output` entirely. The
+whole pipeline, run end to end for the first time since, filed every one of
+those five PDFs under needs_review.
+
+**A spot-check that walks part of a path is a spot-check that certifies part
+of a path.** The R74 note says the resume was verified; what was verified was
+the file, not the verdict on it.
+
+### 1. The orphan zone was addressed to a model that was not there
+
+`_validate_bullet_length` errors on a bullet in an orphan zone and names two
+target ranges — "either compress to ≤110 or expand to 180-213". Its own
+docstring says why: *"the repair loop is the recovery path... feedback names
+exact target ranges so the LLM can correct on retry."*
+
+On the no-model rung there is no LLM and no retry. The text is the user's own,
+rewriting it is forbidden by the fabrication guard, and `fit_bullet` has
+already tried to compress it and failed. Priya's Toast bullet is 126
+characters. The error's only remaining effect was to condemn a resume she
+would have sent as it was.
+
+So on that rung it is a **warning**: still reported, with advice addressed to
+the only rewriter present ("shortening it by hand would tighten the line"), no
+longer a verdict. **Overflow stays an error on every rung** — a bullet past the
+maximum spills onto a second page, which is a consequence rather than an
+opinion about typography.
+
+This is the rule the codebase keeps rediscovering, in a new place: a check
+belongs to a domain, and this one had drifted outside its own. The zone rule
+governs *text the tool wrote*.
+
+### 2. The rung was read from the settings, not from what happened
+
+`self.llm_backend` is the rung that was **configured**. Both model rungs fall
+back to `_verbatim_tailor` when the model does not answer, so a run set to
+Ollama can produce a verbatim resume and then be validated against a budget
+nothing had spent — every component reported short.
+
+`_verbatim_tailor` now stamps `_verbatim: True` on every payload it produces,
+and both the budget re-fit and the validator read that. The tailor is the only
+thing that knows what it did; asking the settings was asking the wrong object.
+`_verbatim_reason` stays separate and still means "this rung was not the one
+you asked for" (R47), so a free-tier run does not read as a broken paid one.
+
+### Verified, end to end this time
+
+`python -m agents.orchestrator --profile priya_raghunathan --input <cached>`
+on the no-model rung: **5 valid, 0 needs review**, five PDFs, one page each,
+scores 70.0-73.8 against a threshold of 40. The same command before this
+change: 0 valid, 5 needs review. 935 tests, three baselines clean.
+
+### Found on the way, not fixed here
+
+**Ollama has no repair loop.** `_gemini_tailor` validates and makes one narrow
+repair attempt; `_chat_tailor` returns whatever came back. Measured on the
+same five jobs, llama3.1:8b writes bullets at 122-126 characters — the orphan
+zone, every time — and returns the wrong bullet count for at least one
+component. Those are real defects by a model that could be told to try again,
+and nothing tells it. **Twin-path shape, and it lands on the rung that is
+supposed to be the free tier's answer.**
+
+**There is no way to choose a rung.** `LLM_BACKEND = "auto"`,
+`OLLAMA_BASE_URL`, `OLLAMA_API_URL` and `OLLAMA_MODEL` are all hardcoded
+literals in `config.py` with no environment override, so testing the no-model
+floor on a machine with Ollama installed requires a script that reaches in and
+sets the module attribute. Confirmed rather than assumed: `detect()` prefers
+Gemini whenever a key is present, and clearing the key here selected Ollama,
+not `none`.
+
+Both belong to the Ollama work rather than to this fix, and both are now
+measured rather than suspected.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

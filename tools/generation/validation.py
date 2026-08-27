@@ -112,6 +112,14 @@ def validate_resume_output(data: dict, master_resume_text: str = "",
         result.add_error("Output must be a JSON object/dict")
         return result
 
+    # Which rung wrote this, taken off the payload rather than from a
+    # parameter. `_verbatim_tailor` stamps what it produced, so a sixth caller
+    # cannot forget to pass a flag it does not know exists — and the rung has
+    # to be read from what *happened*, not from what was configured. A Gemini
+    # or Ollama run that fell back to the user's own bullets is on this rung
+    # for the rest of the pipeline whatever the settings say.
+    verbatim = bool(data.get("_verbatim"))
+
     # Validate required top-level structure.
     if "experiences" not in data:
         result.add_error("Missing 'experiences' key in output")
@@ -152,16 +160,18 @@ def validate_resume_output(data: dict, master_resume_text: str = "",
             data.get("experiences", []),
             bullet_budgets.get("experiences", {}),
             result,
+            verbatim=verbatim,
         )
         _validate_projects_with_budget(
             data.get("projects", []),
             bullet_budgets.get("projects", {}),
             result,
+            verbatim=verbatim,
         )
         _validate_total_budget(data, bullet_budgets, result)
     else:
-        _validate_experiences(data.get("experiences", []), result)
-        _validate_projects(data.get("projects", []), result)
+        _validate_experiences(data.get("experiences", []), result, verbatim)
+        _validate_projects(data.get("projects", []), result, verbatim)
 
     # Skills are optional here because the current generation prompt returns only
     # experiences/projects and the LaTeX builder preserves skills from the master resume.
@@ -187,7 +197,8 @@ def validate_resume_output(data: dict, master_resume_text: str = "",
     return result
 
 
-def _validate_experiences(experiences: List[dict], result: ValidationResult):
+def _validate_experiences(experiences: List[dict], result: ValidationResult,
+                          verbatim: bool = False):
     """Validate experience entries."""
     if len(experiences) == 0:
         result.add_error("No experiences selected (need at least 1)")
@@ -239,10 +250,12 @@ def _validate_experiences(experiences: List[dict], result: ValidationResult):
                 soft_min_chars=EXPERIENCE_BULLET_SOFT_MIN_CHARS,
                 result=result,
                 component_type="experience",
+                verbatim=verbatim,
             )
 
 
-def _validate_projects(projects: List[dict], result: ValidationResult):
+def _validate_projects(projects: List[dict], result: ValidationResult,
+                       verbatim: bool = False):
     """Validate project entries."""
     if len(projects) == 0:
         result.add_warning("No projects selected (recommend 2-4 projects)")
@@ -294,6 +307,7 @@ def _validate_projects(projects: List[dict], result: ValidationResult):
                 soft_min_chars=PROJECT_BULLET_SOFT_MIN_CHARS,
                 result=result,
                 component_type="project",
+                verbatim=verbatim,
             )
 
 
@@ -305,6 +319,7 @@ def _validate_experiences_with_budget(
     experiences: List[dict],
     exp_budgets: dict,
     result: ValidationResult,
+    verbatim: bool = False,
 ):
     """Validate experiences against exact per-component bullet budgets."""
     if len(experiences) == 0:
@@ -356,6 +371,7 @@ def _validate_experiences_with_budget(
                 soft_min_chars=EXPERIENCE_BULLET_SOFT_MIN_CHARS,
                 result=result,
                 component_type="experience",
+                verbatim=verbatim,
             )
 
 
@@ -363,6 +379,7 @@ def _validate_projects_with_budget(
     projects: List[dict],
     proj_budgets: dict,
     result: ValidationResult,
+    verbatim: bool = False,
 ):
     """Validate projects against exact per-component bullet budgets."""
     if len(projects) == 0:
@@ -414,6 +431,7 @@ def _validate_projects_with_budget(
                 soft_min_chars=PROJECT_BULLET_SOFT_MIN_CHARS,
                 result=result,
                 component_type="project",
+                verbatim=verbatim,
             )
 
 
@@ -456,6 +474,7 @@ def _validate_bullet_length(
     soft_min_chars: int,
     result: ValidationResult,
     component_type: str,
+    verbatim: bool = False,
 ):
     """
     Validate one bullet against the zone model.
@@ -469,6 +488,20 @@ def _validate_bullet_length(
 
     The repair loop is the recovery path for bullets that miss the zone;
     feedback names exact target ranges so the LLM can correct on retry.
+
+    **`verbatim` is that sentence read carefully.** The orphan-zone error is
+    addressed to a model that is about to retry — it names two target ranges
+    and asks it to pick one. On the no-model rung there is no model, no retry,
+    and no permission to rewrite: the text is the user's own, `fit_bullet` has
+    already tried to compress it and failed, and the only remaining effect of
+    the error is to condemn a resume the user would have sent as it is. Priya
+    Raghunathan's Toast bullet is 126 characters and every one of her five
+    resumes was filed under needs_review for it.
+
+    So on that rung an orphan is a warning: still reported, no longer a
+    verdict. Overflow stays an error either way, because a bullet past the
+    maximum spills onto a second page, which is a consequence rather than an
+    opinion about typography.
     """
     if not isinstance(bullet, str):
         result.add_error(f"{label}: Bullet must be a string")
@@ -498,15 +531,21 @@ def _validate_bullet_length(
             f"    → {cleaned[:80]}..."
         )
 
+    # An orphan on a bullet nobody may rewrite is a remark, not a verdict.
+    report = result.add_warning if verbatim else result.add_error
+    advice = ("    → Shortening it by hand would tighten the line; nothing "
+              "here will do that for you.\n" if verbatim else None)
+
     # Line-2 orphan zone (111 to 179 inclusive)
     if LINE_1_END < char_count < LINE_2_WELL_FILLED_START:
         line_2_chars = char_count - LINE_1_END
-        result.add_error(
+        report(
             f"{label}: {char_count} chars falls in the line-2 orphan zone "
             f"(line 2 would have only ~{line_2_chars} chars).\n"
-            f"    → Either compress to ≤{LINE_1_END} chars (1 line) "
-            f"OR expand to {LINE_2_WELL_FILLED_START}-{LINE_2_END} chars (2 full lines).\n"
-            f"    → {cleaned[:80]}..."
+            + (advice or
+               f"    → Either compress to ≤{LINE_1_END} chars (1 line) "
+               f"OR expand to {LINE_2_WELL_FILLED_START}-{LINE_2_END} chars (2 full lines).\n")
+            + f"    → {cleaned[:80]}..."
         )
         return
 
@@ -514,12 +553,13 @@ def _validate_bullet_length(
     if component_type == "experience":
         if LINE_2_END < char_count < LINE_3_WELL_FILLED_START:
             line_3_chars = char_count - LINE_2_END
-            result.add_error(
+            report(
                 f"{label}: {char_count} chars falls in the line-3 orphan zone "
                 f"(line 3 would have only ~{line_3_chars} chars).\n"
-                f"    → Either compress to {LINE_2_WELL_FILLED_START}-{LINE_2_END} chars (2 lines) "
-                f"OR expand to {LINE_3_WELL_FILLED_START}-{LINE_3_END} chars (3 full lines).\n"
-                f"    → {cleaned[:80]}..."
+                + (advice or
+                   f"    → Either compress to {LINE_2_WELL_FILLED_START}-{LINE_2_END} chars (2 lines) "
+                   f"OR expand to {LINE_3_WELL_FILLED_START}-{LINE_3_END} chars (3 full lines).\n")
+                + f"    → {cleaned[:80]}..."
             )
             return
 

@@ -243,7 +243,7 @@ class GenerationAgent:
                     bullet_budgets=bullet_budgets,
                 )
 
-                if self.mock_mode or self.llm_backend == "none":
+                if self.mock_mode or (tailored or {}).get("_verbatim"):
                     # Every rung is handed the model path's budget; a rung
                     # that cannot rewrite a bullet spends it on whole ones
                     # instead, and lands on a different count. Validation has
@@ -251,6 +251,14 @@ class GenerationAgent:
                     # short — the budget is the contract between tailoring and
                     # validation, so it is restated here rather than being
                     # quietly broken in the tailor.
+                    #
+                    # Keyed on what the tailor did, not on `self.llm_backend`.
+                    # `_chat_tailor` and `_gemini_tailor` both fall back here
+                    # when the model does not answer, and that fallback is
+                    # invisible to the setting: the run is configured for
+                    # Ollama and the resume is verbatim. Gating on the setting
+                    # validated those against a budget nothing had spent, and
+                    # reported every component as short.
                     bullet_budgets = self._fit_budgets_to_lines(bullet_budgets)
 
                 if not tailored:
@@ -1421,7 +1429,18 @@ Source bullets:
         exp_budget = budgets.get("experiences", {})
         proj_budget = budgets.get("projects", {})
 
-        tailored = {"experiences": [], "projects": []}
+        # `_verbatim` says which rung wrote this and is set unconditionally;
+        # `_verbatim_reason` says why, and only exists when the rung was not
+        # chosen on purpose.
+        #
+        # The distinction is load-bearing. Everything downstream that needs to
+        # know "were these bullets rewritten" was reading `self.llm_backend`,
+        # which is the rung that was *configured* rather than the one that
+        # ran. Both model rungs fall back here when the model does not answer,
+        # so a run set to Ollama can produce a verbatim resume and be judged
+        # as a rewritten one. Stamping the payload puts the answer where it
+        # cannot disagree with the thing it describes.
+        tailored = {"experiences": [], "projects": [], "_verbatim": True}
         # Carried on the payload rather than returned alongside it, because
         # every caller of this already threads a single dict through fitting,
         # validation and the result record. An out-of-band value would be
