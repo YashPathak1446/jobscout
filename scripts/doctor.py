@@ -159,10 +159,16 @@ def check_rewriting_backend(report):
     elif backend == "openai":
         report.add(OK, "Bullet rewriting", "an OpenAI-compatible key was found")
     elif backend == "ollama":
+        # R81 replaced R44's verdict and this line kept repeating it. The
+        # README was corrected and the doctor was not — the same fix landing
+        # on one of two paths, in the two places that tell a user what to
+        # expect. Found by running the doctor out of a TestPyPI install,
+        # which is the first time anyone had read this text as a stranger.
         report.add(WARN, "Bullet rewriting",
-                   "Ollama, running locally — unmeasured on llama3.1:8b, where "
-                   "its rewrites were rejected (R44)",
-                   "a Gemini key gives the results this project measured")
+                   "Ollama, running locally — measured 2026-08-27 on "
+                   "llama3.1:8b, where it passed one of three fixture resumes",
+                   "a Gemini key gives the results this project measured; the "
+                   "no-model floor passed all three")
     else:
         report.add(WARN, "Bullet rewriting",
                    "no model — jobs are still found, scored and matched, but "
