@@ -1,0 +1,37 @@
+# Ignore by pattern, never by filename — the rule .gitignore learned the hard
+# way when data/runs.db arrived four months after data/jobs.db and nobody
+# added a second line.
+
+# Never ship anyone's data into an image. The volume carries it instead.
+data/
+user_profiles/
+outputs/
+baselines/
+.cache/
+*.db
+
+# Secrets. `fly secrets` sets these at runtime; an image with a key baked in
+# is a key published to anyone who can pull it.
+.env
+.env.*
+*.pem
+
+# Build inputs that the image rebuilds itself.
+web/node_modules/
+web/dist/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Not needed at runtime, and they are most of the context upload.
+.git/
+.github/
+.claude/
+tests/
+docs/
+*.md
+!README.md

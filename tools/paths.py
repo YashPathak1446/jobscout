@@ -124,3 +124,27 @@ def user_path(*parts, create_parent: bool = False) -> Path:
 #
 # Deleted rather than left for a future caller. A helper with no callers is
 # the recurring bug of this codebase pointed at itself.
+
+
+def outputs_root(output_dir: str = "outputs") -> Path:
+    """
+    Where generated resumes go, anchored somewhere that survives a deploy.
+
+    R80 moved ten modules off `__file__` so an installed copy could find its
+    assets. This is the eleventh, missed because it resolves a directory the
+    program *writes* rather than one it reads at import — `Path("outputs")`
+    is relative to the working directory, which is fine on a laptop where the
+    working directory is the checkout and fatal in a container where it is a
+    layer that gets replaced on every deploy.
+
+    The symptom would have been quiet: `data/` on the volume, so runs.db and
+    the board survive, while every PDF the board links to is gone. A job list
+    that remembers everything and can produce nothing.
+
+    An absolute path is honoured as given. A relative one is anchored at
+    `data_home()`, which in a checkout **is the repo root** — so a developer's
+    `outputs/` does not move and the frozen baselines still measure the same
+    files.
+    """
+    given = Path(output_dir)
+    return given if given.is_absolute() else data_home() / given

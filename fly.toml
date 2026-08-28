@@ -1,0 +1,69 @@
+# Fly config for the single-user deploy.
+#
+# Rename `app` before the first `fly launch` — it is a global namespace.
+#
+# Chosen over Render because Render's free tier spins down on idle, and
+# `start_run` backgrounds the pipeline in an in-process thread: scale-to-zero
+# does not pause a run, it kills one mid-flight and the board keeps a row that
+# never finishes. Chosen over Railway because OOS5 caps spend at $10/month and
+# usage-based pricing on a 1.75 GB image with multi-minute CPU bursts is the
+# shape that makes a bill unpredictable.
+
+app = "jobscout"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Everything the app writes goes on the volume: runs.db, jobs.db, the
+  # caches, uploaded master resumes, and — since `outputs_root()` anchors at
+  # this — the generated PDFs too. Splitting those was the bug that would
+  # have survived a deploy as an empty board full of dead download links.
+  JOBSCOUT_HOME = "/data"
+  JOBSCOUT_WEB_DIST = "/app/web/dist"
+
+[[mounts]]
+  source = "jobscout_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # **Both of these are the point.** An in-process worker cannot survive its
+  # machine being stopped, so a run started at minute one and still going at
+  # minute three needs the machine to still be there. When this moves to a
+  # real queue, these can go back to true/0 and save money.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # One machine, deliberately. Two would each hold their own in-process
+  # threads and their own SQLite handles against one volume, and a run started
+  # on machine A is invisible to machine B — the board would show a run that
+  # exists nowhere. Horizontal scale waits for the queue.
+  [http_service.concurrency]
+    type = "requests"
+    hard_limit = 50
+    soft_limit = 25
+
+  # `/healthz` and not `/api/health`: the latter lists profile names, and a
+  # health check is unauthenticated by definition, so its body is public.
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  # 1 GB because the embedding model and pdflatex both want room, and an OOM
+  # kill mid-run looks exactly like the worker-dies-on-restart failure this
+  # phase is trying to measure. Start here; measure before trimming.
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+# Secrets are NOT set here. `fly secrets set GEMINI_API_KEY=... JOBSCOUT_ACCESS_SECRET=...`
+# keeps them out of the repo and out of the image. A key in a committed file
+# is a key published to anyone who can read the repo, and this one is public.

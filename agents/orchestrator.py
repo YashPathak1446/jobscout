@@ -35,6 +35,7 @@ except ImportError:
 # Add project root to path (parent of agents/)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from tools.paths import outputs_root
 from tools.profile import load_profile
 from tools.resume import ResumeParser
 from agents import DiscoveryAgent, EnrichmentAgent, AnalysisAgent, GenerationAgent
@@ -84,7 +85,7 @@ def previous_runs(output_dir: str = "outputs", limit: int = 10) -> list:
     """
     import json as _json
 
-    base = Path(output_dir)
+    base = outputs_root(output_dir)
     if not base.is_dir():
         return []
 
@@ -669,7 +670,9 @@ class JobScoutOrchestrator:
         
         # Setup output directory
         self.timestamp = datetime.now().strftime("%Y-%m-%d")
-        self.output_path = Path(output_dir) / self.timestamp
+        # Anchored at the data home, not the working directory: in a container
+        # those differ, and the difference is every generated PDF.
+        self.output_path = outputs_root(output_dir) / self.timestamp
         self.output_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"📁 Output directory: {self.output_path}")
         

@@ -19,16 +19,28 @@ second user — the hosted tier is a separate project (Q15), and putting a
 half-built session layer in now would be the speculative generality R4
 rejected.
 
+**That stops being true the moment this is deployed**, and the thing standing
+in the way was easy to miss: the CORS list below pins the browser to
+`localhost:5173`, so it is currently the only reason nineteen unauthenticated
+endpoints are not reachable from anywhere. Deploying *requires* changing it.
+So `JOBSCOUT_ACCESS_SECRET` gates the whole app behind one shared password
+until real accounts exist — not a session layer, deliberately: one secret, no
+users, no roles, and it is deleted the day managed auth lands. Unset, nothing
+changes for a local run.
+
 Run it with:
     uvicorn api.main:app --reload --port 8000
 """
 
+import os
+import secrets
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from agents.orchestrator import (
@@ -54,6 +66,7 @@ from agents.orchestrator import (
     set_job_status,
     start_run,
     run_status,
+    outputs_root,
 )
 from scripts.init_profile import (
     create_profile,
@@ -69,8 +82,16 @@ from scripts.init_profile import (
 app = FastAPI(title="JobScout", version="1.0.0")
 
 # The Vite dev server runs on a different port, so the browser treats it as a
-# different origin. Both are localhost on this machine and there is nothing
-# to protect against here; the hosted tier will not use this list.
+# different origin. Both are localhost on this machine and there is nothing to
+# protect against here.
+#
+# Deployed, this list is simply unused: the API serves the built React from
+# its own origin (see the mount at the bottom of this file), so the browser
+# never makes a cross-origin request and CORS never applies. The previous
+# comment said "the hosted tier will not use this list", which was right about
+# the list and wrong about why — it read as though something would replace it,
+# when in fact same-origin serving makes it moot. What actually needed
+# replacing was the protection it was accidentally providing.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -78,6 +99,58 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Liveness only. Deliberately says nothing about the machine — `/api/health`
+# lists profile names, which is a fact about a person, and a health check runs
+# unauthenticated by definition.
+LIVENESS = "/healthz"
+
+
+@app.middleware("http")
+async def require_the_shared_secret(request: Request, call_next):
+    """
+    One password in front of everything, while "everything" has no owner.
+
+    HTTP Basic, so a browser prompts for it and the React build needs no
+    change — the whole point is that this is temporary scaffolding that Day
+    3's managed auth deletes rather than extends.
+
+    **This is authentication, not authorization**, and the difference is the
+    part that ships broken: it establishes that a caller knows the password,
+    not that the data they are asking for is theirs. With one user those are
+    the same statement. With two they are not, and every endpoint will need
+    its own check that the `user_id` it is about matches the session — a board
+    row, a run, a generated file. Nothing here provides that and nothing here
+    should be mistaken for it.
+    """
+    secret = os.getenv("JOBSCOUT_ACCESS_SECRET")
+    if not secret or request.url.path == LIVENESS:
+        return await call_next(request)
+
+    offered = ""
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("basic "):
+        import base64
+        try:
+            decoded = base64.b64decode(header[6:]).decode("utf-8", "replace")
+            offered = decoded.partition(":")[2]
+        except Exception:                      # malformed header, not a match
+            offered = ""
+
+    # Constant-time: a plain `==` leaks the secret's prefix through timing,
+    # and this is the one comparison in the codebase where that matters.
+    if not secrets.compare_digest(offered, secret):
+        return Response(
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="JobScout"'},
+        )
+    return await call_next(request)
+
+
+@app.get(LIVENESS)
+def healthz() -> dict:
+    """Is the process up. Nothing else, on purpose."""
+    return {"ok": True}
 
 
 # ------------------------------------------------------------- meta ----
@@ -484,8 +557,42 @@ def file(path: str):
     directory before anything is opened. A local single-user app is still an
     app with an open port on it.
     """
-    root = (Path.cwd() / "outputs").resolve()
-    target = (Path.cwd() / path).resolve()
+    # `outputs_root()` rather than `Path.cwd() / "outputs"`, and the two are
+    # only the same thing on a laptop. In a container the working directory is
+    # an image layer and the outputs live on the volume, so resolving against
+    # cwd would have containment-checked downloads against a directory the
+    # runs never wrote to — every file a 404, with the guard looking correct.
+    #
+    # It is also the twin of the resolution in `JobScoutOrchestrator`, and a
+    # writer and a reader computing the same root separately is how this
+    # codebase loses a week. One function, two callers, and a test that they
+    # agree.
+    root = outputs_root().resolve()
+    target = (root.parent / path).resolve()
     if root not in target.parents or not target.is_file():
         raise HTTPException(status_code=404, detail="No such generated file")
     return FileResponse(target, filename=target.name)
+
+
+# ------------------------------------------------------------- the app ----
+#
+# The built React, served from this origin.
+#
+# **Mounted last, and that is load-bearing.** A mount at "/" matches every
+# path, so FastAPI resolves it only after the routes declared above — put it
+# any earlier and it swallows `/api/*` and the frontend talks to a 404.
+#
+# `web/dist` is a build artifact, so it is absent in a checkout that has not
+# run `npm run build` and absent from the wheel entirely. Missing is a normal
+# state, not an error: the dev loop serves the frontend from Vite on 5173 and
+# only ever calls this process for `/api`. Hosted, the Dockerfile builds it in.
+#
+# `html=True` serves `index.html` for `/`. There is no client-side router, so
+# no deep-link fallback is needed — and inventing one would mean answering 200
+# to every mistyped API path, which is the kind of helpfulness that hides a
+# bug for a week.
+WEB_DIST = Path(os.getenv("JOBSCOUT_WEB_DIST")
+                or Path(__file__).parent.parent / "web" / "dist")
+
+if WEB_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
