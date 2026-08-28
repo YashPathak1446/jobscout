@@ -66,6 +66,77 @@ not a redesign.
 
 Landing page, then post it. **Tech roles only** — see the hold below.
 
+- [ ] **Error reporting before posting.** A free Sentry tier, ~20 minutes.
+      Without it, a run that fails for a stranger on the deployed instance is
+      something you find out about never — and the failure criteria above
+      cannot tell *"product not wanted"* from *"product broken"*, which is the
+      one distinction the week exists to make.
+
+---
+
+## Before it is public
+
+Eight weak points were raised against this plan. **Seven hold, one does not**,
+and the checking mattered — the wrong one had a real bug hiding inside it.
+
+| # | Claim | Verdict |
+|---|---|---|
+| 1 | 19 endpoints, no auth | **holds** — the only `session` matches in `api/main.py` are comments |
+| 2 | `/api/file` path traversal | **wrong** — already resolves and containment-checks against `outputs/` |
+| 3 | No rate limiting | **holds** — every `limit` match is pagination |
+| 4 | No deletion path | **holds** — zero `@app.delete` routes |
+| 5 | Datacenter IP scraping | **unknown, and correctly flagged** — not answerable from here |
+| 6 | Shared LLM cache | **holds, smaller than stated** — see below |
+| 7 | Q17 becomes user-facing | **holds** |
+| 8 | No error reporting | **holds** — zero Sentry/Rollbar references |
+
+**The correction that matters most.** `/api/file` is not traversable —
+`?path=../../etc/passwd` resolves outside `outputs/` and gets a 404, and the
+docstring explains why. But the *second half* of that claim is real and is a
+**different bug**: there is no user check, so once accounts exist, anyone who
+knows a path can fetch anyone's generated resume. That is finding 1, not
+traversal, and fixing traversal would not have touched it.
+
+**Finding 6, precisely.** `llm_cache` stores `{model, cached_at, prompt_chars,
+response}` — the prompt is hashed, never written, so **raw resumes are not on
+disk in the cache**. What is stored is `response`: the rewritten bullets,
+which are resume-derived. One global `.cache/llm` directory holding fragments
+of everyone's work history. Still a privacy boundary, smaller blast radius
+than "everyone's resume".
+
+### The sequencing problem nobody listed
+
+`api/main.py` pins CORS to `http://localhost:5173`, with a comment saying the
+hosted tier will not use this list. **That line is currently the only thing
+between 19 unauthenticated endpoints and the internet**, and the Day 1–2
+deploy requires changing it.
+
+So authorization is not a Day 3 task that happens to come after the deploy —
+it is a **precondition of the deploy being reachable**. The cheap resolution
+keeps the week intact:
+
+- [ ] Days 1–2 ship behind a **single shared secret** (HTTP basic or a header
+      check, ~20 min) so the instance is testable without being open
+- [ ] Day 3's managed auth replaces it, and every endpoint gets an
+      authorization check — not just a sign-in — because *"people can log in"*
+      and *"people can only see their own data"* are different properties and
+      the second is the one a stranger notices
+
+### Carried, with dates rather than vibes
+
+- [ ] **Deletion and retention** — a legal obligation the moment the first
+      stranger uploads, not the Phase 5 polish item the old plan had it as.
+      Needed by Day 5, before posting.
+- [ ] **Rate limiting on `/api/run`** — it triggers a multi-minute job that
+      spends quota. One run per user is an existing guard; a request-level
+      limit is not. Needed by Day 5. Pairs with Q24's spend ceiling.
+- [ ] **Scraping from Fly's egress** — verify discovery still works from a
+      datacenter IP on day one of the deploy. Cloudflare in front of an ATS
+      behaves differently for cloud ranges than for a residential connection.
+      This can break discovery outright and there is no fallback.
+- [ ] **The LLM cache** — per-user or disabled hosted, before strangers share
+      an instance.
+
 ---
 
 ## What counts as failing
