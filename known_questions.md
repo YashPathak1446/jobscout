@@ -679,6 +679,51 @@ stopped inflating the rendered length; a later measurement should revisit it.
 
 # Active questions
 
+## Q25. There is no step between "installed" and "looking at something"
+
+**Status:** Open, found 2026-08-27 by the author expecting `pip install` to
+launch the app. It does not: a Python package installs a command and waits.
+
+That expectation came from the person who **wrote** it. A stranger's will be
+at least as strong, and a stranger has less reason to go looking for what to
+type next.
+
+What exists today, after `pip install "jobscout[local]"`:
+
+    jobscout-doctor   says what is missing and how to fix it
+    jobscout-ui       a local web app — the path a non-developer wants
+    jobscout          the pipeline, for a terminal
+
+All three work from a clean install; `jobscout-ui` was verified booting out of
+site-packages with no errors. The gap is not capability, it is that **nothing
+says so at the moment somebody would want to know.** pip prints an install
+summary and returns to a prompt.
+
+Options, none chosen:
+
+* **Do nothing.** Defensible: this is how every Python CLI behaves, and the
+  README's quick start says to run `jobscout-doctor` first. It relies on
+  someone reading the README, which the hosted product exists precisely to
+  stop requiring.
+* **A post-install message.** Modern pip suppresses these for wheels, so it
+  would mean an sdist-only hack. Rejected before it is tried.
+* **Make `jobscout` with no arguments open the UI** rather than print usage.
+  The one-word thing a person would guess, doing the friendly thing. Costs a
+  behaviour change for anyone scripting the CLI.
+* **Say it in the README's first code block**, immediately under install, so
+  the next line after `pip install` is the line that shows you something.
+  Cheapest, and it only helps someone reading in order.
+
+**Why it is worth deciding rather than shrugging at.** The free tier's whole
+argument is "run it yourself". Every step between installing and seeing a
+result is a place that argument leaks — and this one is invisible from the
+inside, because the author knows what to type.
+
+Related: it is also evidence *for* the hosted product. A URL has no step
+between arriving and looking at something.
+
+---
+
 ## Q24. What stops a hosted run from costing money?
 
 **Status:** Not urgent today, and it has a date. Recorded 2026-08-27 so it is
@@ -7316,6 +7361,91 @@ That is a real free tier, it passes the acceptance run today, and it needs
 nothing installed beyond the package. `README.md` said Ollama "does not
 currently help" as present fact on R44's authority; it now says what was
 measured and when.
+
+---
+
+## R82. Phase 0 against its estimate, and the thing nobody has done yet
+
+**Recorded:** 2026-08-27, at the end of the day the plan was written.
+
+The plan estimated Phase 0 at **5 days**. Four of the five are done in one, and
+the fifth has not started. Writing that down because the shape of the overrun
+matters more than the number, and because a plan that is never checked against
+what happened is a wish.
+
+### What the plan said, and what happened
+
+| Phase 0, day | Planned | Actual |
+|---|---|---|
+| 1 · write and freeze the acceptance run | 1 day | done |
+| 2-3 · fix only what it catches | 2 days | done, and it caught three |
+| 4 · the Ollama measurement | 1 day | done, R81 |
+| 5 am · publish the local version | ½ day | done — on PyPI, not just tagged |
+| 5 pm · **watch one real person use it** | ½ day | **not started** |
+
+Thirteen commits, 29 files, +1,412 lines. Plus one thing the plan did not
+have: step 4 of the follow-on list — packaging and path resolution — which was
+pulled forward because publishing exposed it.
+
+### Why it compressed, and why that is not the new rate
+
+The plan predicted this: *"Phase 0 compressed because it was documentation of
+things already true."* That held. Writing an acceptance run is transcribing a
+standard that already existed in scattered form; it is not building anything.
+
+Two things did turn out to be real work and were not in the estimate:
+
+* **The wheel could not render anything.** Ten modules resolved paths from
+  `__file__`, so an installed copy had no LaTeX preamble and would have
+  written user data into `site-packages`. That is the R80 packaging fix, most
+  of a day, and it was invisible until an artifact was actually built.
+* **A publish is not one step.** Version semantics, a `.pypirc` that failed to
+  parse, a token from the wrong registry, PowerShell not expanding `dist\*`.
+  None of it interesting, all of it real, and none of it in a 5-day estimate
+  that said "half a day, publish it".
+
+**Treat the compression as luck rather than as the rate.** Phase 1 is a
+container image and a worker surviving multi-minute runs. Neither exists,
+neither is written down anywhere in this repo, and both have failure modes
+invisible from here.
+
+### What the acceptance run found on its first three executions
+
+The bar was built to end bug-hunting and it immediately justified itself,
+which is the argument for having built it:
+
+1. a resume marked **valid** reporting **0 pages** — a hard wrap inside the
+   word "page" in pdflatex's log, and the one-page gate asks `> 1`, so
+   uncountable passed as fine
+2. the report **crashed printing its own first failure** — a `→` in a
+   validation error against a cp1252 console
+3. **the bar itself was wrong**, demanding zero `needs_review` when that is a
+   designed safety outcome. Gemini's quarantined resume was the fabrication
+   guard working
+
+### The one that has not moved
+
+**Nobody outside this project has used it.** It was the highest-information
+item on the plan, it was deliberately moved *forward* out of week seven for
+that reason, and it is the only item still untouched at the end of the day.
+
+Every other item was reachable from a terminal. That one is not, and that is
+precisely why it keeps losing.
+
+### An onboarding finding, from the author
+
+Asked how to get someone else to try it, the author's first assumption was
+that **`pip install` would launch the app**. It does not — a Python package
+installs a command and waits to be run.
+
+That expectation came from the person who wrote the thing. A stranger's will
+be at least as strong. It is evidence for the hosted product rather than
+against the local one, and it names a specific gap: **there is no step between
+"installed" and "looking at something".** `jobscout-ui` exists and works from
+a clean install — verified: Streamlit boots, HTTP 200, no errors — but nothing
+tells you to run it at the moment you would want to.
+
+Logged, not fixed. It is not on the acceptance list, and the freeze holds.
 
 ---
 
