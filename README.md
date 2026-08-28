@@ -3,6 +3,7 @@
 > An end-to-end multi-agent system that discovers relevant jobs, scores them
 > against your resume, and generates tailored, ATS-optimized resumes per posting.
 
+[![PyPI](https://img.shields.io/pypi/v/jobscout)](https://pypi.org/project/jobscout/)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue)](https://python.org)
 [![Google ADK](https://img.shields.io/badge/Google%20ADK-1.0+-green)](https://google.github.io/adk-docs/)
 [![Gemini](https://img.shields.io/badge/Gemini-3.5%20Flash-orange)](https://ai.google.dev/)
@@ -55,6 +56,15 @@ specialized tools. The orchestrator is stateful and supports replay
 ### 1. Install
 
 ```bash
+pip install "jobscout[local]"
+```
+
+The `local` extra installs `model2vec`, which lets JobScout score jobs with no
+API key at all. Leave it off and scoring needs a Gemini key instead.
+
+Python 3.10 or newer. To work on it rather than use it:
+
+```bash
 git clone https://github.com/YashPathak1446/jobscout.git
 cd jobscout
 python -m venv venv
@@ -62,8 +72,9 @@ source venv/bin/activate    # on Windows: venv\Scripts\activate
 pip install -e ".[local]"
 ```
 
-The `local` extra installs `model2vec`, which lets JobScout score jobs with no
-API key at all. Leave it off and scoring needs a Gemini key instead.
+Your profiles, resumes and databases live outside the package — in the repo
+itself when you run from a checkout, and under your platform's user data
+directory when installed. Set `JOBSCOUT_HOME` to put them somewhere else.
 
 That gives you three commands:
 
