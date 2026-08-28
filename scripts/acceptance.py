@@ -15,7 +15,7 @@ purpose.
 
 **What it asserts**, for each fixture resume, on each rung:
 
-    the resume imports            -> a profile and a master .tex exist
+    the resume imports            -> on the rung under test, and it says which
     the pipeline runs             -> jobs are scored, above the threshold
     generation produces resumes   -> `valid`, not `needs_review`
     the file compiles             -> a PDF, exactly one page
@@ -142,9 +142,19 @@ def check(condition, message):
 
 # --- the run -----------------------------------------------------------------
 
-def import_resume(spec):
+def import_resume(spec, rung):
     """
     The fixture, through the real import path, into a master `.tex`.
+
+    `rung` is required rather than defaulted, because a default is precisely
+    how this leg drifted from the other one. Until R83 this function took the
+    fixture alone: `run_pipeline` was pinned and the import was not, so every
+    row imported through whatever `detect()` found. The `none` row — the one
+    documented below as what a stranger with no key lands on — was reading its
+    resumes with Gemini, and the report had no field in which to say so.
+
+    Returns `(tex, imported_by)`, where `imported_by` is the rung that read the
+    resume or `None` when the fixture was already LaTeX and no model was asked.
 
     The `.tex` needs a **durable** home, because `create_profile` stores an
     absolute path to it and a profile written against a temp workspace breaks
@@ -170,7 +180,8 @@ def import_resume(spec):
     home = Path(tempfile.gettempdir()) / "jobscout-acceptance"
     home.mkdir(parents=True, exist_ok=True)
     destination = home / f"{spec['profile']}.tex"
-    extracted = init_profile.extract_resume(source.read_bytes(), source.name)
+    extracted = init_profile.extract_resume(source.read_bytes(), source.name,
+                                            backend=rung)
     if extracted["kind"] == "latex":
         shutil.copy(source, destination)
         tex = destination
@@ -182,7 +193,7 @@ def import_resume(spec):
 
     check(tex.exists() and tex.stat().st_size > 500,
           f"the imported .tex is missing or too small to be a resume: {tex}")
-    return tex
+    return tex, extracted.get("rung")
 
 
 def run_pipeline(profile_name, corpus, rung, output_dir):
@@ -254,6 +265,16 @@ def assert_the_frozen_list(state, rung):
               f"but was not quarantined")
 
     # R79: the run has to say what wrote it, and it has to be what was asked.
+    #
+    # This is about **bullet writing only**, and the rung that read the resume
+    # is deliberately not folded in here. The orchestrator does not do the
+    # import — the resume reaches it as a `.tex` path, and for `priya` the
+    # import happened in a different call from the run that consumes the file
+    # — so a claim about it in `state` would be a record of an assertion
+    # rather than a record of what happened, which is the whole distinction
+    # `_rung_used` is built on. Import provenance is returned by
+    # `import_resume` and stated on the report line. Merging the two also
+    # breaks the `{"verbatim"}` assertion three lines down (R83).
     used = (state.get("backend") or {}).get("used") or {}
     check(used, "the run did not record which rung wrote it")
     if rung == "none":
@@ -278,7 +299,7 @@ def one(name, spec, rung, keep):
         # through logging, so silencing logging is not enough to keep this
         # report readable.
         with contextlib.redirect_stdout(io.StringIO()):
-            tex = import_resume(spec)
+            tex, imported_by = import_resume(spec, rung)
             # A harness may build a profile non-interactively; R33's rule
             # that a person confirms every field is about the product flow,
             # not about a test rig. `create_profile` is the same public call
@@ -289,7 +310,8 @@ def one(name, spec, rung, keep):
             # means the import path still works rather than that it worked
             # once. Profiles it does not own — Priya, who is a real imported
             # fixture — are used as they are and never overwritten.
-            if spec["profile"].startswith("acceptance_"):
+            owned = spec["profile"].startswith("acceptance_")
+            if owned:
                 init_profile.create_profile(tex, spec["profile"], force=True)
             check(spec["profile"] in list_available_profiles(),
                   f"profile '{spec['profile']}' does not exist and this "
@@ -301,7 +323,18 @@ def one(name, spec, rung, keep):
         # A gate that passes while hiding how much it set aside is the same
         # shape as a filter that removes rows without saying how many (R62).
         held = f", {review} held for review" if review else ""
-        return f"{count} valid{held}, best job {best:.1f}%"
+        # Which rung read the resume, stated rather than assumed — the field
+        # whose absence let this script claim `none` for four months while
+        # Gemini did the importing (R83).
+        #
+        # Priya's profile is not rebuilt, so her import is written and thrown
+        # away and the run uses the committed `.tex` instead. Saying "imported
+        # by gemini" on that row without saying that would be the same bug in
+        # miniature: a true sentence about a file nothing read.
+        by = f", imported by {imported_by or 'no model needed'}"
+        if not owned:
+            by += " (not used — profile pre-exists)"
+        return f"{count} valid{held}, best job {best:.1f}%{by}"
     finally:
         if not keep:
             shutil.rmtree(workspace, ignore_errors=True)

@@ -149,6 +149,32 @@ def detect(gemini_key=None, openai_key=None, ollama_url=None) -> str:
     return "none"
 
 
+def effective_backend(backend: str = None, profile=None,
+                      gemini_key: str = None) -> str:
+    """
+    The rung a call will actually use: resolved, then detected only if `auto`.
+
+    `resolve_backend` answers "what was chosen" and returns `"auto"` when
+    nobody chose; `detect` answers "what is available". Every caller that
+    needs the real answer needs both, in that order, and this is the only
+    place the pair is written.
+
+    It exists because a caller that wants to *report* the rung — as
+    `scripts/acceptance.py` does, having been misled by not knowing it — would
+    otherwise re-type the pair and become a second implementation of the
+    resolution chain. Resolving here and passing the concrete name down also
+    means `complete_json` short-circuits on it and `detect` cannot run twice:
+    the reported rung and the used rung are one answer, not two that agree.
+    """
+    from config import OLLAMA_API_URL, resolve_api_key, resolve_backend
+
+    choice = resolve_backend(backend, profile)
+    if choice == "auto":
+        choice = detect(gemini_key=resolve_api_key(gemini_key),
+                        openai_key=env_openai_key(), ollama_url=OLLAMA_API_URL)
+    return choice
+
+
 def describe(backend: str, model: str = "") -> str:
     """One line a user can act on, for the log and for the UI."""
     detail = DESCRIPTIONS.get(backend, backend)
@@ -233,17 +259,22 @@ def complete_json(prompt: str, gemini_key: str = None,
     the experience field order (R70), the selection breakdown (R57) — was
     found months later by somebody walking the path the author does not.
     `test_backend_selection.py` holds the two together.
+
+    **And for four months the paragraph above was true of this function and
+    false of the system (R83).** `backend` had no caller: the sole production
+    route in, `scripts/init_profile.extract_resume`, reached here through
+    `to_schema`, which invokes its agent with one positional argument. So the
+    parameter written to carry a pin was computed and never read, and the
+    acceptance run imported through Gemini on the row labelled `none` — the
+    exact sentence above, happening, while the docstring said it could not.
+    `extract_resume(..., backend=)` is the caller that makes this true.
     """
     from config import (OLLAMA_API_URL, OLLAMA_BASE_URL,
                         OLLAMA_MODEL, OPENAI_BASE_URL, OPENAI_MODEL,
-                        resolve_api_key, resolve_backend)
+                        resolve_api_key)
 
-    choice = resolve_backend(backend, profile)
     key = resolve_api_key(gemini_key)
-
-    if choice == "auto":
-        choice = detect(gemini_key=key, openai_key=env_openai_key(),
-                        ollama_url=OLLAMA_API_URL)
+    choice = effective_backend(backend, profile, gemini_key=key)
 
     if choice == "none":
         # Chosen, not failed. The only path that returns None.

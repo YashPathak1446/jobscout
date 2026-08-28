@@ -35,8 +35,11 @@ order (R70), the selection breakdown (R57) — was found months later by
 somebody walking the path the author does not.
 """
 
+import contextlib
+import inspect
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -246,6 +249,142 @@ class TestBothModelConsumersResolveTheSameWay(unittest.TestCase):
                 with self.subTest(rung=rung):
                     self.assertEqual(resolve_backend(rung, None),
                                      resolve_backend(rung, None))
+
+
+class TestThePinReachesTheImporter(unittest.TestCase):
+    r"""
+    The third hop, and the one that was missing for four months (R83).
+
+    The class above checks that both consumers *resolve* the same way. It
+    cannot see whether anybody ever **tells** them: `complete_json` took a
+    `backend` argument from the day it was written, its docstring described
+    the exact bug the argument prevents, and no caller in the repo passed it.
+    The only production route in — `init_profile.extract_resume` — reached it
+    through `to_schema`, which calls its agent with one positional argument.
+
+    So the parameter was computed and never read, and `scripts/acceptance.py`
+    pinned `run_pipeline` while the import went on detecting. Its `none` row,
+    documented as the rung a stranger with no key lands on, imported through
+    Gemini; the evidence was a `\section{Experience}` with six subheadings in
+    a `.tex` the heuristic floor cannot produce, sitting in the harness temp
+    directory while the row reported PASS.
+
+    A test that checks one path against itself proves nothing about the other,
+    and this is the other one.
+    """
+
+    RESUME = ("Jane Doe\njane@example.com\nBoston, MA\n\n"
+              "EXPERIENCE\nAcme Corp — Engineer\n2020-2024\n"
+              "- Built a thing\n- Built another thing\n")
+
+    @contextlib.contextmanager
+    def _importer(self):
+        """`extract_resume`, writing to a temp dir instead of the repo's."""
+        from scripts import init_profile
+
+        # RESUME_DIR is module-level and resolves to the repo's own
+        # data/master_resumes in a checkout, so setting JOBSCOUT_HOME after
+        # import does nothing. Patch the attribute.
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.object(init_profile, "RESUME_DIR", Path(home)):
+                yield init_profile
+
+    def test_a_pinned_rung_reaches_the_extractor(self):
+        from tools.generation import llm_backends
+
+        seen = {}
+
+        def recorder(prompt, **kwargs):
+            seen.update(kwargs)
+            return None            # fall to the floor; the ask is what matters
+
+        with self._importer() as init_profile, no_env():
+            with mock.patch.object(llm_backends, "complete_json", recorder):
+                result = init_profile.extract_resume(
+                    self.RESUME.encode("utf-8"), "pinned.txt", backend="ollama")
+
+        self.assertEqual(seen.get("backend"), "ollama",
+                         "the rung the caller pinned did not reach complete_json")
+        self.assertEqual(result["rung"], "ollama",
+                         "the import did not report the rung that read it")
+
+    def test_nothing_detects_when_a_rung_is_pinned(self):
+        """
+        The one that would have caught it.
+
+        Detection running *at all* while a rung is pinned is the bug — not a
+        wrong answer that happens to differ, the asking. That is what made the
+        old behaviour invisible whenever detection agreed with the pin, and
+        it is why this asserts on the call rather than on the result.
+
+        **It records a flag rather than raising**, and that is not a style
+        choice. `to_schema` wraps its agent call in `except Exception`, so a
+        detector that raises is swallowed by the very handler the call runs
+        through and the test passes on the broken code. Written the obvious
+        way, this was a test that could not fail — caught by reverting the fix
+        and watching it stay green.
+        """
+        from tools.generation import llm_backends
+
+        # Counted, never captured: `detect` takes `gemini_key`, and a failure
+        # message built from its kwargs prints a live API key into the test
+        # log. Found by making this test fail on purpose and reading what it
+        # said — a measurement tool that leaks the thing it measures.
+        detected = []
+        real = llm_backends.detect
+
+        def watcher(**kwargs):
+            detected.append(True)
+            return real(**kwargs)
+
+        with self._importer() as init_profile, no_env():
+            with mock.patch.object(llm_backends, "detect", watcher):
+                result = init_profile.extract_resume(
+                    self.RESUME.encode("utf-8"), "floor.txt", backend="none")
+
+        self.assertEqual(len(detected), 0,
+                         "detection ran while a rung was pinned")
+        self.assertEqual(result["rung"], "none")
+        self.assertEqual(result["kind"], "extracted")
+
+    def test_a_tex_upload_reports_that_no_model_was_asked(self):
+        """
+        Three states, not two. `None` here is "no model was consulted and none
+        was needed", which is not the `"none"` rung a person chose — the
+        distinction this codebase keeps having to relearn.
+        """
+        with self._importer() as init_profile:
+            result = init_profile.extract_resume(
+                rb"\documentclass{article}\begin{document}x\end{document}",
+                "already.tex")
+
+        self.assertEqual(result["kind"], "latex")
+        self.assertIsNone(result["rung"])
+
+    def test_the_harness_pins_the_same_rung_for_both_legs(self):
+        from scripts import acceptance, init_profile
+
+        parameters = inspect.signature(acceptance.import_resume).parameters
+        self.assertIn("rung", parameters,
+                      "import_resume must be told the rung, not left to detect")
+        self.assertIs(parameters["rung"].default, inspect.Parameter.empty,
+                      "a default is how this leg drifted from the other one")
+
+        fixture = ROOT / "tests" / "fixtures" / "resume_glued_runs_six_roles.txt"
+        seen = {}
+
+        def recorder(file_bytes, filename, backend=None):
+            seen["backend"] = backend
+            return {"kind": "latex", "path": fixture, "rung": None}
+
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.object(tempfile, "gettempdir", lambda: home):
+                with mock.patch.object(init_profile, "extract_resume", recorder):
+                    acceptance.import_resume(
+                        {"resume": fixture, "profile": "acceptance_x"}, "ollama")
+
+        self.assertEqual(seen.get("backend"), "ollama",
+                         "the harness pinned the pipeline and not the import")
 
 
 class TestTwoModelsAreTwoAnswers(unittest.TestCase):

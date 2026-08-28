@@ -30,6 +30,7 @@ import json
 import shutil
 import sys
 from datetime import date, datetime
+from functools import partial
 from pathlib import Path
 
 from tools import paths
@@ -103,7 +104,7 @@ RESUME_DIR = paths.user_path("data", "master_resumes", create_parent=True)
 PROFILES = paths.user_path("user_profiles", create_parent=True)
 
 
-def save_resume(file_bytes: bytes, filename: str) -> Path:
+def save_resume(file_bytes: bytes, filename: str, backend: str = None) -> Path:
     """
     Put an uploaded resume where master resumes live, and return its `.tex`.
 
@@ -119,13 +120,13 @@ def save_resume(file_bytes: bytes, filename: str) -> Path:
     resume — both are facts about this project, and keeping them here is what
     lets `app.py` stay a view layer (R25).
     """
-    extracted = extract_resume(file_bytes, filename)
+    extracted = extract_resume(file_bytes, filename, backend)
     if extracted["kind"] == "latex":
         return extracted["path"]
     return save_extracted(extracted["schema"], extracted["source"])
 
 
-def extract_resume(file_bytes: bytes, filename: str) -> dict:
+def extract_resume(file_bytes: bytes, filename: str, backend: str = None) -> dict:
     """
     Read an upload far enough to show it, without committing to anything.
 
@@ -136,11 +137,21 @@ def extract_resume(file_bytes: bytes, filename: str) -> dict:
     screen did not exist for as long as it did.
 
     Returns either:
-        {"kind": "latex", "path": Path}       already LaTeX; nothing to confirm
-        {"kind": "extracted", "schema": {...}, "source": Path}
+        {"kind": "latex", "path": Path, "rung": None}
+        {"kind": "extracted", "schema": {...}, "source": Path, "rung": str}
 
     A `.tex` upload skips confirmation deliberately. It is the user's own file
     in the pipeline's own format, so there is nothing a model guessed at.
+
+    `backend` pins the rung; `None` means resolve it the usual way. `rung`
+    reports which one actually read the resume, and it is **three states, not
+    two** — a rung name, or `None` meaning no model was consulted and none was
+    needed. Absent is not the same as `"none"`, which is a rung a person chose.
+
+    Both exist because their absence was a bug. `scripts/acceptance.py` pinned
+    the pipeline and not the import, so the row labelled `none` imported
+    through Gemini, and nothing anywhere recorded which rung had read the
+    resume — so nothing could contradict it (R83).
     """
     from tools.generation import llm_backends
     from tools.resume import resume_import, tex_renderer
@@ -150,13 +161,24 @@ def extract_resume(file_bytes: bytes, filename: str) -> dict:
     source.write_bytes(file_bytes)
 
     if source.suffix.lower() == ".tex":
-        return {"kind": "latex", "path": source}
+        return {"kind": "latex", "path": source, "rung": None}
 
     text = resume_import.extract_text(source)
     if tex_renderer.looks_like_latex(text):
-        return {"kind": "latex", "path": source}
+        return {"kind": "latex", "path": source, "rung": None}
 
-    schema = resume_import.to_schema(text, agent=llm_backends.complete_json)
+    # Resolved here rather than inside `complete_json` so the rung can be
+    # reported, and deliberately *below* the two LaTeX returns: a `.tex` upload
+    # needs no model, and resolving at the top would have it probing for a
+    # local Ollama to answer a question nobody asked.
+    #
+    # `partial` rather than a wider `to_schema`: that function calls its agent
+    # with one positional argument, and three test modules pass one-argument
+    # callables. Binding the rung to the callable keeps that contract exactly
+    # as it was instead of asking every caller to be updated in step.
+    chosen = llm_backends.effective_backend(backend)
+    schema = resume_import.to_schema(
+        text, agent=partial(llm_backends.complete_json, backend=chosen))
 
     # Three outcomes, not two.
     #
@@ -186,7 +208,8 @@ def extract_resume(file_bytes: bytes, filename: str) -> dict:
             "works best; a scanned image will not."
         )
 
-    return {"kind": "extracted", "schema": schema, "source": source}
+    return {"kind": "extracted", "schema": schema, "source": source,
+            "rung": chosen}
 
 
 def save_extracted(schema: dict, source, destination=None) -> Path:
@@ -205,7 +228,7 @@ def save_extracted(schema: dict, source, destination=None) -> Path:
     return target
 
 
-def import_to_tex(source, destination=None) -> Path:
+def import_to_tex(source, destination=None, backend: str = None) -> Path:
     """
     Convert a PDF or DOCX resume into a `.tex`, unconfirmed.
 
@@ -214,7 +237,7 @@ def import_to_tex(source, destination=None) -> Path:
     by a person rather than discovered three stages later.
     """
     source = Path(source)
-    extracted = extract_resume(source.read_bytes(), source.name)
+    extracted = extract_resume(source.read_bytes(), source.name, backend)
     if extracted["kind"] == "latex":
         return extracted["path"]
     return save_extracted(extracted["schema"], extracted["source"], destination)
