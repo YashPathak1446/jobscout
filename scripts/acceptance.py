@@ -35,6 +35,7 @@ Usage:
 import argparse
 import contextlib
 import io
+import json
 import shutil
 import sys
 import tempfile
@@ -74,11 +75,13 @@ FIXTURES = {
         "resume": ROOT / "tests" / "fixtures" / "resume_two_degrees_non_us.txt",
         "profile": "acceptance_two_degrees",
         "why": "a masters in progress, a bachelors abroad, Research/Projects",
+        "correction": ROOT / "tests" / "fixtures" / "correction_two_degrees.json",
     },
     "glued_runs": {
         "resume": ROOT / "tests" / "fixtures" / "resume_glued_runs_six_roles.txt",
         "profile": "acceptance_glued_runs",
         "why": "six roles, an expected graduation, bold runs with no spaces",
+        "correction": ROOT / "tests" / "fixtures" / "correction_glued_runs.json",
     },
 }
 
@@ -142,6 +145,54 @@ def check(condition, message):
 
 # --- the run -----------------------------------------------------------------
 
+def _corrected(schema, spec):
+    """
+    The confirmation screen, without a person in the chair.
+
+    R33 requires every extracted field to be confirmed before use, so the
+    product's import is **two steps**: a machine reads the file, then a human
+    fixes what it got wrong. This harness only ever ran the first one, and
+    then asserted an outcome that needs both — so the `none` row demanded that
+    a PDF, no model and nobody at the keyboard produce a tailored resume. The
+    design refuses to do that on purpose: with no model the floor returns
+    `experiences: []` and hands the raw lines to the screen (Q26).
+
+    So the correction is supplied as committed fixture data, transcribed from
+    exactly the `_unparsed` lines the floor surfaces. What it replaces is the
+    typing, not the reading.
+
+    Two honest limits, both worth stating rather than discovering later:
+
+    * **It is authored here, so it agrees with us** — the standing warning
+      about `yash_pathak.json` and Priya. The resumes are still strangers'
+      text, byte for byte; only the correction is ours.
+    * **It proves the floor's output is *recoverable*, not that the screen
+      lets anyone recover it.** Those are different claims, and they were
+      different answers: the React screen has "Add an experience", `app.py`
+      had no such control and a permanently disabled button (R84).
+
+    A model rung overwrites `experiences` anyway, so applying this on every
+    rung keeps one code path rather than a branch that only one rung walks.
+    """
+    correction = spec.get("correction")
+    if not correction or schema.get("experiences"):
+        return schema
+
+    check(Path(correction).exists(), f"correction fixture is missing: {correction}")
+    typed = json.loads(Path(correction).read_text(encoding="utf-8"))
+
+    corrected = dict(schema)
+    for section in ("experiences", "projects"):
+        corrected[section] = typed.get(section) or []
+    # What a person fixed is no longer unread text. Leaving it would show the
+    # next reader a "could not read this" warning about lines now on the page.
+    corrected.pop("_unparsed", None)
+
+    check(corrected["experiences"] or corrected["projects"],
+          f"the correction for {spec['profile']} adds nothing to correct with")
+    return corrected
+
+
 def import_resume(spec, rung):
     """
     The fixture, through the real import path, into a master `.tex`.
@@ -189,6 +240,7 @@ def import_resume(spec, rung):
         schema = extracted["schema"]
         check(schema.get("experiences") or schema.get("_unparsed"),
               "import produced no work history and nothing it could not split")
+        schema = _corrected(schema, spec)
         tex = init_profile.save_extracted(schema, source, destination=destination)
 
     check(tex.exists() and tex.stat().st_size > 500,

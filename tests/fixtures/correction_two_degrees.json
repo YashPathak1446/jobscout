@@ -1,0 +1,72 @@
+{
+  "_why": "What a person types into the confirmation screen after the no-model floor hands them resume_two_degrees_non_us.txt. Transcribed from that file's _unparsed lines: 17 under experiences, 13 under projects. The resume fixture is untouched; this is the human half of R33, which the acceptance harness previously skipped entirely.",
+  "experiences": [
+    {
+      "company": "Vertex Technologies",
+      "title": "AI/ML Intern",
+      "location": "Bangalore, India",
+      "dates": "Jan 2025 - April 2025",
+      "bullets": [
+        "Built Multi Factor Authentication pipeline with behavioral biometrics and device fingerprinting.",
+        "Developed real-time fraud detection using mouse dynamics, InfluxDB, and Flask, mitigating fraud.",
+        "Integrated ORB/SIFT for signature verification and React dashboards."
+      ]
+    },
+    {
+      "company": "Arcline Engineering",
+      "title": "Research Project Developer",
+      "location": "Bangalore, India",
+      "dates": "March 2024 - Nov 2024",
+      "bullets": [
+        "Designed XAI-based cost estimation models for aerospace components.",
+        "Applied regression and clustering in Python to optimize supply chain workflows.",
+        "Delivered data driven recommendations to engineering teams."
+      ]
+    },
+    {
+      "company": "Vertex Technologies",
+      "title": "Business Analyst Intern",
+      "location": "Bangalore, India",
+      "dates": "June 2023 - Aug 2023",
+      "bullets": [
+        "Analyzed requirements and workflows for a decentralized crowdfunding platform.",
+        "Created wireframes, documentation, and process flows for dev-business collaboration."
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "TrailSpecies",
+      "tech": "Next.js, React, PostgreSQL",
+      "dates": "Sep 2025 - Dec 2025",
+      "bullets": [
+        "Built a full-stack ecology web app giving hikers wildlife data and species sightings by trail."
+      ]
+    },
+    {
+      "name": "Integrative Prediction of Post-Stroke Vascular Events",
+      "tech": "Python, GANs, SHAP, LIME",
+      "dates": "Jan 2025 - Aug 2025",
+      "bullets": [
+        "Built a two-stage ML framework using GANs for augmentation and SHAP/LIME for interpretability.",
+        "Integrated clinical biomarkers with platelet function data for vascular event prediction."
+      ]
+    },
+    {
+      "name": "Cost Estimation in Aerospace Parts Manufacturing",
+      "tech": "Python, XAI",
+      "dates": "Jan 2024 - Dec 2024",
+      "bullets": [
+        "Built an ML and XAI cost estimation tool for aerospace manufacturing from historical data."
+      ]
+    },
+    {
+      "name": "Youtube Viralomics",
+      "tech": "Python, statistical modelling",
+      "dates": "May 2024 - Dec 2024",
+      "bullets": [
+        "Built a framework quantifying video virality through statistical analysis and feature selection."
+      ]
+    }
+  ]
+}

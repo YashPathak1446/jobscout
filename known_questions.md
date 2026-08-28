@@ -741,16 +741,29 @@ nearly written up as a regression in this change.
 Note what this does **not** cast doubt on: the `none` row, the unit suite, and
 the three frozen baselines are all deterministic and unaffected.
 
-## Q26. The no-model floor cannot produce a resume the pipeline will run
+## Q26. How much typing does the no-model floor ask of a stranger?
 
-**Status:** Open, found 2026-08-27 the moment R83 made the `none` rung import
-honestly. Logged and not fixed, per the frozen-list rule.
+**Status:** Open, but **re-scoped by R84 the same day** — and the original
+framing is kept below because the correction is the interesting part.
 
-Two of the three acceptance fixtures now fail on `none`, and not at the score
-bar — earlier, at `_refuse_an_empty_resume`:
+**What was wrong with the question.** It was first written as *"the no-model
+floor cannot produce a resume the pipeline will run"*, on the evidence that
+two fixtures failed at `_refuse_an_empty_resume`:
 
     acceptance_two_degrees.tex has no experience and no projects,
     so there is nothing to tailor.
+
+That was true of the acceptance harness and false of the product. Import is
+two steps under R33 — a machine reads, a person corrects — and the harness ran
+only the first. With the human step supplied, all three fixtures pass on
+`none` with no model anywhere. **The floor's output is recoverable.**
+
+**What is genuinely open** is the cost of that recovery. A stranger with no key
+must type in every role and every bullet themselves, because splitting roles is
+the judgement the pattern reader refuses to guess at. That may be a fair price
+for a free tier or it may be the thing that closes the tab; nobody has watched
+anyone do it. The original trace follows, because it still describes what the
+floor does and why the tempting fixes do not work.
 
 ### The trace, and why the obvious fix is not one
 
@@ -7679,6 +7692,81 @@ pinned to `"gemini"`. `detect()` returns `gemini` on this machine — checked �
 so the model chain is identical and only the detection call is skipped. The
 `two_degrees` row failed on the first run after the fix and passed on the
 second, on identical code. Neither result is evidence about this change.
+
+---
+
+## R84. The free tier needed a person, and one UI would not let them in
+
+**Decision:** (2026-08-27) The acceptance run's `none` rows apply a committed
+correction between extraction and profile-building, because the product's
+import has always been two steps and the harness ran one. And `app.py` grows
+the add-row controls the React screen has had since it was written. Phase 0's
+exit criterion is met: **3 of 3 on `none`, every row imported with no model.**
+
+### The harness was asserting something the design refuses to do
+
+Q26 read as "the no-model floor cannot produce a runnable resume". That was
+true of the harness and not of the product. R33 makes import **two steps** — a
+machine reads the file, then a person fixes what it got wrong — and with no
+model the floor deliberately returns `experiences: []` and hands the raw lines
+to the confirmation screen. `scripts/acceptance.py` called `create_profile`
+directly, so it ran the first step and then demanded an outcome that needs
+both: a PDF, no model, nobody at the keyboard, and a tailored resume out.
+
+So the `none` row was not measuring a broken free tier. It was measuring a
+flow that does not exist for any user.
+
+`_corrected` supplies the typing as fixture data —
+`tests/fixtures/correction_*.json`, transcribed from exactly the `_unparsed`
+lines the floor surfaces. The resumes stay byte for byte; only the correction
+is ours, and it is authored here, so it agrees with us. That limit is written
+into the function.
+
+### And then the second step turned out to be closed on one path
+
+Writing the correction raised the obvious question: can a person actually do
+this in the product? Two answers.
+
+| | Add-row controls | A no-key user can finish |
+|---|---|---|
+| `web/src/components/ImportConfirm.tsx` | Add an experience / a project / a school / a skill group | yes |
+| `app.py` | **none** | **no** |
+
+The Streamlit screen built its experience rows by iterating the extracted
+list. With the floor that list is empty, so it rendered **zero rows**, and
+`nothing_left` disabled Continue permanently. Its warning read *"anything you
+want kept has to be typed in above"* — wording that matches React's
+affordances, on a screen with none.
+
+**This is R72 and R75 for the third time**, and worse than both: the error
+message instructed an action the UI did not allow. It is also the two-paths
+bug with the twist that the fix landed on the *newer* path — the author uploads
+a `.tex`, so he never saw this screen with an empty list, and `jobscout-ui`
+launches Streamlit, so it is what a `pip install` gets.
+
+### The failure mode of the fix, guarded
+
+A row added and left blank must not enable Continue, or the button works and
+writes a nameless job into the resume — worse than the dead button. `_filled`
+drops untouched rows, and `test_a_blank_row_left_alone_is_not_an_experience`
+holds it.
+
+### What this does and does not settle
+
+It settles that the floor's output is **recoverable**: a person who types in
+what the floor could not split gets a tailored one-page PDF with no model
+anywhere. It does not settle that the floor should stay this coarse — Q26
+remains open on its merits, now correctly scoped to "how much typing does the
+free tier ask of a stranger", not "does it work at all".
+
+**Q27 is untouched and still open.** The `none` row is reproducible; the model
+rungs are not.
+
+### Verified
+
+1019 tests, three baselines. `--rung none` passes 3 of 3, all `imported by
+none`: `4 valid / 48.9%`, `6 valid / 59.9%`, `2 valid / 42.0%`. All three new
+UI tests fail with the add control removed, checked.
 
 ---
 

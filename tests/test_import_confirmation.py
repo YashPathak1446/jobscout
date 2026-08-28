@@ -281,5 +281,78 @@ class TestExtractionKeepsWhatItCouldNotParse(unittest.TestCase):
         self.assertTrue(schema["_unparsed"])
 
 
+class TestTheFloorsOutputCanBeCorrectedIntoAResume(unittest.TestCase):
+    """
+    R84. The screen could correct what extraction found and could not add to it.
+
+    With no model the floor returns `experiences: []` **by design** and hands
+    the raw lines to this screen. There was no control to enter one, the
+    warning told the reader to type them in "above", and Continue was disabled
+    with no reachable way to enable it — dead for exactly the person the free
+    tier exists for, and R72's and R75's bug for the third time.
+
+    The React screen has had "Add an experience" since it was written. This is
+    the twin, and the two-paths rule says a test that checks one path against
+    itself proves nothing about the other — so this drives the Streamlit one,
+    which is what `jobscout-ui` launches and therefore what a `pip install`
+    gets.
+    """
+
+    def _floor(self):
+        """What `heuristic_schema` actually returns: nothing split, text kept."""
+        return {
+            "contact": {"name": "Jane Doe", "email": "jane@example.com"},
+            "education": [],
+            "experiences": [],
+            "projects": [],
+            "skills": {},
+            "_unparsed": {"experiences": ["Acme Corp - Engineer 2024",
+                                          "Built a thing"]},
+        }
+
+    def _forward(self, app):
+        return [b for b in app.button
+                if b.label.startswith("This is right")][0]
+
+    def test_there_is_a_control_to_add_what_could_not_be_split(self):
+        app = _at(_pending(self._floor()))
+        app.run()
+
+        self.assertTrue(self._forward(app).disabled,
+                        "an empty extraction must not be confirmable as-is")
+        labels = [b.label for b in app.button]
+        for label in ("Add an experience", "Add a project"):
+            self.assertIn(label, labels,
+                          "the floor's output is unrecoverable on this screen")
+
+    def test_adding_and_filling_an_experience_enables_continue(self):
+        app = _at(_pending(self._floor()))
+        app.run()
+        [b for b in app.button if b.label == "Add an experience"][0].click().run()
+
+        app.text_input(key="experience-0-company").set_value("Acme Corp")
+        app.text_input(key="experience-0-title").set_value("Engineer")
+        app.text_area(key="experience-0-bullets").set_value(
+            "Built a thing\nShipped the thing")
+        app.run()
+
+        self.assertFalse(self._forward(app).disabled,
+                         "a typed-in experience did not satisfy the gate")
+
+    def test_a_blank_row_left_alone_is_not_an_experience(self):
+        """
+        The failure mode of the fix, which would be worse than the bug.
+
+        A row added and never filled must not enable Continue, or the button
+        works and writes a nameless job into the resume.
+        """
+        app = _at(_pending(self._floor()))
+        app.run()
+        [b for b in app.button if b.label == "Add an experience"][0].click().run()
+
+        self.assertTrue(self._forward(app).disabled,
+                        "an untouched blank row enabled Continue")
+
+
 if __name__ == "__main__":
     unittest.main()

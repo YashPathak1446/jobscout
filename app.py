@@ -296,6 +296,23 @@ def _render_confirm():
     pending = st.session_state.pending_import
     schema = pending["schema"]
 
+    # Blank rows the user asked for, surviving the rerun a button causes.
+    #
+    # Without these the screen could only ever *correct* what extraction
+    # produced, and the no-model floor produces `experiences: []` by design —
+    # so a stranger with no key reached a screen whose warning said "anything
+    # you want kept has to be typed in above" with nothing above to type into,
+    # and a Continue button that could never enable. The React screen has had
+    # "Add an experience" since it was written; this is the same control on
+    # the UI that `jobscout-ui` actually launches (R84).
+    blanks = st.session_state.setdefault(
+        "import_blanks", {"education": 0, "experience": 0, "project": 0, "skill": 0})
+
+    def _add(kind, label):
+        if st.button(label, key=f"add-{kind}"):
+            blanks[kind] += 1
+            st.rerun()
+
     st.subheader("Is this right?")
     st.caption(
         "This is what was read from your file. Correct anything wrong — it is "
@@ -316,7 +333,8 @@ def _render_confirm():
         st.warning(
             "Some of your resume could not be split into separate entries — "
             "most likely because no model was available to read it. It is "
-            "shown below; anything you want kept has to be typed in above.",
+            "shown below; use **Add an experience** or **Add a project** "
+            "further down to enter what you want kept.",
             icon="⚠️",
         )
         with st.expander("What could not be read"):
@@ -338,8 +356,10 @@ def _render_confirm():
             caption, value=str(contact.get(field) or ""), key=f"contact-{field}")
 
     st.markdown("#### Education")
+    _add("education", "Add a school")
     education = []
-    for index, entry in enumerate(schema.get("education") or []):
+    for index, entry in enumerate(
+            list(schema.get("education") or []) + [{}] * blanks["education"]):
         columns = st.columns(2)
         corrected = {}
         for position, (field, caption) in enumerate(
@@ -348,37 +368,67 @@ def _render_confirm():
             corrected[field] = columns[position % 2].text_input(
                 caption, value=str(entry.get(field) or ""), key=f"edu-{index}-{field}")
         education.append(corrected)
+    education = [e for e in education if any(str(v).strip() for v in e.values())]
     if not education:
         st.caption("Nothing was read as education.")
 
     st.markdown("#### Experience")
+    _add("experience", "Add an experience")
     experiences = [
         _entry_fields(entry, index, "experience",
                       [("company", "Company"), ("title", "Title"),
                        ("location", "Location"), ("dates", "Dates")])
-        for index, entry in enumerate(schema.get("experiences") or [])
+        for index, entry in enumerate(
+            list(schema.get("experiences") or []) + [{}] * blanks["experience"])
     ]
+    if not (schema.get("experiences") or blanks["experience"]):
+        st.caption("Nothing was read into separate experiences. A resume with "
+                   "none of these produces a resume with none of these — add "
+                   "what you have.")
 
     st.markdown("#### Projects")
+    _add("project", "Add a project")
     projects = [
         _entry_fields(entry, index, "project",
                       [("name", "Project"), ("tech", "Built with"),
                        ("dates", "Dates")])
-        for index, entry in enumerate(schema.get("projects") or [])
+        for index, entry in enumerate(
+            list(schema.get("projects") or []) + [{}] * blanks["project"])
     ]
 
     st.markdown("#### Skills")
+    _add("skill", "Add a skill group")
     skills = {}
-    for index, (category, values) in enumerate((schema.get("skills") or {}).items()):
-        text = st.text_input(category, value=str(values or ""), key=f"skill-{index}")
-        if text.strip():
-            skills[category] = text.strip()
+    existing = list((schema.get("skills") or {}).items())
+    for index, (category, values) in enumerate(
+            existing + [("", "")] * blanks["skill"]):
+        if index < len(existing):
+            text = st.text_input(category, value=str(values or ""),
+                                 key=f"skill-{index}")
+            if text.strip():
+                skills[category] = text.strip()
+            continue
+        columns = st.columns(2)
+        name = columns[0].text_input("Group", value="", key=f"skill-name-{index}")
+        text = columns[1].text_input("Skills", value="", key=f"skill-{index}")
+        if name.strip() and text.strip():
+            skills[name.strip()] = text.strip()
+
+    # A blank row the user added and then left alone is not an entry. Without
+    # this, "Add an experience" clicked once would enable Continue and write a
+    # nameless job into the resume — the button working and the resume wrong,
+    # which is worse than the dead button it replaced.
+    def _filled(entry):
+        if not entry:
+            return False
+        return any(str(v).strip() for k, v in entry.items() if k != "bullets") \
+            or any(str(b).strip() for b in entry.get("bullets") or [])
 
     corrected = {
         "contact": contact,
         "education": education,
-        "experiences": [e for e in experiences if e],
-        "projects": [p for p in projects if p],
+        "experiences": [e for e in experiences if _filled(e)],
+        "projects": [p for p in projects if _filled(p)],
         "skills": skills,
     }
 
@@ -391,6 +441,7 @@ def _render_confirm():
     back, forward = st.columns([1, 3])
     if back.button("Start over"):
         st.session_state.pending_import = None
+        st.session_state.pop("import_blanks", None)
         st.rerun()
 
     if forward.button("This is right — build my profile", type="primary",
@@ -400,6 +451,7 @@ def _render_confirm():
             if not _build(resume_path, pending["name"], pending["force"]):
                 return
         st.session_state.pending_import = None
+        st.session_state.pop("import_blanks", None)
         _goto(1)
         st.rerun()
 

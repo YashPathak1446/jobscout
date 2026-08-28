@@ -21,7 +21,7 @@ and are **not** edited as work happens; only the actual columns are filled in.
 
 | Phase | Planned | Planned finish | Actual | Actual finish | Variance | State |
 |---|---|---|---|---|---|---|
-| **0** · Freeze, prove, publish, watch | 5 d | ~Sep 2 | 1 d | 2026-08-27 | **−4 d** | **reopened** — see below |
+| **0** · Freeze, prove, publish, watch | 5 d | ~Sep 2 | 1 d | 2026-08-27 | **−4 d** | **done** (1 item skipped) |
 | **1** · Containerised + deployed, one user | 6 d | ~Sep 9 | — | — | — | not started |
 | **2** · Multi-user data model | 6 d | ~Sep 16 | — | — | — | not started |
 | **3** · Auth and accounts | 5 d | ~Sep 22 | — | — | — | not started |
@@ -48,7 +48,7 @@ Six working days per week. Planned dates assume Phase 0 began 2026-08-27.
 
 | Week | Dates | Planned | Actual |
 |---|---|---|---|
-| 1 | Aug 27 – Sep 2 | Phase 0 (5 d) | Phase 0 done in 1 d, then reopened |
+| 1 | Aug 27 – Sep 2 | Phase 0 (5 d) | Phase 0 done in 1 d; reopened and reclosed the same day |
 | 2 | Sep 3 – Sep 9 | Phase 1 (6 d) | — |
 | 3 | Sep 10 – Sep 16 | Phase 2 (6 d) | — |
 | 4 | Sep 17 – Sep 22 | Phase 3 (5 d) | — |
@@ -86,17 +86,22 @@ Unplanned, pulled forward because publishing exposed it:
 
 | Condition | State |
 |---|---|
-| `scripts/acceptance.py` exits 0 | **unmet — reopened**, see R83 |
+| `scripts/acceptance.py` exits 0 | **met** on `none`, 3 of 3 (R84). Not reproducible on model rungs — Q27 |
 | Tagged and released | **met** — `v0.2.0` on the remote and on PyPI |
 | One real person has used it | **skipped by decision**, deferred to Phase 5 |
 
-**Why it reopened.** The acceptance run pinned the rung for the pipeline but not
-for the resume import, so all three rows imported through whatever backend was
-detected — the `none` row included, while claiming to be *"the rung a stranger
-with no key lands on"*. Fixed 2026-08-27 (R83). With the pin honest, two of the
-three fixtures now fail on `none`, because the no-model floor cannot produce a
-resume the pipeline will run (Q26). **That red is the gate telling the truth for
-the first time**, and closing it is a real piece of work, not a formality.
+**It reopened and reclosed on 2026-08-27.** The run pinned the rung for the
+pipeline but not for the resume import, so every row imported through whatever
+backend was detected — the `none` row included, while claiming to be *"the rung
+a stranger with no key lands on"* (R83). With the pin honest, two fixtures
+failed; the cause was that the harness ran only the first half of R33's
+two-step import and then demanded an outcome needing both. Supplying the human
+step closed it, and doing so exposed that one of the two UIs would not let a
+person take that step at all (R84).
+
+**What is carried into Phase 1:** Q27 — the run is reproducible on `none` and
+not on any rung that uses a model, and Phase 1's exit criterion is this same
+run against a deployed instance.
 
 ---
 

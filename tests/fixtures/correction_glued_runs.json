@@ -1,0 +1,105 @@
+{
+  "_why": "What a person types into the confirmation screen after the no-model floor hands them resume_glued_runs_six_roles.txt. Transcribed from that file's _unparsed lines: 29 under experiences, 11 under projects. Note the glue the floor deliberately refused to split - 'Lakeside UniversityFairview, IL', 'atMeridian Exchangebuilding', 'withBM25and' - separated here by a reader, which is the judgement a regex must not make and a person can.",
+  "experiences": [
+    {
+      "company": "Meridian Exchange",
+      "title": "Incoming Platform Engineering Intern",
+      "location": "Chicago, IL",
+      "dates": "June 2026",
+      "bullets": [
+        "Incoming intern building infrastructure for Kafka and MQ systems underlying exchange operations."
+      ]
+    },
+    {
+      "company": "SIGNAL Lab, Lakeside University",
+      "title": "Undergraduate Researcher",
+      "location": "Fairview, IL",
+      "dates": "March 2025 - Present",
+      "bullets": [
+        "Researching LLM-driven financial signal generation from SEC filings and earnings transcripts.",
+        "Building a model distillation pipeline compressing frontier reasoning into low-latency inference."
+      ]
+    },
+    {
+      "company": "Lakeside University",
+      "title": "Teaching Assistant - Machine Learning",
+      "location": "Fairview, IL",
+      "dates": "Sep 2025 - Present",
+      "bullets": [
+        "TA for CS 349: Machine Learning, supporting 100+ students with lectures and office hours."
+      ]
+    },
+    {
+      "company": "R&D Venture Studio",
+      "title": "Machine Learning Intern",
+      "location": "Remote",
+      "dates": "Sep 2025 - Dec 2025",
+      "bullets": [
+        "Built hybrid search with BM25 and dense retrieval using LangChain and ChromaDB.",
+        "Deployed a PyTorch ML pipeline on AWS Lambda processing 100K documents at 200ms p95 latency.",
+        "Architected an async RAG system with Docker, Celery, and PostgreSQL."
+      ]
+    },
+    {
+      "company": "Cedar Home Healthcare",
+      "title": "Software Engineering Intern",
+      "location": "Minneapolis, MN",
+      "dates": "Jun 2025 - Aug 2025",
+      "bullets": [
+        "Engineered automated ETL pipelines integrating EVV logs with Corvia APIs.",
+        "Architected fault-tolerant SFTP data flows enabling real-time claims accuracy.",
+        "Implemented retry logic and dead-letter queuing with Redis for pipeline resilience."
+      ]
+    },
+    {
+      "company": "GreenPlate",
+      "title": "Team Lead",
+      "location": "Fairview, IL",
+      "dates": "Sep 2024 - May 2025",
+      "bullets": [
+        "Led a team of 4 building a logistics app with computer vision for product identification.",
+        "Architected a Python inventory system with image recognition and time-series forecasting."
+      ]
+    },
+    {
+      "company": "Ardent Capital",
+      "title": "AMP Intern",
+      "location": "New York, NY",
+      "dates": "Jun 2024 - Aug 2024",
+      "bullets": [
+        "Learned probabilistic trading and game theory from professional quant traders.",
+        "Developed a pairs trading strategy in Python using statistical arbitrage models."
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "High-Performance ML Inference Server",
+      "tech": "C++17, POSIX Sockets, Python",
+      "dates": "Jan 2026 - April 2026",
+      "bullets": [
+        "Built an HTTP/1.1 inference server from raw POSIX sockets, hitting 21,000 req/s at peak.",
+        "Implemented a lock-free MPMC queue via the Vyukov algorithm for 2x lower latency.",
+        "Designed an adaptive size/timeout batcher with kqueue edge-triggered I/O."
+      ]
+    },
+    {
+      "name": "Verdantly, 1st Place RiverYouthHacks",
+      "tech": "React, Express, PostgreSQL, Tailwind",
+      "dates": "Aug 2025",
+      "bullets": [
+        "Built a CV pipeline extracting product data from images to score carbon footprint.",
+        "Architected an AI pipeline integrating Google Cloud Vision, LLaMA 3, and scraping APIs."
+      ]
+    },
+    {
+      "name": "Electronic Trading Bot",
+      "tech": "Python",
+      "dates": "Jul 2024",
+      "bullets": [
+        "Created a quantitative trading algorithm to trade commodities against other algorithms.",
+        "Achieved 3rd place out of 50 teams in the competition."
+      ]
+    }
+  ]
+}
