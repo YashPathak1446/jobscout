@@ -8,7 +8,7 @@ name = "jobscout"
 # generation, not a semantic version — a different axis. Publishing 3.0.0
 # would claim a stable API and two majors of breaking changes behind it, on a
 # package with one release-quality run and four documented limitations.
-version = "0.1.0"
+version = "0.2.0"
 description = "Discovers relevant jobs, scores them against your resume, and writes a tailored resume for each one."
 readme = "README.md"
 requires-python = ">=3.10"

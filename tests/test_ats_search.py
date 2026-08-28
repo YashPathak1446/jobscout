@@ -113,9 +113,30 @@ class TestSlugHarvest(unittest.TestCase):
                               path=self.file)
         self.assertEqual(added, {})
 
-    def test_a_missing_file_is_not_an_error(self):
+    def test_a_missing_file_is_not_an_error_it_is_the_first_run(self):
+        """
+        A missing learned-slug file is the normal state of a fresh install,
+        not a fault.
+
+        This asserted `== {}` — the old implementation bailed out when it
+        could not read the file, and learned nothing. That was harmless while
+        the file was always seeded from a shipped copy. It is not harmless
+        now: the seed stays in the package and is never copied out, so the
+        learned file does not exist until something writes it. Bailing would
+        mean a fresh install never learns a single slug, forever, with no
+        error to notice.
+
+        The test's own name says what it was protecting — *not an error* — and
+        that still holds. What changed is that "not an error" now means "learn
+        it and create the file" rather than "give up quietly".
+        """
         missing = self.file.parent / "nope.json"
-        self.assertEqual(harvest_slugs(["https://jobs.lever.co/x/1"], path=missing), {})
+        added = harvest_slugs(["https://jobs.lever.co/x/1"], path=missing)
+
+        self.assertEqual(added, {"lever": ["x"]})
+        self.assertTrue(missing.exists(), "the first discovery created nothing")
+        self.assertEqual(json.loads(missing.read_text(encoding="utf-8")),
+                         {"lever": ["x"]})
 
 
 class TestLoadCompanies(unittest.TestCase):

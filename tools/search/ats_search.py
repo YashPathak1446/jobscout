@@ -49,10 +49,22 @@ from .job_listing import JobListing
 
 logger = logging.getLogger(__name__)
 
-# Seeded by the package, grown by `harvest_slugs`. Both halves matter: the
-# starter list ships read-only, and what discovery learns is written to the
-# user's own data directory rather than back into the installation.
-COMPANIES_FILE = paths.seeded_user_file("data", "ats_companies.json")
+# Two files, unioned — not one file seeded from the other.
+#
+# Seeding a copy on first run looked simpler and had a lifetime bug in it: the
+# copy is taken once, so a release shipping more company slugs would never
+# reach anyone who had already run the program. They would sit on whatever the
+# list held the day they installed, permanently, with no error to notice.
+#
+# So the shipped list stays read-only in the package and grows with each
+# release, `harvest_slugs` writes only what *this user* discovered, and
+# `load_companies` returns the union. Upgrades bring new slugs, learned slugs
+# survive upgrades, and neither file has to know about the other.
+SEED_FILE = paths.asset("ats_companies.json")
+LEARNED_FILE = paths.user_path("data", "ats_companies.json")
+
+# The name callers and tests already use: where slugs get written.
+COMPANIES_FILE = LEARNED_FILE
 
 USER_AGENT = "jobscout/1.0 (+https://github.com/YashPathak1446/jobscout)"
 TIMEOUT_SECONDS = 25
@@ -268,11 +280,14 @@ def _strip_html(html: str) -> str:
 
 # --- public API --------------------------------------------------------------
 
-def load_companies(path=None) -> dict:
-    """The slug list, keyed by board. Missing or unreadable means empty."""
-    file = Path(path) if path else COMPANIES_FILE
+def _read_slugs(file) -> dict:
+    """One slug file, or `{}` if it is missing, unreadable or malformed."""
     try:
-        data = json.loads(file.read_text(encoding="utf-8"))
+        data = json.loads(Path(file).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        # Not having learned anything yet is the normal first-run state, not
+        # a problem to warn about.
+        return {}
     except (OSError, ValueError) as exc:
         logger.warning(f"Could not read {file}: {exc}")
         return {}
@@ -284,6 +299,24 @@ def load_companies(path=None) -> dict:
     }
 
 
+def load_companies(path=None) -> dict:
+    """
+    Every slug this run can reach: the shipped list plus what was learned.
+
+    `path` overrides both and reads that single file, which is what tests and
+    anyone pointing at a list of their own want.
+    """
+    if path is not None:
+        return _read_slugs(path)
+
+    merged = {}
+    for source in (SEED_FILE, LEARNED_FILE):
+        for board, slugs in _read_slugs(source).items():
+            known = merged.setdefault(board, [])
+            known.extend(s for s in slugs if s not in known)
+    return {board: sorted(slugs) for board, slugs in merged.items()}
+
+
 def harvest_slugs(urls, path=None) -> dict:
     """
     Learn new company slugs from apply URLs and add them to the seed list.
@@ -292,11 +325,13 @@ def harvest_slugs(urls, path=None) -> dict:
     tells us that company's slug, and from then on its whole board is
     reachable without a key. Returns what was added, keyed by board.
     """
-    file = Path(path) if path else COMPANIES_FILE
-    try:
-        data = json.loads(file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
+    file = Path(path) if path else LEARNED_FILE
+    # Everything already reachable, shipped and learned together, so a slug
+    # the package already ships is not copied into the user's file as though
+    # this run had discovered it. Without that check the learned file slowly
+    # becomes a duplicate of the seed and the merge stops meaning anything.
+    known_everywhere = load_companies(path)
+    data = _read_slugs(file)
 
     added = {}
     for url in urls or []:
@@ -305,6 +340,8 @@ def harvest_slugs(urls, path=None) -> dict:
             if not match:
                 continue
             slug = match.group(1).lower()
+            if slug in known_everywhere.get(board, ()):
+                continue
             known = data.setdefault(board, [])
             if slug not in known:
                 known.append(slug)
@@ -314,6 +351,7 @@ def harvest_slugs(urls, path=None) -> dict:
         for board in added:
             data[board] = sorted(data[board])
         try:
+            file.parent.mkdir(parents=True, exist_ok=True)
             file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
             total = sum(len(v) for v in added.values())
             logger.info(f"🌱 Learned {total} new ATS company slug(s): {added}")

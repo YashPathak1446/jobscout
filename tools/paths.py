@@ -111,18 +111,16 @@ def user_path(*parts, create_parent: bool = False) -> Path:
     return path
 
 
-def seeded_user_file(*parts) -> Path:
-    """
-    A file the program grows, starting from a copy of the shipped seed.
-
-    `ats_companies.json` is the case: it ships with a starter list of company
-    slugs and `harvest_slugs()` adds to it as jobs are discovered. Read-only
-    in the package and mutable in use, so the seed is copied out on first
-    touch rather than written back into the installation.
-    """
-    target = user_path(*parts, create_parent=True)
-    if not target.exists():
-        source = asset(parts[-1])
-        if source.is_file():
-            target.write_bytes(source.read_bytes())
-    return target
+# There was a `seeded_user_file()` here that copied a shipped file into the
+# data home on first touch, for the one case that needed it —
+# `ats_companies.json`, which ships a starter list and grows as jobs are
+# discovered.
+#
+# It is gone because the copy is taken **once**: a later release shipping more
+# company slugs would never reach anyone who had already run the program, and
+# there would be no error to notice — just a list frozen on the day they
+# installed. `ats_search` now keeps the two files apart and returns their
+# union, so upgrades bring new slugs and learned ones survive.
+#
+# Deleted rather than left for a future caller. A helper with no callers is
+# the recurring bug of this codebase pointed at itself.
