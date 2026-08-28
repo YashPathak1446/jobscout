@@ -231,6 +231,8 @@ Deferring these is the plan, not an omission.
 
 - **Q26** — the no-model floor cannot produce a runnable resume *(new, and it is
   what currently holds Phase 0 open)*
+- **Q27** — the acceptance run is not reproducible on any rung that uses a
+  model *(new, and it bears on rule 3 at every phase exit below)*
 - The place vocabulary for non-US locations and school-name leakage (R78)
 - PDF kerning splits on the free tier — the model already repairs them (R77)
 - `_chat_tailor`'s missing repair loop (R76)
