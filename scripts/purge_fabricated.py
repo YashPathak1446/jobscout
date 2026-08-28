@@ -30,10 +30,12 @@ import json
 import sys
 from pathlib import Path
 
+from tools import paths
+
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-CACHE = ROOT / "cache" / "job_cache.json"
+CACHE = paths.user_path("cache", "job_cache.json")
 
 
 def fabricated_urls(cache_path=CACHE) -> set:

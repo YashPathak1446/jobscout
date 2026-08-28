@@ -30,10 +30,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tools import paths
+
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).parent.parent.parent
-DEFAULT_DB = ROOT / "data" / "runs.db"
+# See job_store: the user's data home, not the install location.
+DEFAULT_DB = paths.user_path("data", "runs.db", create_parent=True)
 
 # `failed` means the pipeline raised. A run that completes having generated
 # nothing is still `finished` — that is a result, not an error.

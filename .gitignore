@@ -109,3 +109,8 @@ applied_jobs.csv
 # Fixtures staged into the dev server to drive a real upload through the
 # browser. Never part of a build.
 web/public/_fixture_*
+
+# A clone of this repo made inside itself while testing the install
+# instructions. Untracked and never a submodule -- `git add -A` picked it up
+# as an embedded gitlink once, which is exactly the mistake this prevents.
+/jobscout/

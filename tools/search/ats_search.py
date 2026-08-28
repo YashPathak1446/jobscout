@@ -43,12 +43,16 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tools import paths
+
 from .job_listing import JobListing
 
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).parent.parent.parent
-COMPANIES_FILE = ROOT / "data" / "ats_companies.json"
+# Seeded by the package, grown by `harvest_slugs`. Both halves matter: the
+# starter list ships read-only, and what discovery learns is written to the
+# user's own data directory rather than back into the installation.
+COMPANIES_FILE = paths.seeded_user_file("data", "ats_companies.json")
 
 USER_AGENT = "jobscout/1.0 (+https://github.com/YashPathak1446/jobscout)"
 TIMEOUT_SECONDS = 25

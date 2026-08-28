@@ -32,7 +32,9 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-TEMPLATE = ROOT / "user_profiles" / "template.json"
+# Moved into the package by the packaging fix: an asset that ships
+# with the code, resolved relative to it rather than to the repo root.
+TEMPLATE = ROOT / "tools" / "assets" / "profile_template.json"
 
 # Words that name a level. A template that ships any of these has decided, on
 # behalf of somebody it has never met, what they are worth.

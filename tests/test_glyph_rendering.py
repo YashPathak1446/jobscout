@@ -102,7 +102,7 @@ class TestTheTemplateStillAvoidsT1(unittest.TestCase):
     """
 
     def test_no_fontenc_in_the_base_preamble(self):
-        preamble = ROOT / "data" / "templates" / "base_preamble.tex"
+        preamble = ROOT / "tools" / "assets" / "base_preamble.tex"
         if not preamble.exists():
             self.skipTest("no base preamble")
         text = preamble.read_text(encoding="utf-8")
@@ -113,7 +113,7 @@ class TestTheTemplateStillAvoidsT1(unittest.TestCase):
                          "for every date range — see R69 before adding it")
 
     def test_the_reason_is_recorded_where_someone_would_look(self):
-        preamble = ROOT / "data" / "templates" / "base_preamble.tex"
+        preamble = ROOT / "tools" / "assets" / "base_preamble.tex"
         if not preamble.exists():
             self.skipTest("no base preamble")
         self.assertIn("fontenc", preamble.read_text(encoding="utf-8"))

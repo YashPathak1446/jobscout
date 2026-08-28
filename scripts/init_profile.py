@@ -32,6 +32,8 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
+from tools import paths
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.profile.derivation import (  # noqa: E402
@@ -43,7 +45,8 @@ from tools.profile.derivation import (  # noqa: E402
 from tools.resume.resume_parser import ResumeParser  # noqa: E402
 
 ROOT = Path(__file__).parent.parent
-TEMPLATE = ROOT / "user_profiles" / "template.json"
+# Ships with the package; it is a starter, not one of the user's profiles.
+TEMPLATE = paths.asset("profile_template.json")
 
 # Fields a human must confirm. Listed so the script can report them rather
 # than let a placeholder slip into a live run.
@@ -92,7 +95,12 @@ def build_profile(resume_path: Path, name: str) -> dict:
     return profile, derived_info, resume
 
 
-RESUME_DIR = ROOT / "data" / "master_resumes"
+# The user's own resumes, so the data home rather than the install.
+RESUME_DIR = paths.user_path("data", "master_resumes", create_parent=True)
+
+# Where a person's profiles live. Seven sites read or wrote this from
+# the repo root; installed, that is site-packages.
+PROFILES = paths.user_path("user_profiles", create_parent=True)
 
 
 def save_resume(file_bytes: bytes, filename: str) -> Path:
@@ -225,7 +233,7 @@ def create_profile(resume_path, name: str, force: bool = False) -> dict:
     not set, so the caller can offer to overwrite rather than silently clobber.
     """
     resume_path = Path(resume_path)
-    out_path = ROOT / "user_profiles" / f"{name}.json"
+    out_path = PROFILES / f"{name}.json"
 
     if out_path.exists() and not force:
         raise FileExistsError(f"A profile named '{name}' already exists.")
@@ -298,7 +306,7 @@ def update_profile_fields(name: str, updates: dict) -> Path:
     Kept here rather than in the UI so that knowing a profile is JSON on disk,
     and where, stays out of the view layer (R25).
     """
-    path = ROOT / "user_profiles" / f"{name}.json"
+    path = PROFILES / f"{name}.json"
     if not path.exists():
         raise FileNotFoundError(f"No profile named '{name}'.")
 
@@ -318,7 +326,7 @@ def read_preferences(name: str) -> dict:
     had tuned — the same destruction as above, one layer up. A form that
     cannot read cannot safely write.
     """
-    path = ROOT / "user_profiles" / f"{name}.json"
+    path = PROFILES / f"{name}.json"
     if not path.exists():
         raise FileNotFoundError(f"No profile named '{name}'.")
 
@@ -351,7 +359,7 @@ def read_personal(name: str) -> dict:
     re-entering them is the user's work, and losing them on a revisit wastes
     it twice.
     """
-    path = ROOT / "user_profiles" / f"{name}.json"
+    path = PROFILES / f"{name}.json"
     if not path.exists():
         raise FileNotFoundError(f"No profile named '{name}'.")
 
@@ -377,7 +385,7 @@ def read_component_rules(name: str) -> dict:
     Returns experiences and projects in resume order, each entry carrying the
     id, a human label, the effective tier and the current trigger list.
     """
-    path = ROOT / "user_profiles" / f"{name}.json"
+    path = PROFILES / f"{name}.json"
     if not path.exists():
         raise FileNotFoundError(f"No profile named '{name}'.")
 
@@ -432,7 +440,7 @@ def write_component_rules(name: str, importance: dict, triggers: dict,
     cannot fire and is indistinguishable from one that never matched, which is
     the silence R17 set out to remove.
     """
-    path = ROOT / "user_profiles" / f"{name}.json"
+    path = PROFILES / f"{name}.json"
     if not path.exists():
         raise FileNotFoundError(f"No profile named '{name}'.")
 
@@ -499,7 +507,7 @@ def main():
     if not TEMPLATE.exists():
         sys.exit(f"Template not found: {TEMPLATE}")
 
-    out_path = ROOT / "user_profiles" / f"{args.name}.json"
+    out_path = PROFILES / f"{args.name}.json"
     if out_path.exists() and not args.force:
         sys.exit(f"{out_path} already exists. Pass --force to overwrite.")
 

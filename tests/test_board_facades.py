@@ -36,7 +36,9 @@ from agents.orchestrator import (  # noqa: E402
 from scripts.init_profile import read_preferences, update_profile_fields  # noqa: E402
 from tools.jobs.job_store import JobStore  # noqa: E402
 
-TEMPLATE = ROOT / "user_profiles" / "template.json"
+# Moved into the package by the packaging fix: an asset that ships
+# with the code, resolved relative to it rather than to the repo root.
+TEMPLATE = ROOT / "tools" / "assets" / "profile_template.json"
 TEMP = ROOT / "user_profiles" / "_board_test.json"
 
 

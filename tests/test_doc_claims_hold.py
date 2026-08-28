@@ -134,7 +134,7 @@ class TestClaimsAboutRendering(unittest.TestCase):
             escape(sample))
 
     def test_r69_the_template_still_avoids_t1(self):
-        preamble = ROOT / "data" / "templates" / "base_preamble.tex"
+        preamble = ROOT / "tools" / "assets" / "base_preamble.tex"
         active = [l for l in preamble.read_text(encoding="utf-8").splitlines()
                   if "fontenc" in l and not l.lstrip().startswith("%")]
         self.assertEqual(active, [])

@@ -31,10 +31,14 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from tools import paths
+
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).parent.parent.parent
-DEFAULT_DB = ROOT / "data" / "jobs.db"
+# Under the user's data home, not next to the code. Anchored on __file__
+# this wrote into site-packages once installed — a database of somebody's
+# job search inside their Python installation, deleted on upgrade.
+DEFAULT_DB = paths.user_path("data", "jobs.db", create_parent=True)
 
 # What a user can say about a job. `new` is the only one the pipeline sets;
 # the rest are theirs.

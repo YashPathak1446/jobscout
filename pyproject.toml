@@ -66,12 +66,23 @@ jobscout-ui = "scripts.launch_ui:main"
 [tool.setuptools]
 # Explicit rather than auto-discovered: `data/`, `outputs/` and `user_profiles/`
 # sit at the top level and are not importable packages.
-packages = ["agents", "scripts", "tools",
+packages = ["agents", "scripts", "tools", "tools.assets",
             "tools.cache", "tools.generation", "tools.jobs",
             "tools.profile", "tools.resume", "tools.scraping", "tools.search"]
 py-modules = ["config", "app"]
 
 [tool.setuptools.package-data]
+# `"*" = ["*.json"]` shipped nothing that mattered: it only covers files
+# *inside* listed packages, and every asset lived in top-level `data/` and
+# `user_profiles/`, which are not packages. The wheel built from that config
+# contained nothing but `.py` files, so an installed copy had no LaTeX
+# preamble and could not render a resume at all.
+#
+# The assets now live in `tools/assets/`, which is a package, and are named by
+# extension rather than by filename — the same rule the .gitignore learned:
+# ignore by pattern, never by name, because the next file added is the one
+# nobody remembers to list.
+"tools.assets" = ["*.tex", "*.json"]
 "*" = ["*.json"]
 
 [tool.ruff]

@@ -28,10 +28,14 @@ import logging
 import re
 from pathlib import Path
 
+from tools import paths
+
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).parent.parent.parent
-PREAMBLE = ROOT / "data" / "templates" / "base_preamble.tex"
+# Ships inside the package. It used to be `ROOT / "data" / "templates"`,
+# which is the repo in a checkout and site-packages when installed — where
+# it does not exist, so an installed copy could not render anything.
+PREAMBLE = paths.asset("base_preamble.tex")
 
 # Sequential replacement cannot work here: the substitution for a backslash
 # contains braces, and the brace rules would then escape those, turning a
