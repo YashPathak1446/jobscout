@@ -28,6 +28,19 @@ model2vec>=0.9.0
 # preferences screen keeps "not answered" distinct from "zero years".
 streamlit>=1.31.0
 
+# API (api/main.py) — what the React front end talks to, and what ships hosted.
+#
+# These were used by `api/main.py`, documented in the README, and launched by
+# `.claude/launch.json` while being declared in no manifest at all. They work
+# here because `google-adk` pulls FastAPI in transitively — which is not a
+# dependency, it is a coincidence that a version bump can end.
+#
+# R80's shape exactly: fine where the author is, missing from the manifest,
+# and invisible until something builds a clean environment. A container is
+# that clean environment.
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+
 # Optional: Development
 # pytest>=7.0.0
 # ruff>=0.4.0

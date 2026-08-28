@@ -1,256 +1,183 @@
-# JobScout — build plan and progress
+# JobScout — ship in a week
 
-**From working engine to paying users.** Six phases, ~28 working days, at
-6 h/day and 6 days/week.
+**Revised 2026-08-28.** The six-phase plan below the line was optimised for
+correctness before contact. This one is optimised for contact.
 
-This is the tracking document. `known_questions.md` remains the decision log —
-every `R<n>` and `Q<n>` referenced here lives there, and this file never
-duplicates a decision, only points at one.
-
-### Where this came from
-
-The plan was written on 2026-08-27 and existed only inside that session. R82
-recorded the consequence — *"Phase 1 is a container image and a worker surviving
-multi-minute runs. Neither exists, neither is written down anywhere in this
-repo."* This file is that gap closed. The estimates below are the original ones
-and are **not** edited as work happens; only the actual columns are filled in.
+`known_questions.md` remains the decision log. This file is the tracker.
 
 ---
 
-## Status at a glance
+## The arithmetic that changed the plan
 
-| Phase | Planned | Planned finish | Actual | Actual finish | Variance | State |
-|---|---|---|---|---|---|---|
-| **0** · Freeze, prove, publish, watch | 5 d | ~Sep 2 | 1 d | 2026-08-27 | **−4 d** | **done** (1 item skipped) |
-| **1** · Containerised + deployed, one user | 6 d | ~Sep 9 | — | — | — | not started |
-| **2** · Multi-user data model | 6 d | ~Sep 16 | — | — | — | not started |
-| **3** · Auth and accounts | 5 d | ~Sep 22 | — | — | — | not started |
-| **4** · Waitlist + manual invoicing | 1 d | ~Sep 23 | — | — | — | not started |
-| **5** · Presentation and launch prep | 5 d | ~Sep 29 | — | — | — | not started |
-| | **28 d** | | | | | |
+Ten days of work. 1019 tests, three frozen baselines, 84 decision records, two
+PyPI releases. **Zero people have used it.** Not one.
 
-**Optimistic 5 weeks. Realistic 6–7, so early-to-mid October.** The buffer is
-not padding: Phase 1 holds the one genuine unknown.
+The single item capable of producing failure — *watch one real person use it* —
+has been on the list since it was written and has never moved. It keeps losing
+because every other item is reachable from a terminal and it is not.
 
-> **On the variance column.** Phase 0 came in at a fifth of its estimate, and
-> the plan predicted that — *"Phase 0 compressed because it was documentation of
-> things already true."* R82's reading is that this is **luck rather than the
-> rate**, because two items that were real work (the wheel rendering nothing,
-> and publishing turning out to be four separate problems) were absent from the
-> estimate entirely. This table takes no position. It records both numbers so
-> the second data point settles it.
+**You cannot fail fast while deferring the only thing that can produce
+failure.** The old plan had five to six more weeks of infrastructure before a
+stranger touched it. That is fail-slow with extra steps.
+
+So: one week to a URL. Everything else is what you build *after* people show
+up, not in case they do.
 
 ---
 
-## The calendar, week by week
+## The week
 
-Six working days per week. Planned dates assume Phase 0 began 2026-08-27.
+| Day | Work | Done |
+|---|---|---|
+| **1–2** | React + FastAPI in a container, TeX Live, deployed on Fly, your profile as the only user | [ ] |
+| **3** | Managed auth (Clerk or Supabase) + `user_id` threaded through the stores | [ ] |
+| **4** | Landing page — what it does, who it is for, a screenshot, a signup | [ ] |
+| **5** | Post it. r/cscareerquestions, Hacker News, new-grad Discords, LinkedIn | [ ] |
 
-| Week | Dates | Planned | Actual |
+**No payments.** Free while you find out whether anyone wants it. Billing is
+Phase 4's content and Phase 4 does not start until people are using this.
+
+### Days 1–2 — the genuine unknown
+
+This is the only part of the week that can fail for technical reasons, which
+is why it is first.
+
+- [ ] `fastapi` + `uvicorn` declared; `api` added to `packages` in `pyproject.toml`
+- [ ] FastAPI serves the built React (`StaticFiles`) — nothing does today
+- [ ] Dockerfile: node build stage for `web/`, python stage, `texlive-latex-extra`
+- [ ] Fly volume for `data/` — `runs.db`, `jobs.db`, caches, master resumes
+- [ ] Secrets: Gemini key via `fly secrets`, never in the image
+- [ ] Deploy, then run `scripts/acceptance.py` **against the instance**
+
+**Worker: keep the thread.** `start_run` backgrounds against `data/runs.db`, so
+the change is where that store lives, not how it works. A restart loses an
+in-flight run; for one user that costs one re-run. An always-on machine (no
+scale-to-zero) is what makes that acceptable — and it is the reason for Fly
+over Render's spin-down.
+
+### Day 3 — auth
+
+An afternoon, not five days. Managed provider; rolling your own is a security
+liability on a system holding other people's resumes. The account-readiness
+audit already found every store takes a path, so this is threading a `user_id`,
+not a redesign.
+
+### Days 4–5 — the part that has never been done
+
+Landing page, then post it. **Tech roles only** — see the hold below.
+
+---
+
+## What counts as failing
+
+Stated in advance so it cannot be renegotiated afterwards.
+
+- **Nobody signs up** → the idea is not wanted in this form. One week spent,
+  not six. Go build the finance app.
+- **People sign up and do not finish onboarding** → the product is wanted and
+  the funnel is broken. Q25 and Q26 become the work, with real evidence.
+- **People finish and do not come back** → the output is not good enough.
+  Q17, Q3 and the tailoring quality work become the roadmap.
+
+All three are useful. Only the current state — nobody has tried — is not.
+
+---
+
+## The hold I am not moving on
+
+**All roles is not a week-one thing.** You said you want to expand from tech
+while building, and `CLAUDE.md` names three real blockers:
+
+1. Greenhouse/Ashby/Lever skew heavily to tech — discovery would return
+   little for a nurse or an accountant
+2. The LaTeX template is a one-page tech resume with a projects section
+3. Q17's vocabulary-over-role-type problem gets worse where "analyst" means
+   five different jobs
+
+A non-tech user who signs up and gets six software postings churns immediately
+and tells people it does not work. **Launch to tech, which is millions of
+people. Expand when tech users are retained** — that is evidence you can act
+on rather than a guess you have doubled.
+
+## Two more things being carried, not fixed
+
+- **Q24 — spend ceiling.** Its own text names this deploy as the date it goes
+  live. A Cloud budget alert plus a hard quota on the key before the URL is
+  reachable. This is a settings page in your Google Cloud console, so it is
+  yours to do, not something in this repo.
+- **Q27 — the acceptance run is not reproducible on model rungs.** Taken as
+  part of Days 1–2 rather than before them: the exit check is this run against
+  the deployed instance, and a gate that flips on identical code cannot say
+  whether the container broke anything. If extraction caching runs past an
+  hour, gate on the `none` row alone and move.
+
+## And the user session
+
+Do it **after** deploy, on the URL, with someone who found it rather than
+someone you asked. That is the version that tells you something.
+
+---
+
+## Status
+
+| | Planned | Actual | State |
 |---|---|---|---|
-| 1 | Aug 27 – Sep 2 | Phase 0 (5 d) | Phase 0 done in 1 d; reopened and reclosed the same day |
-| 2 | Sep 3 – Sep 9 | Phase 1 (6 d) | — |
-| 3 | Sep 10 – Sep 16 | Phase 2 (6 d) | — |
-| 4 | Sep 17 – Sep 22 | Phase 3 (5 d) | — |
-| 5 | Sep 23 – Sep 29 | Phase 4 (1 d), Phase 5 begins | — |
-| 6 | Sep 30 – Oct 6 | Phase 5 completes; buffer | — |
-| 7 | Oct 7 – Oct 13 | buffer | — |
+| **Phase 0** · Freeze, prove, publish | 5 d | 1 d | **done**, 1 item skipped |
+| **The week** · deployed, auth, posted | 5 d | — | not started |
+| *After validation* | — | — | gated on users existing |
 
----
+### Phase 0 — what closed it
 
-## Phase 0 — Freeze, prove, publish, watch
+- [x] Write `scripts/acceptance.py` and freeze the list
+- [x] Fix only what it catches *(three: a valid resume reporting 0 pages, the
+      report crashing on its own first failure, the bar itself demanding zero
+      `needs_review`)*
+- [x] The Ollama measurement (R81)
+- [x] Publish — `v0.2.0` on PyPI, not just tagged
+- [x] Packaging and path resolution, pulled forward (R80)
+- [ ] Watch one real person — **skipped**, now Day 5+ against the URL
 
-**The phase that ends the bug hunting.** Nothing after it is discovery.
-
-- [x] **Day 1** — write `scripts/acceptance.py` and freeze the list
-- [x] **Days 2–3** — fix only what it catches *(it caught three: a valid resume
-      reporting 0 pages, the report crashing on its own first failure, and the
-      bar itself demanding zero `needs_review`)*
-- [x] **Day 4** — the Ollama measurement (R81)
-- [x] **Day 5 am** — publish the local version *(exceeded: `v0.2.0` on PyPI, not
-      just tagged)*
-- [ ] **Day 5 pm** — watch one real person use it — **skipped by decision
-      (2026-08-27)**, deferred to Phase 5's verification, which is the same test
-      against the hosted flow
-
-Unplanned, pulled forward because publishing exposed it:
-
-- [x] Packaging and path resolution — ten modules resolved paths from `__file__`,
-      so an installed wheel had no LaTeX preamble and would have written user
-      data into `site-packages` (R80)
-
-### Exit criteria
-
-> `python scripts/acceptance.py` passes, `v0.1-engine` is tagged and released,
-> and one person who is not you has produced a resume with it.
-
-| Condition | State |
+| Exit condition | State |
 |---|---|
-| `scripts/acceptance.py` exits 0 | **met** on `none`, 3 of 3 (R84). Not reproducible on model rungs — Q27 |
+| `acceptance.py` exits 0 | **met, on a narrower row than it first read as.** 3 of 3 on `none` from `.txt` inputs through the floor, no model (`imported by: none`). The row includes a committed human correction (R84), so it covers *floor + a person*, **not unattended import** — which the design never promised. Not reproducible on model rungs (Q27). |
 | Tagged and released | **met** — `v0.2.0` on the remote and on PyPI |
-| One real person has used it | **skipped by decision**, deferred to Phase 5 |
-
-**It reopened and reclosed on 2026-08-27.** The run pinned the rung for the
-pipeline but not for the resume import, so every row imported through whatever
-backend was detected — the `none` row included, while claiming to be *"the rung
-a stranger with no key lands on"* (R83). With the pin honest, two fixtures
-failed; the cause was that the harness ran only the first half of R33's
-two-step import and then demanded an outcome needing both. Supplying the human
-step closed it, and doing so exposed that one of the two UIs would not let a
-person take that step at all (R84).
-
-**What is carried into Phase 1:** Q27 — the run is reproducible on `none` and
-not on any rung that uses a model, and Phase 1's exit criterion is this same
-run against a deployed instance.
+| One real person has used it | **skipped by decision**, moved to after deploy |
 
 ---
 
-## Phase 1 — Containerised and deployed, one user (6 d)
+# After validation — the original phases
 
-It runs somewhere that isn't your laptop. **Deliberately before accounts exist**
-— containerised TeX Live and a worker surviving a multi-minute run are the two
-things most likely to go wrong, and finding that out in week 2 with one user is
-far cheaper than in week 5 with an auth system on top.
+**Do not start any of these until people are using it.** Kept because the
+content is right; only the timing was wrong.
 
-- [ ] Dockerfile with a trimmed TeX Live (`texlive-latex-extra`, ~1 GB — Q8b)
-- [ ] A worker that survives runs taking minutes — `orchestrator.start_run`
-      already backgrounds them against `data/runs.db`, so the change is **where
-      that store lives**, not how it works
-- [ ] A host (Fly / Railway / Render)
-- [ ] Object storage for resumes
-- [ ] Secrets, domain, TLS
-- [ ] Deploy with your own profile as the only user
+**Multi-user data model (6 d).** Q15's blockers: `EmbeddingCache` is one global
+file keyed on resume hash, `job_cache.json` likewise, outputs keyed on date
+alone so two users on one day collide, and the shared LLM cache is a privacy
+boundary. Day 3 does the minimum of this; the rest waits.
 
-### Exit criteria
+**Waitlist and manual invoicing (1 d).** *Not* Stripe. What kills the estimate
+is the entity, the ToS, the refund policy, and the metering that stops a paid
+user costing more than they pay. Build real billing when manual invoicing
+becomes annoying — that annoyance is the signal, and it arrives with the usage
+numbers that tell you what the quota should be.
 
-> The acceptance run passes **against the deployed instance**, not against
-> localhost. A resume compiles in the container.
+**Presentation (5 d).** Onboarding copy, empty and error states, privacy policy
+and a data-deletion path — **mandatory**, you are storing strangers' resumes.
 
----
+## The rules that still apply
 
-## Phase 2 — Multi-user data model (6 d)
+1. **No new stranger-resume passes.** That method finds bugs forever; turning
+   it off is a decision, not an oversight.
+2. **The acceptance run is re-run at every deploy, and a failure there is in
+   scope.** Regression is in scope; discovery is not.
+3. **Every bug found outside the acceptance run is logged and not fixed.**
+4. **At 150% of an estimate, cut scope rather than extend time.**
+5. **`python -m unittest discover -s tests -q` and
+   `python scripts/baseline.py verify --all` gate every commit.**
 
-Two people cannot overwrite each other. Q15 lists the blockers and calls them
-*"cheap now, expensive later"*. Every store already takes a path, so this is
-threading a `user_id`, not a redesign.
+## Explicitly not in the week
 
-- [ ] `EmbeddingCache` — one global file keyed on resume hash
-- [ ] `job_cache.json` — likewise
-- [ ] Outputs keyed on date alone, so two users on one day overwrite each
-      other's `state.json`
-- [ ] The shared LLM cache — a **privacy** boundary here, not a correctness one
-
-### Exit criteria
-
-> Two profiles run on the same day and neither overwrites the other's
-> `state.json`, embeddings or outputs.
-
----
-
-## Phase 3 — Auth and accounts (5 d)
-
-Strangers can sign up.
-
-- [ ] A managed provider (Clerk / Supabase Auth / Auth0). Rolling your own is
-      10+ days and a security liability on a system holding other people's
-      resumes
-- [ ] Bind sessions to the `user_id` from Phase 2
-
-### Exit criteria
-
-> Sign up as a stranger in a private window; reach a resume without touching a
-> config file.
-
----
-
-## Phase 4 — Waitlist and manual invoicing (1 d)
-
-It can take money, without billing infrastructure. **Not Stripe** — checkout
-plus a webhook is two days, but what kills the estimate is everything around it:
-a business entity or sole-proprietor tax handling, terms of service, a refund
-policy, and the metering that stops a paid user costing more than they pay. A
-resume runs 2–3¢, so 200 a month on a $10 plan is fine and 2,000 is not. That is
-a quota system, and quota systems are where "4 days" goes to die.
-
-- [ ] A waitlist
-- [ ] An email
-- [ ] An invoice sent by hand
-
-**Build real billing when manual invoicing becomes annoying** — that annoyance
-is the signal it is worth building, and it arrives with the usage numbers that
-tell you what the quota should be.
-
-### Exit criteria
-
-> One invoice sent by hand is paid, and the account it belongs to gets the paid
-> path. Ten of those before any billing code is written.
-
----
-
-## Phase 5 — Presentation and launch prep (5 d)
-
-It can be shown to someone.
-
-- [ ] Landing page
-- [ ] Onboarding copy
-- [ ] Empty and error states
-- [ ] Privacy policy
-- [ ] A data-deletion path — **mandatory**, you are storing strangers' resumes
-
-### Exit criteria
-
-> Someone who has never seen it reaches a PDF unaided — the same test as Phase
-> 0's afternoon, repeated against the hosted flow rather than the local one, now
-> that there is an onboarding path to test.
-
-**This now carries Phase 0's skipped item.** It is the only check in the plan
-that asks whether anyone *wants* this, as opposed to whether it works.
-
----
-
-## The rules that keep this finite
-
-1. **The acceptance list is frozen before Phase 0 starts.** Nothing is added
-   mid-flight.
-2. **No new stranger-resume passes until after launch.** That method finds bugs
-   forever. Turning it off is a decision, not an oversight.
-3. **The acceptance run is re-run at every phase exit, and a failure there is
-   always in scope.** Phase 1 puts LaTeX in a container and Phase 2 moves every
-   store — both can break the engine, and catching that is exactly what the run
-   is for. **Regression is in scope; discovery is not.**
-4. **Every bug found outside the acceptance run is logged and not fixed** —
-   `known_questions.md` is the backlog.
-5. **One phase at a time.** The next does not start until the current phase's
-   exit check passes.
-6. **At 150% of a phase estimate, cut scope rather than extend time.** If Phase 3
-   overruns, create the first accounts by hand — the same move Phase 4 already
-   makes for billing, applied one phase earlier.
-7. **`python -m unittest discover -s tests -q` and
-   `python scripts/baseline.py verify --all` still gate every commit.**
-
----
-
-## Explicitly not in this MVP
-
-Deferring these is the plan, not an omission.
-
-- **Q26** — the no-model floor cannot produce a runnable resume *(new, and it is
-  what currently holds Phase 0 open)*
-- **Q27** — the acceptance run is not reproducible on any rung that uses a
-  model *(new, and it bears on rule 3 at every phase exit below)*
-- The place vocabulary for non-US locations and school-name leakage (R78)
-- PDF kerning splits on the free tier — the model already repairs them (R77)
-- `_chat_tailor`'s missing repair loop (R76)
-- Q3's page-fill headroom; Q23's job-posting dates; Q9's embedding migration
-- A public job board — tried and dropped 2026-08-26 (R66)
-- Fields beyond tech roles — three named blockers in `CLAUDE.md`
-
----
-
-## How to update this document
-
-At each phase exit: tick the boxes, fill **Actual**, **Actual finish** and
-**Variance** in the status table and the week row, and set the state. **Never
-edit the Planned columns** — a baseline you revise is a baseline that always
-agreed with you, which is the whole failure R82 was written about. If a phase's
-scope changes, say so in its section and leave the estimate standing.
+Q26 (how much typing the floor asks of a stranger) · Q25 (the installed-to-
+looking gap — a URL dissolves it) · Q23 posting dates · Q9 embedding migration
+· Q3 page-fill headroom · non-tech roles · a public job board (R66) · mobile
+apps · payments.
