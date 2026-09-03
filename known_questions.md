@@ -22,6 +22,8 @@ the options, and what (if anything) have we decided.
 When a new question comes up mid-conversation, add it to **Active**. When we
 make a decision, move it to **Resolved** with a short rationale and the date.
 When we explicitly decide *not* to do something, put it in **Out of scope**.
+When a decision restates or overrides an existing entry in
+known_questions.md, name the R or Q number.
 
 ---
 
