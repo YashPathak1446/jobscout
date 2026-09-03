@@ -32,7 +32,16 @@ env/
 
 # IDE
 .vscode/
-.claude/
+# Local settings stay out; committed project skills come in. `.claude/` as a
+# blanket cannot be negated -- git will not re-include a path whose parent
+# directory is excluded -- so this is `/*` plus one exception.
+#
+# NOTE that the exception names one subdirectory, which is the shape this file
+# has been burned by before: `data/jobs.db` was ignored by name and `data/runs.db`
+# arrived four months later with nobody to notice. Agents, commands or hooks
+# added under .claude/ later stay invisible until someone adds a line here.
+.claude/*
+!.claude/skills/
 .idea/
 *.swp
 *.swo
