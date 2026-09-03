@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # JobScout — what this is
 
 **The problem.** People hand-tailor their resume against job descriptions with
@@ -36,11 +40,163 @@ gets discovered* rather than only what gets ranked, there is no shared half
   because entries have gone stale while the code moved (Q2 claimed unbuilt work
   that had shipped two days earlier).
 - Decisions are recorded as `R<n>`, open questions as `Q<n>`, one commit each.
-- `python -m unittest discover -s tests -q` is the suite.
-  `python scripts/baseline.py verify --all` checks the frozen measurement
-  baselines. Both must pass before a commit.
+  Commit subjects name the finding, not the file: *"fix: the acceptance run
+  imported through a rung it was not asked for (R83)"*.
+- `plan.md` is the current tracker — the week-to-a-URL plan.
+  `known_questions.md` is why; `plan.md` is what next.
 - `app.py` is a view layer and imports only `agents.orchestrator` and
-  `scripts.init_profile`. `tests/test_ui_contract.py` fails the build otherwise.
+  `scripts.init_profile`. `tests/test_ui_contract.py` fails the build otherwise,
+  and it enforces the same rule on `api/main.py`.
+
+## Working with me
+
+Explain decisions as you make them, not after I ask.
+For any non-trivial choice, state: what you chose, what
+you rejected, and what breaks if the choice is wrong.
+
+When a decision has a blast radius beyond the file you
+are editing — a schema, a default, a shared invariant,
+anything a user sees — say who or what it affects before
+you write the code.
+
+If I accept something without questioning it and the
+reasoning is load-bearing, tell me anyway. Silence from
+me is not understanding.
+
+## Commands
+
+Both of these must pass before a commit:
+
+```bash
+python -m unittest discover -s tests -q       # the suite (~1000 tests)
+python scripts/baseline.py verify --all       # the frozen measurement baselines
+```
+
+Stdlib `unittest`, not pytest — deliberately, so `requirements.txt` stays the
+install list for people running the app rather than a dev manifest. The suite
+needs no LaTeX: `pdf_builder`'s tests stub `pdflatex`, so the timeout,
+compile-error and missing-engine paths are all reachable without TeX.
+
+```bash
+python -m unittest tests.test_tex_renderer -q                          # one module
+python -m unittest tests.test_tex_renderer.TestClass.test_method       # one test
+```
+
+Running the pipeline:
+
+```bash
+python -m agents.orchestrator --profile priya_raghunathan --max-jobs 5 --mock
+python -m agents.orchestrator --profile <name> --max-jobs 5            # real run
+```
+
+`--mock` is zero API calls; `--mock-embeddings` and `--mock-generation` mock one
+half each. `--input <enriched_jobs.json>` replays analysis and generation
+without re-scraping — that is how every scoring change here gets measured.
+`--backend gemini|openai|ollama|none` pins the rung; `--no-cache` makes every
+model call fresh, because a measurement that counts cache hits as model answers
+is fiction. `--no-pdf` skips compilation, `--checkpoint` pauses between stages.
+
+The two UIs (see below — they are views of one facade):
+
+```bash
+streamlit run app.py                                      # Streamlit
+python -m uvicorn api.main:app --reload --port 8000       # FastAPI, plus...
+npm install --prefix web && npm run dev --prefix web      # ...Vite/React on 5173
+```
+
+Diagnostics — `doctor` first when anything is wrong, because most of what has
+gone wrong in this project was setup rather than logic:
+
+```bash
+python scripts/doctor.py            # what this machine is missing
+python scripts/acceptance.py        # what this project means by "working"
+python scripts/check_models.py      # live-probe which Gemini models answer
+python scripts/inspect_resume.py    # bullet counts, page count, headroom
+```
+
+`scripts/acceptance.py` is the bar: three stranger resumes × both supported
+rungs, each ending in a compiled one-page PDF that records which rung wrote it.
+`--rung none` and `--fixture priya` narrow it. **The list is frozen** —
+anything found while fixing an item goes to `known_questions.md` as backlog; it
+does not get added to the checklist.
+
+Frontend lint is `npm run lint --prefix web` (oxlint); Python lint is `ruff`
+from the `dev` extra, line length 90.
+
+## Architecture
+
+**Four agents behind one orchestrator.** `Discovery → Enrichment → Analysis
+→ Generation`, coordinated by `agents/orchestrator.py`, which checkpoints,
+emits progress and writes state to `outputs/<date>/`.
+
+- `discovery_agent` queries keyless ATS boards (`tools/search/ats_search.py` —
+  Greenhouse, Ashby, Lever) plus optional keyed sources, then filters by profile.
+- `enrichment_agent` scrapes each posting's real JD. **A posting whose JD could
+  not be read is dropped, never scored** (R61).
+- `analysis_agent` embeds resume components and JDs, then blends embedding
+  score, keyword overlap, component importance and conditional triggers.
+- `generation_agent` — 2600 lines, the largest thing here — selects
+  components, rewrites bullets through an LLM rung, validates against the
+  fabrication rules, repairs, then fits bullets to a one-page budget
+  deterministically. **The LLM writes, Python fits.**
+
+**The UI facade is the architectural spine.** `agents/orchestrator.py` exposes
+roughly two dozen module-level functions — `board_jobs`, `board_total`, `start_run`,
+`run_status`, `backend_status`, `score_bands`, `set_job_status`,
+`derived_levels` — and *both* front ends call exactly those and nothing else
+from the project. Adding UI behaviour means adding a function there, never
+reaching into `tools/`. `tests/test_ui_contract.py` walks the AST of both
+`app.py` and `api/main.py` and fails the build on any other project import.
+`api/main.py` is a thin HTTP wrapper over that same facade.
+
+**Runs are background threads with on-disk progress.** `start_run` returns an id
+immediately; `tools/jobs/run_registry.py` records progress in `data/runs.db`, so
+a closed tab, another session or another process can still ask. A thread rather
+than a subprocess, deliberately — callers only ever see an id, so swapping it
+later changes nothing above.
+
+**Three SQLite stores, two of which look alike and are not.**
+`tools/jobs/job_store.py` (`data/jobs.db`) is the durable board: every job ever
+discovered, and a user's `applied`/`rejected` status on it survives
+re-discovery. `tools/cache/job_cache.py` is a seven-day dedup tracker built to
+*forget*. `data/runs.db` is run progress.
+
+**Configuration is one file.** `config.py` holds the Gemini fallback chain, the
+embedding model and backend, and the cache settings. `resolve_backend` holds the
+entire precedence chain for the LLM rung — `--backend` >
+`JOBSCOUT_LLM_BACKEND` > profile > `config.LLM_BACKEND` — and
+`test_backend_selection.py` fails if anything outside `config.py` reads that
+constant. Model IDs live here because Google's retirement cadence is fast;
+`check_models.py` live-probes, because `models.list()` has reported full support
+for a model that 404s on real calls.
+
+**Four LLM rungs, one adapter.** `tools/generation/llm_backends.py`:
+`gemini` / `openai` / `ollama` / `none`. The middle two are the same
+`/chat/completions` client with a different base URL. **`none` is a complete
+product** — discovery, scoring, selection, one-page layout and PDF all work
+with no key at all; only the rewriting is skipped. Every measurement in
+`known_questions.md` was taken on Gemini.
+
+**Paths resolve two different ways on purpose.** `tools/paths.py`: assets
+(`tools/assets/`) resolve relative to the code because they ship in the wheel;
+user data resolves to `JOBSCOUT_HOME`, else the repo root in a checkout, else
+the platform user-data directory. Nothing may compute
+`Path(__file__).parent.parent` and reach for `data/` — that shipped a wheel
+that could not render a resume and would have written profiles into
+site-packages.
+
+**Profiles are the input contract.** `user_profiles/<name>.json`, schema in
+`tools/profile/profile_schema.py`, bootstrapped from a real resume by
+`scripts/init_profile.py` — which is also the importer both UIs call. Keyword
+vocabulary, component importance and JD triggers are *derived* from the resume
+(`tools/profile/derivation.py`), not hand-authored. A PDF or DOCX import is
+shown field by field for correction before anything is written (R33).
+
+**Hosting is in progress**, not done: `Dockerfile` and `fly.toml` exist, the API
+serves the built React from its own origin, and a shared secret gates it
+(`tests/test_hosted_boundary.py`). That gate is **authentication, not
+authorization** — no endpoint has a per-user check, and with one user the two
+coincide. `plan.md` tracks the rest.
 
 ## The recurring bug in this codebase
 
