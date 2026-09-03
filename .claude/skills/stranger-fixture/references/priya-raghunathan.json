@@ -1,0 +1,119 @@
+{
+  "user_id": "priya_raghunathan",
+  "created": "2026-08-26",
+  "description": "Profile for Priya Raghunathan",
+  "personal_info": {
+    "name": "Priya Raghunathan",
+    "email": "priya.raghunathan@example.com",
+    "phone": "",
+    "github_url": "",
+    "linkedin_url": "",
+    "graduation_date": "",
+    "graduation_term": "",
+    "school": "Northeastern University - Boston, MA Sep 2014 - May 2018",
+    "location": "Boston, Massachusetts",
+    "degree": "",
+    "visa_status": "H1B",
+    "us_citizen": false,
+    "permanent_resident": false,
+    "holds_security_clearance": false,
+    "_comment": [
+      "Blank means unknown, and unknown is what a template knows about someone",
+      "it has never met. These fields used to carry instructions as values \u2014",
+      "'Your Name', 'City, State', 'US Citizen | Green Card | F1 OPT | H1B' \u2014",
+      "and nothing downstream could tell an instruction from an answer. The",
+      "wizard pre-filled 'City, State' into the location box and left Continue",
+      "enabled, so agreeing with the form recorded a location that does not",
+      "exist. Everything a resume states is filled in by derive_personal_info();",
+      "what is left is what the About-you screen asks."
+    ]
+  },
+  "job_preferences": {
+    "target_roles": [
+      "Software Engineer",
+      "Backend Engineer"
+    ],
+    "seniority": [],
+    "employment_types": [
+      "full-time"
+    ],
+    "exclude_keywords": [
+      "PhD required",
+      "security clearance required"
+    ],
+    "locations": {
+      "countries": [
+        "United States"
+      ],
+      "exclude_countries": [],
+      "states_priority": [],
+      "states_acceptable": [],
+      "cities": [
+        "Boston",
+        "Remote"
+      ],
+      "remote_ok": true,
+      "willing_to_relocate": true
+    },
+    "years_experience": 6
+  },
+  "resume_preferences": {
+    "master_resume_path": "data/master_resumes/priya_raghunathan.tex",
+    "experiences": {
+      "always_include": [],
+      "conditional_inclusion": {
+        "exp_toast": {
+          "include_if_jd_contains": [
+            "contract testing",
+            "java",
+            "kotlin",
+            "spark"
+          ],
+          "description": "Auto-derived from tech stack and bullet keywords"
+        },
+        "exp_vistaprint": {
+          "include_if_jd_contains": [
+            "airflow",
+            "python"
+          ],
+          "description": "Auto-derived from tech stack and bullet keywords"
+        }
+      },
+      "never_include": []
+    },
+    "projects": {
+      "always_include": [],
+      "high_priority": [],
+      "conditional_inclusion": {},
+      "never_include": []
+    },
+    "formatting": {
+      "max_bullet_chars_experiences": 280,
+      "min_bullet_chars_experiences": 140,
+      "max_bullet_chars_projects": 140,
+      "min_bullet_chars_projects": 120,
+      "target_page_count": 1,
+      "max_skill_categories": 6,
+      "languages_category_first": true,
+      "template": "jakes_resume"
+    },
+    "component_importance": {
+      "experiences": {
+        "exp_wayfair": "high",
+        "exp_toast": "high",
+        "exp_vistaprint": "medium"
+      },
+      "projects": {}
+    }
+  },
+  "agent_preferences": {
+    "max_jobs_to_discover": 30,
+    "checkpoint_after_scoring": true,
+    "use_mock_embeddings": false,
+    "retry_on_validation_fail": true,
+    "max_retries": 2
+  },
+  "notes": {
+    "how_to_use": "1. Copy this file. 2. Rename to firstname_lastname.json. 3. Fill in all fields. 4. Place your resume.tex in data/master_resumes/. 5. Run: python main.py --profile firstname_lastname"
+  }
+}
