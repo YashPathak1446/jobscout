@@ -34,6 +34,7 @@ Usage:
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import shutil
@@ -112,6 +113,39 @@ RUNGS = ("none", "gemini", "ollama")
 # out to be mis-specified. Three things are unknown and none of them are on
 # the path to paying users — see the entry in known_questions.md.
 ADVISORY = {"ollama"}
+
+# The embedding backend the frozen numbers were taken on.
+#
+# Every score in known_questions.md — R84's `4 valid / 48.9%`, and the `> 40`
+# bar below — was measured through Gemini's embeddings. That is not a detail
+# about provenance, it is the **scale the numbers are on**: raw cosine is
+# mapped onto 0-100 through `embedding_scorer.CALIBRATION`, which holds a
+# different pair per backend, so a percentage from one model is not the same
+# quantity as a percentage from another.
+#
+# Model as well as backend, for R11/R45/R80's reason exactly — a key, or a
+# calibration, is a claim about which differences do not matter, and
+# `gemini-embedding-001` and `gemini-embedding-2` are both "gemini" while
+# producing different vectors. config.py already notes the migration is
+# pending; when it happens these numbers are re-taken, not re-labelled.
+CALIBRATED_ON = ("gemini", "gemini-embedding-001")
+
+
+def _embedding_backend() -> tuple:
+    """
+    Which embedding model this process will actually use, before anything runs.
+
+    Resolved up front deliberately. It is the single fact that decides whether
+    a run can be compared to anything, and learning it afterwards means having
+    already spent several minutes producing numbers nobody can read.
+    """
+    from tools.resume.embedding_scorer import active_backend
+    return active_backend()
+
+
+def _fingerprint(path, length=12) -> str:
+    """A short content hash, so a report names the input it was run against."""
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()[:length]
 
 
 def say(text=""):
@@ -277,7 +311,7 @@ def run_pipeline(profile_name, corpus, rung, output_dir):
     return orchestrator.run(max_jobs=20)
 
 
-def assert_the_frozen_list(state, rung):
+def assert_the_frozen_list(state, rung, comparable=True):
     """Every assertion, in the order a person would care about them."""
     analysed = state.get("analysis_results") or []
     results = state.get("generation_results") or []
@@ -286,9 +320,23 @@ def assert_the_frozen_list(state, rung):
 
     scores = sorted((r.get("score", {}).get("overall", 0) for r in analysed),
                     reverse=True)
-    check(scores and scores[0] > 40,
-          lambda: f"the best job scored {scores[0]:.1f}%, below the threshold "
-                  f"of 40. This is what a stranger sees as an empty board.")
+    # The 40 is a **backend-relative** bar, not an absolute one. Raw cosine is
+    # mapped onto 0-100 through `embedding_scorer.CALIBRATION`, which is a
+    # different pair per backend — (0.30, 0.60) for Gemini, (0.00, 0.10) for
+    # the local model. So "40%" on one scale is not the same claim as "40%" on
+    # the other, and applying this bar to a backend it was not calibrated on is
+    # not a stricter test or a looser one, it is a meaningless one.
+    #
+    # It was silently meaningless once: the first container run had no key,
+    # fell back to local embeddings, scored 77-85% against a bar of 40, and the
+    # harness printed PASSED while measuring a different model (R87).
+    if comparable:
+        check(scores and scores[0] > 40,
+              lambda: f"the best job scored {scores[0]:.1f}%, below the "
+                      f"threshold of 40. This is what a stranger sees as an "
+                      f"empty board.")
+    else:
+        check(scores, "no jobs were scored at all")
 
     check(results, "no resumes were generated for jobs that scored well")
 
@@ -349,7 +397,7 @@ def assert_the_frozen_list(state, rung):
     return len(valid), len(review), scores[0]
 
 
-def one(name, spec, rung, keep):
+def one(name, spec, rung, keep, comparable=True):
     """One fixture on one rung. Returns a line for the report."""
     from scripts import init_profile
     from tools.profile import list_available_profiles
@@ -379,7 +427,7 @@ def one(name, spec, rung, keep):
                   f"script does not own it")
             state = run_pipeline(spec["profile"], CORPUS, rung,
                                  workspace / "outputs")
-        count, review, best = assert_the_frozen_list(state, rung)
+        count, review, best = assert_the_frozen_list(state, rung, comparable)
         # The quarantined count is always stated, never implied by silence.
         # A gate that passes while hiding how much it set aside is the same
         # shape as a filter that removes rows without saying how many (R62).
@@ -415,7 +463,23 @@ def main():
     names = [args.fixture] if args.fixture else sorted(FIXTURES)
     rungs = [args.rung] if args.rung else list(RUNGS)
 
-    print(f"Acceptance: {len(names)} fixture(s) x {len(rungs)} rung(s)\n")
+    # What this run is measuring *with*, stated before it measures anything.
+    backend = _embedding_backend()
+    comparable = backend[:2] == CALIBRATED_ON
+
+    say(f"Acceptance: {len(names)} fixture(s) x {len(rungs)} rung(s)")
+    say(f"Embeddings: {backend[0]} / {backend[1]} ({backend[2]}d)"
+        f"{'' if comparable else '   <-- NOT the calibrated backend'}")
+    say(f"Corpus:     {CORPUS.name} @ {_fingerprint(CORPUS)}")
+    if not comparable:
+        say()
+        say(f"  The frozen numbers were taken on {CALIBRATED_ON[0]} / "
+            f"{CALIBRATED_ON[1]}. Scores from a different embedding model "
+            f"sit")
+        say( "  on a different scale and are not comparable to them.")
+        say( "  Structural checks still run. No score claim is made, and "
+             "this run does not gate.")
+    say()
     failures = []
 
     for name in names:
@@ -425,7 +489,9 @@ def main():
             label = f"  {rung:<8}"
             advisory = rung in ADVISORY
             try:
-                say(f"{label} {one(name, spec, rung, args.keep)}   PASS")
+                line = one(name, spec, rung, args.keep, comparable)
+                say(f"{label} {line}   "
+                    f"{'PASS' if comparable else 'NOT COMPARABLE'}")
             except Failure as failure:
                 say(f"{label} {'(advisory) ' if advisory else ''}FAIL: {failure}")
                 if not advisory:
@@ -446,6 +512,30 @@ def main():
     if failures:
         say(f"FAILED — {len(failures)} of {gating} gating check(s)")
         return 1
+
+    # Three states in the report, two in the exit code, and "could not
+    # measure" takes the conservative branch of the binary one.
+    #
+    # Not FAIL: nothing here is broken, and printing FAIL would send the next
+    # reader hunting a regression that does not exist — R81's mis-specified
+    # bar pointed the other way. Not PASS either, which is what it printed
+    # until now. Unknown is a third state and it has to survive to the place
+    # that reports it, which is this project's oldest rule.
+    #
+    # Deliberately unlike ADVISORY, which exits 0: an advisory rung is one the
+    # operator *asked* for, knowing it does not gate. A backend mismatch is
+    # discovered rather than declared, and on Fly it is exactly what an unset
+    # `fly secrets`, a rotated key or an exhausted quota looks like. A deploy
+    # gate reads the exit code, so it must be non-zero or this is decorative.
+    if not comparable:
+        say(f"NOT COMPARABLE — {gating} structural check(s) passed, but this "
+            f"run embedded with")
+        say(f"  {backend[0]} / {backend[1]}, and the frozen numbers were taken "
+            f"on {CALIBRATED_ON[0]} / {CALIBRATED_ON[1]}.")
+        say( "  No claim is made about them. Provide a key for the calibrated "
+             "backend to gate.")
+        return 1
+
     say(f"PASSED — {gating} of {gating} gating check(s)")
     return 0
 

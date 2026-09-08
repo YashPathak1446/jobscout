@@ -7992,6 +7992,157 @@ a dependency something imports on a path the container never takes.
 
 ---
 
+## R87. The gate could not fail the way it was about to fail
+
+**Decision:** (2026-09-07) `scripts/acceptance.py` resolves and reports the
+embedding backend before it measures anything, and **refuses to claim PASS**
+when that backend is not the one the frozen numbers were taken on. It prints
+`NOT COMPARABLE` and exits non-zero.
+
+### What was wrong
+
+R86 recorded the container scoring 77-85% against frozen numbers of 42-60% and
+called it a reading error — the container had no key, fell back to local
+embeddings, and the two are different scales. True, and incomplete. **The
+harness printed `PASSED — 3 of 3` while measuring a different model**, and that
+is not a reading error, it is a gate that cannot fail the way it is most likely
+to fail.
+
+The mechanism is smaller and worse than "it didn't record the backend". The
+harness never compared against R84's numbers at all; it asserts
+`scores[0] > 40`. That 40 is **backend-relative**: raw cosine is mapped onto
+0-100 through `embedding_scorer.CALIBRATION`, which is `(0.30, 0.60)` for
+Gemini and `(0.00, 0.10)` for the local model. A bar of 40 on one scale is not
+the same claim as 40 on the other, so applying it to an uncalibrated backend is
+not a stricter test or a looser one — **it is a meaningless one**, and it
+happened to point the generous way. The local scores sailed over it.
+
+On Fly this is the live failure mode, not a hypothetical: `fly secrets` unset,
+a rotated key, an exhausted quota. Any of them silently downgrades the backend,
+and the acceptance run — the deploy's exit condition — would have reported
+green while measuring something else.
+
+### Abstention, not failure, and a non-zero exit
+
+Three states in the report, two in the exit code, and the unknown takes the
+conservative branch of the binary one.
+
+**Not FAIL.** Nothing is broken when the backend differs. The resumes may be
+perfectly good; the run may be the most interesting measurement available.
+Printing FAIL would send the next reader hunting a regression that does not
+exist — R81's mis-specified bar, pointed the other way.
+
+**Not PASS**, which is what it did.
+
+**Exit 1 regardless**, because the exit code has two values and a deploy gate
+reads it. "Could not measure" must never arrive as "passed". This is the
+project's oldest rule — unknown is never a value — applied to a channel that
+cannot hold three: keep the third state where a human reads it, and take the
+safe branch where a machine does.
+
+Deliberately unlike `ADVISORY`, which exits 0. An advisory rung is one the
+operator **asked** for, knowing it does not gate. A backend mismatch is
+**discovered**, not declared. Collapsing the two would put the accidental case
+on the same footing as the intentional one, which is how this started.
+
+Structural checks still run and still gate: PDFs exist, pages are pages,
+quarantine held, the rung that wrote the bullets is the rung that was asked
+for. Those are backend-independent, so an uncomparable run still says something
+true. Only the score claim abstains.
+
+### Verified
+
+Three cases, all three exercised rather than reasoned about:
+
+| run | backend | verdict | exit |
+|---|---|---|---|
+| host, key present | `gemini / gemini-embedding-001 (768d)` | PASS, 3 of 3 | 0 |
+| container, no key | `local / minishlab/potion-base-8M (256d)` | **NOT COMPARABLE** | **1** |
+| container, key passed in | `gemini / gemini-embedding-001 (768d)` | PASS, 3 of 3 | 0 |
+
+The middle row is the one that printed `PASSED` yesterday.
+
+### What else the frozen numbers depend on that is not recorded
+
+The question one level out, and the answer is worse than the thing it was
+asked about.
+
+**Recorded now:** the embedding backend *and model* — model, not just backend,
+for R11/R45/R80's reason exactly, since `gemini-embedding-001` and
+`gemini-embedding-2` are both "gemini" and config.py already flags that
+migration as pending. Also the corpus content hash, so a report names the input
+it ran against.
+
+**Not recorded, and not recordable — the sharp one.** `.gitignore:91` ignores
+`user_profiles/*.json` and `.gitignore:74` ignores `data/master_resumes/*.tex`.
+Priya's profile and Priya's master resume are therefore **in no commit**, and
+the harness deliberately never rebuilds her — *"profiles it does not own are
+used as they are"*. So the row `6 valid, best job 59.9%` is a measurement of
+two files that exist on one laptop. Nobody else can reproduce it, a fresh
+checkout cannot run `--fixture priya` at all, and R86's container run only
+worked because the files were copied onto the mount by hand. This is the
+"known portability gap" the corpus note already admits, one directory over and
+unadmitted. It is also why `.gitignore`'s own rule — ignore by pattern, never
+by filename — cuts both ways: the pattern that correctly protects a real user's
+data also silently swallowed a fixture the frozen numbers depend on.
+
+**Not recorded, and a flag that half-means what it says.** `--no-cache` /
+`use_cache=False` reaches `GenerationAgent` (`orchestrator.py:1185`) and
+**never reaches `AnalysisAgent`**, which is where every embedding happens. So a
+run taken "without cache" still serves embeddings from `.cache/embeddings`.
+R11's model-keyed cache means that is a miss rather than a wrong answer when
+the model changes, which is the only reason this has not already produced a
+fiction — but the docstring says *"every model call is made fresh"* and that is
+not true of the larger half of the calls. R80's shape again: a flag whose
+consumer count was assumed rather than counted.
+
+**Recorded already:** the LLM rung, and which rung wrote the bullets (R79/R83).
+
+**Measured and shown not to matter:** platform and Python version (R86).
+
+The first two are open. Filed as Q30 rather than fixed here, since neither
+blocks the deploy gate and both are bigger than this change.
+
+
+## Q30. Two inputs the frozen numbers depend on, neither of them pinned
+
+**Status:** Open, found 2026-09-07 while making the acceptance gate report its
+own instrument (R87). Neither blocks the deploy gate, so plan.md's rule 3
+applies: logged, not fixed.
+
+**1. Priya's fixture is in no commit.** `.gitignore:91` ignores
+`user_profiles/*.json`; `.gitignore:74` ignores `data/master_resumes/*.tex`.
+Both patterns are correct — they exist to keep a real person's resume and
+profile out of a public repository. But `priya_raghunathan` is a *fixture*, and
+the harness never rebuilds her by design, so the frozen row
+`6 valid, best job 59.9%` measures two files that exist on one laptop. A fresh
+checkout cannot run `--fixture priya`; R86's container run only worked because
+the files were hand-copied onto the mount.
+
+CLAUDE.md calls Priya "the default fixture for anything touching profile shape,
+gates, defaults or onboarding". A default fixture that ships with nothing is a
+fixture only one machine has. The tension is real and is why this is a question
+rather than a fix: she is a synthetic persona, so committing her is probably
+fine — but "probably fine" is the reasoning that puts a real resume in a public
+repo the day someone adds a second fixture the same way. The candidate answers
+are an explicit `!user_profiles/priya_raghunathan.json` negation with the
+resume as anonymized text beside the other two in `tests/fixtures/`, or making
+Priya an owned fixture the harness rebuilds like the other two.
+
+**2. `--no-cache` does not reach the embeddings.** `use_cache=False` is passed
+to `GenerationAgent` (`agents/orchestrator.py:1185`) and never to
+`AnalysisAgent`, which is where every embedding call happens — roughly twenty
+per run against three for generation. The docstring says *"every model call is
+made fresh"*, and it is not true of the larger half.
+
+R11's model-keyed cache is the only reason this has not produced a fiction: a
+changed model misses rather than answering wrongly. But that is a property of a
+different decision holding this one up, which is exactly the arrangement R80
+found and named — a flag whose consumers were assumed rather than counted. The
+count here is two and the code passes one.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format
