@@ -8104,42 +8104,86 @@ The first two are open. Filed as Q30 rather than fixed here, since neither
 blocks the deploy gate and both are bigger than this change.
 
 
-## Q30. Two inputs the frozen numbers depend on, neither of them pinned
+## Q30. A baseline nobody else can reproduce, and a flag that half-fires
 
-**Status:** Open, found 2026-09-07 while making the acceptance gate report its
-own instrument (R87). Neither blocks the deploy gate, so plan.md's rule 3
-applies: logged, not fixed.
+**Status:** Item 1 is **a blocker for the Fly deploy gate**, not a log entry —
+escalated 2026-09-07, the same day it was filed, once its consequence for the
+instance run was worked through. Item 2 stays logged under rule 3.
 
-**1. Priya's fixture is in no commit.** `.gitignore:91` ignores
-`user_profiles/*.json`; `.gitignore:74` ignores `data/master_resumes/*.tex`.
-Both patterns are correct — they exist to keep a real person's resume and
-profile out of a public repository. But `priya_raghunathan` is a *fixture*, and
-the harness never rebuilds her by design, so the frozen row
-`6 valid, best job 59.9%` measures two files that exist on one laptop. A fresh
-checkout cannot run `--fixture priya`; R86's container run only worked because
-the files were hand-copied onto the mount.
+### 1. Priya's fixture is in no commit, and the instance cannot be given it
 
-CLAUDE.md calls Priya "the default fixture for anything touching profile shape,
-gates, defaults or onboarding". A default fixture that ships with nothing is a
-fixture only one machine has. The tension is real and is why this is a question
-rather than a fix: she is a synthetic persona, so committing her is probably
-fine — but "probably fine" is the reasoning that puts a real resume in a public
-repo the day someone adds a second fixture the same way. The candidate answers
-are an explicit `!user_profiles/priya_raghunathan.json` negation with the
-resume as anonymized text beside the other two in `tests/fixtures/`, or making
-Priya an owned fixture the harness rebuilds like the other two.
+`.gitignore:91` ignores `user_profiles/*.json`; `.gitignore:74` ignores
+`data/master_resumes/*.tex`. Both patterns are right: they exist to keep a real
+person's resume and profile out of a public repository. But the harness never
+rebuilds Priya by design — *"profiles it does not own are used as they are"* —
+so the frozen row `6 valid, best job 59.9%` measures two files that exist on
+one laptop. A fresh checkout cannot run `--fixture priya` at all.
 
-**2. `--no-cache` does not reach the embeddings.** `use_cache=False` is passed
-to `GenerationAgent` (`agents/orchestrator.py:1185`) and never to
-`AnalysisAgent`, which is where every embedding call happens — roughly twenty
-per run against three for generation. The docstring says *"every model call is
-made fresh"*, and it is not true of the larger half.
+**The consequence nobody planned for.** Gate 1's exit condition is "deploy,
+then run `scripts/acceptance.py` against the instance". The instance *cannot
+run that fixture*. `.dockerignore` keeps `data/` and `user_profiles/` out of
+the image deliberately, and a Fly volume starts empty. R86's container run only
+worked because the files were hand-copied onto the mount, and there is no
+equivalent of that on Fly which is not a deliberate act of publishing.
+
+**And the obvious workaround is the wrong one.** Copying Priya onto a
+production volume trades a `.gitignore` protection for a hosting one, on a
+machine that will shortly have a public URL and whose entire access control is
+one shared password. Do not do it. This entry previously reasoned that "she is
+a synthetic persona, so committing her is probably fine" — that was wrong, and
+it is precisely the reasoning this note now exists to stop.
+
+**A documentation hazard, which is how that error happened.** `CLAUDE.md:288`
+says Priya *"was invented to test the importer"*, while `CLAUDE.md:359` says
+she was *"imported from a PDF this repo did not produce"*. The first reading
+invites committing the file. The second is the one that governs. Worth
+reconciling in CLAUDE.md, because the dangerous reading is the one stated first
+and in bold.
+
+**So the hosted gate runs two fixtures, not three — and it loses the only one
+that tests PDF import**, which is exactly the path a stranger takes: upload a
+resume this repo did not make, in a format it did not write. `two_degrees` and
+`glued_runs` are committed as anonymized *text*, so they exercise the parser
+and not the PDF reader.
+
+**For the deploy:** run the instance gate with the two committed fixtures, and
+record in that entry that **the hosted gate has never tested PDF import**. Not
+as a caveat discovered when the numbers come back a row short — as a stated
+hole, in advance.
+
+**The durable fix**, which is not deploy-week work: a committed *synthetic* PDF
+fixture standing in for her on the hosted gate — a resume this repo did make,
+rendered into a format it does not write, so the PDF path has something to
+read that nobody needs protecting.
+
+### The shape of it, which outlives the deploy
+
+**A frozen baseline nobody but its author can reproduce is not frozen, it is
+remembered.** A fresh checkout, a new laptop, or anyone reading this repository
+gets a manifest of numbers they cannot verify and an instruction to treat them
+as a bar. That is the same class of problem as R85's undemonstrated
+declaration: `fastapi` was declared and the declaration was never exercised,
+because the thing that would have tested it was still installed. Here the bar
+is written down and the inputs that produce it are not, so nothing can fail —
+which is also what made R87 possible.
+
+### 2. `--no-cache` does not reach the embeddings
+
+`use_cache=False` is passed to `GenerationAgent`
+(`agents/orchestrator.py:1185`) and never to `AnalysisAgent`, which is where
+every embedding call happens — roughly twenty per run against three for
+generation. The docstring says *"every model call is made fresh"*, and that is
+not true of the larger half.
 
 R11's model-keyed cache is the only reason this has not produced a fiction: a
-changed model misses rather than answering wrongly. But that is a property of a
-different decision holding this one up, which is exactly the arrangement R80
-found and named — a flag whose consumers were assumed rather than counted. The
-count here is two and the code passes one.
+changed model misses rather than answering wrongly. But that is one decision
+propping up another, which is the arrangement R80 found and named — a flag
+whose consumers were assumed rather than counted. The count is two; the code
+passes one.
+
+**Left open deliberately.** It is a real defect, R11 genuinely holds it up, and
+a fresh Fly volume has an empty cache — so it cannot bite the first instance
+run, which is the thing this is being weighed against.
 
 ---
 
