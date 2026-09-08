@@ -9,11 +9,21 @@
 # usage-based pricing on a 1.75 GB image with multi-minute CPU bursts is the
 # shape that makes a bill unpredictable.
 
-app = "jobscout"
+app = "jobscout-yash"
 primary_region = "ord"
 
 [build]
   dockerfile = "Dockerfile"
+
+  # **Not optional.** A Docker build with no target builds the *last* stage,
+  # and the last stage is `verify` — the one that adds `tests/` and
+  # `baselines/` and is documented as never deployed. Without this line
+  # `fly deploy` ships the test image.
+  #
+  # This file predates the `verify` stage by ten days (fly.toml 2026-08-28,
+  # the third stage 2026-09-07 in R86) and nothing pointed the two at each
+  # other. Adding a stage to the Dockerfile is a change to this file.
+  build-target = "runtime"
 
 [env]
   # Everything the app writes goes on the volume: runs.db, jobs.db, the
@@ -27,6 +37,16 @@ primary_region = "ord"
   source = "jobscout_data"
   destination = "/data"
 
+  # Stated, so `fly deploy` creates it rather than falling back to the 1 GB
+  # default. It holds the databases, uploaded master resumes and every
+  # generated PDF; 3 GB is $0.45/month against the $10 ceiling (OOS5).
+  #
+  # Note the layout underneath: `master_resume_path` is stored *inside* the
+  # profile JSON as `data/master_resumes/<name>.tex` and joined to the data
+  # home at `orchestrator.py:701`, so the real path is `/data/data/...`.
+  # The doubling is correct, not a typo.
+  initial_size = "3gb"
+
 [http_service]
   internal_port = 8080
   force_https = true
@@ -35,7 +55,9 @@ primary_region = "ord"
   # machine being stopped, so a run started at minute one and still going at
   # minute three needs the machine to still be there. When this moves to a
   # real queue, these can go back to true/0 and save money.
-  auto_stop_machines = false
+  # A string, not a boolean: the current schema takes "off" | "stop" |
+  # "suspend". `false` still parses, but it says less than the word does.
+  auto_stop_machines = "off"
   auto_start_machines = true
   min_machines_running = 1
 
@@ -64,6 +86,12 @@ primary_region = "ord"
   size = "shared-cpu-1x"
   memory = "1gb"
 
-# Secrets are NOT set here. `fly secrets set GEMINI_API_KEY=... JOBSCOUT_ACCESS_SECRET=...`
+# Secrets are NOT set here. `fly secrets set GOOGLE_API_KEY=... JOBSCOUT_ACCESS_SECRET=...`
 # keeps them out of the repo and out of the image. A key in a committed file
 # is a key published to anyone who can read the repo, and this one is public.
+#
+# **`GOOGLE_API_KEY`, not `GEMINI_API_KEY`** — this line said the latter, which
+# nothing in the codebase reads (`config.py:173` is the only definition, and
+# `.env.example:2` had it right). Setting a secret nobody reads leaves the app
+# on local embeddings: R87's abstain path then reports NOT COMPARABLE and exits
+# 1, which is the gate working, but the deploy round trip is spent on a typo.

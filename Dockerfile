@@ -61,6 +61,21 @@ COPY config.py app.py ./
 
 COPY --from=web /web/dist ./web/dist
 
+# The acceptance run is this deploy's exit condition, and it reads a frozen
+# corpus plus two stranger resumes and their corrections from
+# `ROOT/tests/fixtures/` (`acceptance.py:69, :85-94`). `ROOT` is /app, so
+# without these five files the gate cannot run on the deployed image at all —
+# it dies on a missing corpus before it measures anything.
+#
+# R86 ran acceptance inside `verify`, which copies all of `tests/`. Fly ships
+# `runtime`. That difference is invisible locally, where both stages are built
+# from a tree that has `tests/`.
+#
+# Chosen over moving the corpus into `tools/assets/`: those three files are
+# product-runtime data read on every user run, they ship in the wheel, and the
+# move would edit four files including the frozen gate. See the guard below.
+COPY tests/fixtures/ ./tests/fixtures/
+
 # Where the app keeps things that must outlive a deploy: runs.db, jobs.db, the
 # caches, and uploaded master resumes. A Fly volume mounts here.
 #
@@ -101,11 +116,20 @@ CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8080", "--worker
 # home. They are code and measurements, not user data; `data/`,
 # `user_profiles/`, `outputs/` and `*.db` stay out of the context.
 #
-# Note this stage is the only one where `tests/` exists, and `paths.in_checkout()`
-# branches on `tests/` being present. It stays False because `pyproject.toml` is
-# deliberately not copied, and `JOBSCOUT_HOME` outranks it either way — but a
-# future `COPY pyproject.toml` here would silently move the data home to /app,
-# an image layer replaced on every deploy.
+# **This stage is no longer the only one where `tests/` exists.** `runtime` now
+# carries `tests/fixtures/` so the acceptance gate can run on the deployed
+# image, and `paths.in_checkout()` branches on `tests/` being present — so that
+# half of the condition is now True in the shipping image too.
+#
+# What keeps the data home off `/app` is therefore `pyproject.toml` alone
+# (plus `JOBSCOUT_HOME`, which outranks it). A `COPY pyproject.toml` into
+# `runtime` would silently move user data into an image layer replaced on every
+# deploy. That used to be guarded by two conditions and is now guarded by one,
+# so it is pinned by a test rather than by this paragraph:
+# `test_the_runtime_stage_never_copies_pyproject` in tests/test_hosted_boundary.py.
+#
+# An invariant a reader has to remember is the one that goes stale — this
+# comment was itself wrong the moment the COPY above landed.
 FROM runtime AS verify
 
 COPY tests/ ./tests/

@@ -69,6 +69,7 @@ from agents.orchestrator import (
     outputs_root,
 )
 from scripts.init_profile import (
+    RESUME_DIR,
     create_profile,
     extract_resume,
     read_component_rules,
@@ -346,7 +347,15 @@ def update_status(request: StatusRequest) -> dict:
 # obvious thing to hand over and take back on the confirm call — and that is a
 # client choosing which file the server opens. Names are resolved against this
 # directory instead, so the worst a caller can name is a file in it.
-RESUME_DIR = Path.cwd() / "data" / "master_resumes"
+#
+# `RESUME_DIR` is imported from `scripts.init_profile` — the module that
+# *writes* the upload — rather than recomputed here. It was
+# `Path.cwd() / "data" / "master_resumes"`, which is the same directory in a
+# checkout and `/app/data/master_resumes` in the container, while the writer
+# used `/data/data/master_resumes`. The wizard's confirm step 404'd on a file
+# it had just uploaded (R89). R86 fixed four sites of this shape; this was the
+# fifth, and the only one the acceptance run cannot reach, because the harness
+# calls `create_profile` directly and never walks `POST /api/profile`.
 
 
 def _resolve_upload(filename: str) -> Path:

@@ -20,6 +20,7 @@ file will have started providing one.
 import importlib
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -210,6 +211,121 @@ class TestTheWriterAndTheReaderAgreeOnWhereOutputsLive(unittest.TestCase):
             self.assertEqual(paths.outputs_root(),
                              Path(ROOT / "tmp-home") / "outputs")
         importlib.reload(paths)
+
+    def test_the_upload_writer_and_reader_agree(self):
+        """
+        The same fork as this class's other tests, one directory over.
+
+        `extract_resume` **writes** an uploaded resume through
+        `init_profile.RESUME_DIR`; `_resolve_upload` **reads** it back on the
+        wizard's confirm step. `api/main.py` recomputed that root as
+        `Path.cwd() / "data" / "master_resumes"` — identical in a checkout,
+        `/app/data/...` against `/data/data/...` in the container, where the
+        upload 404s on a file the previous request just saved.
+
+        This is the fifth site of R86's bug and the only one the acceptance
+        run cannot see: the harness calls `create_profile` directly and never
+        walks `POST /api/profile`. So the gate stayed green on an instance
+        where nobody could onboard.
+
+        **The data home has to be moved for this test to mean anything.** In a
+        checkout `Path.cwd()` and `data_home()` are the same directory, so
+        comparing the two roots here passes against the broken code and proves
+        nothing — the first draft of this test did exactly that. Pointing
+        `JOBSCOUT_HOME` somewhere else reproduces the container, where the two
+        diverge, which is the only place the bug exists.
+        """
+        import tools.paths as paths
+        import scripts.init_profile as init_profile
+        import api.main as main
+
+        try:
+            with tempfile.TemporaryDirectory() as home:
+                with mock.patch.dict(os.environ, {"JOBSCOUT_HOME": home}):
+                    # Order matters: the two RESUME_DIRs are module-level
+                    # constants, so each has to be recomputed under the moved
+                    # home, and `api.main` re-imports the name from
+                    # `init_profile` when it is reloaded.
+                    importlib.reload(paths)
+                    importlib.reload(init_profile)
+                    importlib.reload(main)
+
+                    self.assertEqual(
+                        main.RESUME_DIR, init_profile.RESUME_DIR,
+                        "the module that writes an upload and the module "
+                        "that reads it back disagree about where it went")
+
+                    self.assertNotEqual(
+                        main.RESUME_DIR, Path.cwd() / "data" / "master_resumes",
+                        "the reader is resolving uploads against the working "
+                        "directory, which is an image layer in the container "
+                        "and not where the writer put the file")
+        finally:
+            # Leave the process as it was found: these constants are read by
+            # every other test in the run.
+            importlib.reload(paths)
+            importlib.reload(init_profile)
+            importlib.reload(main)
+
+
+class TestTheShippingImageKeepsItsDataOffTheImageLayer(unittest.TestCase):
+    r"""
+    A guard that used to be two conditions and is now one.
+
+    `paths.in_checkout()` is `pyproject.toml is_file() AND tests/ is_dir()`.
+    The shipping image now carries `tests/fixtures/` — the acceptance gate is
+    the deploy's exit condition and reads its frozen corpus from
+    `ROOT/tests/fixtures/`, so without it the gate cannot run on the instance
+    at all. That makes the second condition True in `runtime`.
+
+    What remains between the container and a data home at `/app` is
+    `pyproject.toml` not being copied. If it ever were, `in_checkout()` would
+    go True and every profile, database and generated PDF would be written
+    into an image layer that is replaced on the next deploy.
+
+    `JOBSCOUT_HOME=/data` outranks `in_checkout()` and is set in both the
+    Dockerfile and fly.toml, so this is defence in depth rather than the only
+    thing standing there. It is a test and not a comment because the comment
+    that described the old two-condition guard was wrong the moment the
+    fixtures COPY landed, and nobody was editing it.
+    """
+
+    def test_the_runtime_stage_never_copies_pyproject(self):
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+        marker = "FROM runtime AS verify"
+        self.assertIn(marker, dockerfile,
+                      "the verify stage is how this test knows where the "
+                      "shipping image ends")
+        runtime_half = dockerfile.split(marker)[0]
+
+        # COPY lines only. The prose above that *explains* this trap names
+        # pyproject.toml, and an explanation of a rule is not a breach of it
+        # (R80) — matching the whole text would fail on its own documentation.
+        copied = [line.strip() for line in runtime_half.splitlines()
+                  if line.strip().upper().startswith("COPY")]
+
+        offenders = [line for line in copied if "pyproject.toml" in line]
+        self.assertEqual(offenders, [],
+                         "copying pyproject.toml into the shipping image "
+                         "flips paths.in_checkout() to True and moves the "
+                         "data home to /app, an image layer replaced on "
+                         "every deploy")
+
+    def test_the_gate_can_find_its_corpus_in_the_shipping_image(self):
+        """
+        The other half: the COPY that thinned the guard has to still be there.
+
+        If someone removes it to restore the old two-condition guard, the
+        deploy goes back to shipping an image whose acceptance run dies on a
+        missing corpus — which is what this whole arrangement exists to fix.
+        """
+        dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+        runtime_half = dockerfile.split("FROM runtime AS verify")[0]
+
+        self.assertIn("COPY tests/fixtures/", runtime_half,
+                      "the shipping image cannot run scripts/acceptance.py "
+                      "without tests/fixtures/ — see acceptance.py:69")
 
 
 if __name__ == "__main__":
