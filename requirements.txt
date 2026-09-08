@@ -1,8 +1,7 @@
 # JobScout V3 Dependencies
 # Python >= 3.10
 
-# Google ADK & Gemini
-google-adk>=1.0.0
+# Gemini
 google-genai>=1.0.0
 
 # Core utilities
@@ -31,13 +30,14 @@ streamlit>=1.31.0
 # API (api/main.py) — what the React front end talks to, and what ships hosted.
 #
 # These were used by `api/main.py`, documented in the README, and launched by
-# `.claude/launch.json` while being declared in no manifest at all. They work
-# here because `google-adk` pulls FastAPI in transitively — which is not a
-# dependency, it is a coincidence that a version bump can end.
+# `.claude/launch.json` while being declared in no manifest at all. They
+# resolved because `google-adk` pulled FastAPI in transitively — which was not
+# a dependency, it was a coincidence that a version bump could end.
 #
 # R80's shape exactly: fine where the author is, missing from the manifest,
 # and invisible until something builds a clean environment. A container is
-# that clean environment.
+# that clean environment — and it is what retired `google-adk` itself (R85),
+# so the coincidence is now gone and these two declarations are load-bearing.
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 

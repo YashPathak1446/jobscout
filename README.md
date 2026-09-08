@@ -5,7 +5,6 @@
 
 [![PyPI](https://img.shields.io/pypi/v/jobscout)](https://pypi.org/project/jobscout/)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue)](https://python.org)
-[![Google ADK](https://img.shields.io/badge/Google%20ADK-1.0+-green)](https://google.github.io/adk-docs/)
 [![Gemini](https://img.shields.io/badge/Gemini-3.5%20Flash-orange)](https://ai.google.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
 
@@ -45,9 +44,12 @@ and submit.
                        (coordinates, checkpoints, state)
 ```
 
-Each agent uses [Google ADK](https://google.github.io/adk-docs/) and has
-specialized tools. The orchestrator is stateful and supports replay
-(`--input` flag) so you can debug analysis/generation without re-scraping.
+Each agent is a plain Python class with its own tools, and
+`JobScoutOrchestrator.run()` calls the four in order. There is no agent
+framework because there is nothing for one to do: the pipeline is a fixed
+linear sequence, so no agent chooses what runs next, delegates, or is routed
+to. The orchestrator is stateful and supports replay (`--input` flag) so you
+can debug analysis/generation without re-scraping.
 
 ---
 
@@ -268,7 +270,7 @@ what exhausted the daily free-tier quota.
 
 ```
 jobscout/
-├── agents/                 # ADK agents
+├── agents/                 # The four pipeline agents
 │   ├── discovery_agent.py
 │   ├── enrichment_agent.py
 │   ├── analysis_agent.py
@@ -307,7 +309,7 @@ jobscout/
 This is an active project. Current state (August 2026):
 
 - ✅ End-to-end pipeline working with real data
-- ✅ Multi-agent architecture with ADK
+- ✅ Four-agent pipeline sequenced by one orchestrator (no agent framework)
 - ✅ Composite component scoring (embeddings + keywords + importance + conditional triggers)
 - ✅ Validation + repair loop for generation failures
 - ✅ Deterministic bullet-length fitting (LLM writes, Python fits)

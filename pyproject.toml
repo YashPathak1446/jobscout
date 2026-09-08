@@ -31,7 +31,6 @@ classifiers = [
 # widely-used package and this is an application rather than a library — a
 # caller cannot be caught in a version conflict with us.
 dependencies = [
-    "google-adk>=1.0.0",
     "google-genai>=1.0.0",
     "python-dotenv>=1.0.0",
     "requests>=2.31.0",
@@ -42,10 +41,11 @@ dependencies = [
     "pydantic>=2.0.0",
     "streamlit>=1.30.0",
     # Used by `api/main.py`, documented in the README, launched by
-    # `.claude/launch.json` — and declared nowhere until now. They resolved
-    # because `google-adk` happens to pull FastAPI in, which is a coincidence
-    # rather than a dependency. R80's shape: fine where the author is, absent
-    # from the manifest, invisible until a clean container builds.
+    # `.claude/launch.json` — and declared nowhere until R80. They resolved
+    # because `google-adk` pulled FastAPI in, which was a coincidence rather
+    # than a dependency. R80's shape: fine where the author is, absent from
+    # the manifest, invisible until a clean container builds. `google-adk` is
+    # gone as of R85, so these are now the only thing declaring FastAPI.
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.27.0",
 ]

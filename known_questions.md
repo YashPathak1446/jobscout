@@ -7772,6 +7772,91 @@ UI tests fail with the add control removed, checked.
 
 ---
 
+## R85. The dependency nothing imported, and the coincidence it was supplying
+
+**Decision:** (2026-09-07) `google-adk` is removed from `pyproject.toml` and
+`requirements.txt`. Nothing in this repo has ever imported it. The only real
+Google import is `from google import genai`, which is `google-genai` — a
+different distribution, still declared, still needed.
+
+It was found while scoping the container build, on the reasoning that a
+manifest wrong in a checkout is a manifest that fails at `docker build`.
+
+### What it was actually holding up
+
+R80 recorded that `fastapi` and `uvicorn` resolved for months only because
+`google-adk` pulled FastAPI in transitively, and fixed it by declaring them.
+That fix was never *exercised* — the transitive supplier was still installed,
+so a machine could not tell a working declaration from a redundant one. This
+change removes the supplier, which is what turns R80 from a written-down fix
+into a demonstrated one. `fastapi 0.141.1`, `uvicorn 0.52.4` and
+`starlette 1.6.0` are all present in the clean environment afterwards, and now
+only our own two lines put them there.
+
+The open question was whether anything *else* was freeloading on the same
+coincidence. **Nothing was.** Sixteen distributions leave with it —
+`Authlib`, `joserfc`, `aiohttp` and its five transitives, `aiosqlite`,
+`graphviz`, the three `opentelemetry-*`, `tzlocal` — and not one of them is
+imported anywhere in `agents/ api/ tools/ scripts/ tests/ config.py app.py`.
+Nothing was added to the manifest to compensate.
+
+### The number is weaker than the argument that motivated it
+
+95 packages and 488 MB of site-packages before; 79 and 450 MB after. **−16
+packages, −38 MB.**
+
+38 MB against a 1.75 GB image is about 2%, so "ADK is heavy and TeX Live needs
+the room" is **not** what the measurement says, and recording it that way
+would have put a false premise in this log with a number attached to make it
+look checked. The 17% drop in package count is the more useful figure — fewer
+suppliers, smaller surface — and the durable reason is neither: the manifest no
+longer depends on a coincidence to supply the web server it ships.
+
+That is the R81 rule applied before the fact rather than after: the result was
+re-derived once before being written down, and the framing did not survive it.
+
+### The suite is the wrong instrument for this class of bug
+
+`test_packaging.py::test_every_third_party_import_is_a_declared_dependency`
+was built for exactly this failure and **cannot** catch it in the environment
+where it matters. Its `if not dists: continue` branch abstains when a package
+is not installed, deliberately, so that a lean machine does not fail the suite
+for the wrong reason. A freeloading dependency is therefore invisible to it
+precisely when it has gone missing — it surfaces as an `ImportError` at
+collection instead.
+
+That is not a defect in the test; abstaining beats guessing. It is a statement
+about where the instrument lives. **A clean virtual environment is the
+measuring device for a manifest, and the suite is not.** The same is true one
+level up, which is why the container is worth building before trusting either.
+
+### Surfaced, not fixed
+
+`"google adk"` is in `BOLD_KEYWORDS` (`tools/resume/latex_parser.py:83`) and
+asserted by `tests/test_skill_evidence.py:235`, fed by a fixture local to that
+file (`tech="Python, Google ADK, Gemini, React"`, `:69-70`). Neither is coupled
+to the manifest and neither moved. That is a claim on generated resumes, and
+`user_profiles/yash_pathak.*.json` lists the same string as a skill — a
+question about a real resume, not a code dependency, and the author's to
+answer.
+
+### Verified
+
+Clean venv built from the edited `requirements.txt`, Python 3.14.2.
+**1035 tests, OK (skipped=1), 76.4s.** Three baselines match the manifest.
+`--rung none` passes 3 of 3, `4 valid / 48.9%`, `6 valid / 59.9%`,
+`2 valid / 42.0%` — identical to R84's recorded numbers, which is the point:
+the removal moved nothing. `pip check` reports no broken requirements, and
+`api.main`, `app` and `agents.orchestrator` all import.
+
+A control venv built from the *pre-edit* manifest passes the suite too, so
+"passes without ADK" is a comparison and not a bare assertion.
+
+`jobscout.egg-info/requires.txt` still lists `google-adk`. It is a build
+artifact, regenerated on the next build, and was deliberately not hand-edited.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format
