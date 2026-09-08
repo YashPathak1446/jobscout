@@ -8307,6 +8307,21 @@ probe has to be run from a home connection as a control.
 
 ---
 
+## Q33. A cap that never binds is not a measurement
+
+**Status:** Open, found 2026-09-08 while verifying the corpus inside the
+runtime image. `.claude/skills/verify-run/SKILL.md:30` describes
+`tests/fixtures/acceptance_jobs.json` as "20 jobs". It is a list of **7**.
+`acceptance.py:311` passes `max_jobs=20`, which is a *cap*, not a count —
+and **against a 7-job corpus the cap never binds, so 20 was never a
+measurement of anything.** That is why it went stale unnoticed: a number
+nothing constrains cannot be contradicted by a run, so no run could ever
+disagree with it. The same shape as R55's comment crediting a guard that
+never fired, and as the `fly.toml` comment that named a variable nothing read
+(R89) — a true-looking sentence with nothing on the other end of it.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format
