@@ -73,8 +73,22 @@ gate.** Verified against the tree on 2026-09-02, not from memory.
       open, `/api/board` is 401 without the secret and 200 with it, and the
       React build serves (R86). The suite does **not** fully pass in-image; see
       Q29, and it does not block acceptance
-- [~] Secrets: Gemini key via `fly secrets`, never in the image — **decided and
-      written down** (`fly.toml:67`), executes at deploy
+- [x] **And it passes them on the image that actually ships** — the line above
+      is about `--target verify`, which copies all of `tests/`. Fly deploys
+      `--target runtime`, which carried no `tests/fixtures/` at all, so
+      `acceptance.py` died on a missing corpus there while passing in `verify`
+      (R89). Fixed and then *demonstrated* rather than asserted: `--rung none`
+      inside `jobscout:rt`, a fresh `/data` holding only Priya's three files,
+      **3 of 3, exit 0**, on `gemini / gemini-embedding-001` — reproducing
+      R86's 4/48.9%, 6/59.9%, 2/42.0% exactly. A stage that carries the tests
+      is not the artifact; the gate has to run on the thing being shipped
+- [x] Secrets: Gemini key via `fly secrets`, never in the image — and the
+      variable is **`GOOGLE_API_KEY`**. `fly.toml:67` said `GEMINI_API_KEY`,
+      which nothing reads (`config.py:173` is the only definition), so
+      following this repo's own deploy instruction would have set a secret
+      that goes unread and left the app on local embeddings. R87's abstain
+      path catches that — NOT COMPARABLE, exit 1 — but the round trip is
+      spent on a typo. Corrected in R89; still executes at deploy
 - [ ] **Deploy, then run `scripts/acceptance.py` against the instance** —
       **all three fixtures, and PDF import does get tested on Fly.** Priya's
       `.tex`, `.pdf` and profile are committed as of 2026-09-07 (`git add -f`,
@@ -86,6 +100,13 @@ gate.** Verified against the tree on 2026-09-02, not from memory.
       fixture** — safe now precisely because those files are synthetic and in
       the repo. Without that seed the run is two fixtures and silently loses
       the only PDF-import test.
+      The layout is `/data/user_profiles/priya_raghunathan.json` and
+      `/data/data/master_resumes/priya_raghunathan.{tex,pdf}` — the doubled
+      `data/` is real, because `master_resume_path` carries that prefix inside
+      the profile JSON and `orchestrator.py:701` joins it to the data home.
+      Rehearsed locally against a fresh mount, so B5 is a known quantity: the
+      gate leaves eight files behind, adding `jobs.db`, the two rebuilt
+      `acceptance_*` profiles and their imported `.txt` resumes.
       This item read "two fixtures, not three" for part of one day, on the
       premise that Priya was a real person and could not be published. She is
       not; see R88.
