@@ -9,7 +9,7 @@ correctness before contact. This one is optimised for contact.
 
 ## The arithmetic that changed the plan
 
-Ten days of work. 1019 tests, three frozen baselines, 84 decision records, two
+Ten days of work. 1035 tests, three frozen baselines, 84 decision records, two
 PyPI releases. **Zero people have used it.** Not one.
 
 The single item capable of producing failure — *watch one real person use it* —
@@ -27,27 +27,64 @@ up, not in case they do.
 
 ## The week
 
-| Day | Work | Done |
+**Day numbers were dropped on 2026-09-02.** The plan was written on 2026-08-28
+as five consecutive days. What happened was one working day (08-28), four
+calendar days with no commits, and one day spent on tooling that was not on
+this plan (09-02). A unit that has stopped measuring anything is worse than no
+unit — "Day 3" now names neither a date nor an amount of work. The gates below
+are ordered and they are not dated, because the ordering is the real content
+and the dates were the fiction.
+
+| # | Gate | State |
 |---|---|---|
-| **1–2** | React + FastAPI in a container, TeX Live, deployed on Fly, your profile as the only user | [ ] |
-| **3** | Managed auth (Clerk or Supabase) + `user_id` threaded through the stores | [ ] |
-| **4** | Landing page — what it does, who it is for, a screenshot, a signup | [ ] |
-| **5** | Post it. r/cscareerquestions, Hacker News, new-grad Discords, LinkedIn | [ ] |
+| **1** | React + FastAPI in a container, TeX Live, on Fly, your profile as the only user | **built, not deployed** — see below |
+| **2** | Managed auth (Clerk or Supabase) + `user_id` threaded through the stores | not started |
+| **3** | Landing page — what it does, who it is for, a screenshot, a signup | not started |
+| **4** | Post it. r/cscareerquestions, Hacker News, new-grad Discords, LinkedIn | not started |
+
+Gate 1 is the only one whose *state* has ever been wrong in this file. It read
+"not started" until 2026-09-02, four days after the commit that built it
+(`20ef0fb`). Check the tree before writing a state into this table.
 
 **No payments.** Free while you find out whether anyone wants it. Billing is
 Phase 4's content and Phase 4 does not start until people are using this.
 
-### Days 1–2 — the genuine unknown
+### Gate 1 — the genuine unknown
 
-This is the only part of the week that can fail for technical reasons, which
-is why it is first.
+This is the only part that can fail for technical reasons, which is why it is
+first. **Five of six items are done and the sixth is the whole point of the
+gate.** Verified against the tree on 2026-09-02, not from memory.
 
-- [ ] `fastapi` + `uvicorn` declared; `api` added to `packages` in `pyproject.toml`
-- [ ] FastAPI serves the built React (`StaticFiles`) — nothing does today
-- [ ] Dockerfile: node build stage for `web/`, python stage, `texlive-latex-extra`
-- [ ] Fly volume for `data/` — `runs.db`, `jobs.db`, caches, master resumes
-- [ ] Secrets: Gemini key via `fly secrets`, never in the image
-- [ ] Deploy, then run `scripts/acceptance.py` **against the instance**
+- [x] `fastapi` + `uvicorn` declared; `api` added to `packages` in `pyproject.toml`
+      *(`pyproject.toml:49-50`, `:76`)*
+- [x] FastAPI serves the built React (`StaticFiles`) *(`api/main.py:598`, mounted
+      last, which is load-bearing)*
+- [x] Dockerfile: node build stage for `web/`, python stage, `texlive-latex-extra`
+      *(claimed three stages and had two until R86; the third is `verify`,
+      which adds `tests/` and `baselines/` and is never deployed)*
+- [x] Fly volume for `data/` — `runs.db`, `jobs.db`, caches, master resumes
+      *(`fly.toml`, `jobscout_data` → `/data`, with `JOBSCOUT_HOME` anchored there)*
+- [x] Shared secret in front of everything, so the instance is testable without
+      being open *(`api/main.py:109`, `tests/test_hosted_boundary.py`)* — this
+      was the sequencing fix below, and it landed with the container
+- [x] **The image builds and passes its own gates locally** — `--target verify`
+      runs the baselines and `acceptance.py --rung none` inside the container,
+      3 of 3, and a smoke run against `--target runtime` confirms `/healthz` is
+      open, `/api/board` is 401 without the secret and 200 with it, and the
+      React build serves (R86). The suite does **not** fully pass in-image; see
+      Q29, and it does not block acceptance
+- [~] Secrets: Gemini key via `fly secrets`, never in the image — **decided and
+      written down** (`fly.toml:67`), executes at deploy
+- [ ] **Deploy, then run `scripts/acceptance.py` against the instance**
+
+**Everything except the deploy is done.** The remaining item is not the small
+one: it is the only step that produces information nobody here has. A container
+that builds is not a container that runs, and the acceptance run against a
+deployed instance is what Phase 0 was frozen in order to make possible.
+
+Note what the last item costs on a model rung: Q27 says a gemini row flips
+PASS/FAIL on identical code, so gate on the `none` row against the instance and
+read the rest as a measurement with a date.
 
 **Worker: keep the thread.** `start_run` backgrounds against `data/runs.db`, so
 the change is where that store lives, not how it works. A restart loses an
@@ -55,14 +92,14 @@ in-flight run; for one user that costs one re-run. An always-on machine (no
 scale-to-zero) is what makes that acceptable — and it is the reason for Fly
 over Render's spin-down.
 
-### Day 3 — auth
+### Gate 2 — auth
 
 An afternoon, not five days. Managed provider; rolling your own is a security
 liability on a system holding other people's resumes. The account-readiness
 audit already found every store takes a path, so this is threading a `user_id`,
 not a redesign.
 
-### Days 4–5 — the part that has never been done
+### Gates 3–4 — the part that has never been done
 
 Landing page, then post it. **Tech roles only** — see the hold below.
 
@@ -106,18 +143,25 @@ than "everyone's resume".
 
 ### The sequencing problem nobody listed
 
-`api/main.py` pins CORS to `http://localhost:5173`, with a comment saying the
-hosted tier will not use this list. **That line is currently the only thing
-between 19 unauthenticated endpoints and the internet**, and the Day 1–2
-deploy requires changing it.
+`api/main.py` pinned CORS to `http://localhost:5173`, and **that line was the
+only thing between 19 unauthenticated endpoints and the internet** — which is
+what made authorization a precondition of deploying rather than a gate 2 task.
 
-So authorization is not a Day 3 task that happens to come after the deploy —
+**Resolved by `20ef0fb` (2026-08-28), and the reasoning was corrected on the
+way.** The CORS list did not need replacing: deployed, it is simply *unused*,
+because the API serves the React build from its own origin, so the browser
+never makes a cross-origin request (`api/main.py:88-94`). What needed replacing
+was the protection it had been providing by accident, and that is the shared
+secret. Do not "fix" CORS for the deploy; there is nothing there to change.
+
+So authorization is not a gate 2 task that happens to come after the deploy —
 it is a **precondition of the deploy being reachable**. The cheap resolution
 keeps the week intact:
 
-- [ ] Days 1–2 ship behind a **single shared secret** (HTTP basic or a header
-      check, ~20 min) so the instance is testable without being open
-- [ ] Day 3's managed auth replaces it, and every endpoint gets an
+- [x] Gate 1 ships behind a **single shared secret** (HTTP basic or a header
+      check, ~20 min) so the instance is testable without being open — **done**,
+      `api/main.py:109`, landed with the container on 2026-08-28
+- [ ] Gate 2's managed auth replaces it, and every endpoint gets an
       authorization check — not just a sign-in — because *"people can log in"*
       and *"people can only see their own data"* are different properties and
       the second is the one a stranger notices
@@ -126,10 +170,10 @@ keeps the week intact:
 
 - [ ] **Deletion and retention** — a legal obligation the moment the first
       stranger uploads, not the Phase 5 polish item the old plan had it as.
-      Needed by Day 5, before posting.
+      Needed before gate 4, before posting.
 - [ ] **Rate limiting on `/api/run`** — it triggers a multi-minute job that
       spends quota. One run per user is an existing guard; a request-level
-      limit is not. Needed by Day 5. Pairs with Q24's spend ceiling.
+      limit is not. Needed before gate 4. Pairs with Q24's spend ceiling.
 - [ ] **Scraping from Fly's egress** — verify discovery still works from a
       datacenter IP on day one of the deploy. Cloudflare in front of an ATS
       behaves differently for cloud ranges than for a residential connection.
@@ -177,7 +221,7 @@ on rather than a guess you have doubled.
   reachable. This is a settings page in your Google Cloud console, so it is
   yours to do, not something in this repo.
 - **Q27 — the acceptance run is not reproducible on model rungs.** Taken as
-  part of Days 1–2 rather than before them: the exit check is this run against
+  part of gate 1 rather than before it: the exit check is this run against
   the deployed instance, and a gate that flips on identical code cannot say
   whether the container broke anything. If extraction caching runs past an
   hour, gate on the `none` row alone and move.
@@ -194,7 +238,7 @@ someone you asked. That is the version that tells you something.
 | | Planned | Actual | State |
 |---|---|---|---|
 | **Phase 0** · Freeze, prove, publish | 5 d | 1 d | **done**, 1 item skipped |
-| **The week** · deployed, auth, posted | 5 d | — | not started |
+| **The week** · deployed, auth, posted | 5 d | 2 d over 6 calendar days | **gate 1 built, not deployed**; gates 2–4 not started |
 | *After validation* | — | — | gated on users existing |
 
 ### Phase 0 — what closed it
@@ -206,7 +250,7 @@ someone you asked. That is the version that tells you something.
 - [x] The Ollama measurement (R81)
 - [x] Publish — `v0.2.0` on PyPI, not just tagged
 - [x] Packaging and path resolution, pulled forward (R80)
-- [ ] Watch one real person — **skipped**, now Day 5+ against the URL
+- [ ] Watch one real person — **skipped**, now after gate 4 against the URL
 
 | Exit condition | State |
 |---|---|
@@ -224,7 +268,7 @@ content is right; only the timing was wrong.
 **Multi-user data model (6 d).** Q15's blockers: `EmbeddingCache` is one global
 file keyed on resume hash, `job_cache.json` likewise, outputs keyed on date
 alone so two users on one day collide, and the shared LLM cache is a privacy
-boundary. Day 3 does the minimum of this; the rest waits.
+boundary. Gate 2 does the minimum of this; the rest waits.
 
 **Waitlist and manual invoicing (1 d).** *Not* Stripe. What kills the estimate
 is the entity, the ToS, the refund policy, and the metering that stops a paid

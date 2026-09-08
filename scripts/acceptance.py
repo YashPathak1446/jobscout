@@ -44,6 +44,8 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
+from tools import paths  # noqa: E402  (needs ROOT on sys.path first)
+
 
 # --- what is under test ------------------------------------------------------
 #
@@ -67,7 +69,14 @@ CORPUS = ROOT / "tests" / "fixtures" / "acceptance_jobs.json"
 
 FIXTURES = {
     "priya": {
-        "resume": ROOT / "data" / "master_resumes" / "priya_raghunathan.pdf",
+        # The data home, not ROOT: `data/master_resumes/` is a person's own
+        # file and lives wherever their data lives, while ROOT is the install.
+        # The two fixtures below correctly use ROOT — `tests/fixtures/` ships
+        # with the code. Getting this wrong was invisible in a checkout, where
+        # `data_home()` *is* ROOT, and fatal in a container, where it is /data
+        # against /app and /app/data is deliberately never built (R86).
+        "resume": paths.data_home() / "data" / "master_resumes"
+                  / "priya_raghunathan.pdf",
         "profile": "priya_raghunathan",
         "why": "six years, Boston, imported from a PDF this repo did not make",
     },

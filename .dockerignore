@@ -6,9 +6,15 @@
 data/
 user_profiles/
 outputs/
-baselines/
 .cache/
 *.db
+
+# `tests/` and `baselines/` are NOT excluded, though neither reaches the
+# shipping image: they are copied only by the `verify` stage, which
+# `--target runtime` stops before. They are code and frozen measurements
+# rather than anyone's data, and the exit condition for the container is that
+# the suite, the baselines and acceptance all run *inside* it — which the
+# exclusion made impossible.
 
 # Secrets. `fly secrets` sets these at runtime; an image with a key baked in
 # is a key published to anyone who can pull it.
@@ -31,7 +37,6 @@ dist/
 .git/
 .github/
 .claude/
-tests/
 docs/
 *.md
 !README.md

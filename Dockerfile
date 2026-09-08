@@ -1,7 +1,12 @@
 # JobScout, hosted.
 #
-# Three stages so the ~1 GB of TeX Live is not carried through a node install,
-# and so the frontend's node_modules never reaches the running image.
+# Three stages. `web` builds the React app with node; `runtime` is what ships —
+# Python, TeX Live, the source, the built frontend; `verify` adds the test suite
+# and the frozen baselines and is never deployed.
+#
+# The split keeps node_modules and the tests out of the running image, and keeps
+# the ~1 GB of TeX Live out of the node install. Build the first two with
+# `--target runtime`; `--target verify` is the gate, not the artifact.
 #
 # The genuine unknown this exists to answer is whether pdflatex compiles the
 # real template inside a container at all. Everything else here is plumbing;
@@ -78,3 +83,30 @@ EXPOSE 8080
 # start under one and be invisible to the other. Multiple workers arrive with
 # a real queue, not before.
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+
+
+# ---------------------------------------------------------------- verify ----
+# Never deployed. `--target runtime` stops above this line, so the shipping
+# image contains no tests; `--target verify` adds exactly what the three gating
+# commands need and nothing else.
+#
+# This exists because the exit condition for the container is "the suite, the
+# baselines and `acceptance.py --rung none` all pass *inside the image*" — and
+# none of them could. `.dockerignore` kept `tests/` and `baselines/` out of the
+# build context entirely, and `acceptance.py` reads its frozen corpus from
+# `tests/fixtures/acceptance_jobs.json`.
+#
+# Both land at /app because `acceptance.py` and `baseline.py` resolve their
+# roots as `Path(__file__).parent.parent`, which is /app here — not at the data
+# home. They are code and measurements, not user data; `data/`,
+# `user_profiles/`, `outputs/` and `*.db` stay out of the context.
+#
+# Note this stage is the only one where `tests/` exists, and `paths.in_checkout()`
+# branches on `tests/` being present. It stays False because `pyproject.toml` is
+# deliberately not copied, and `JOBSCOUT_HOME` outranks it either way — but a
+# future `COPY pyproject.toml` here would silently move the data home to /app,
+# an image layer replaced on every deploy.
+FROM runtime AS verify
+
+COPY tests/ ./tests/
+COPY baselines/ ./baselines/

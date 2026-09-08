@@ -7857,6 +7857,141 @@ artifact, regenerated on the next build, and was deliberately not hand-edited.
 
 ---
 
+## R86. The invariant was written down, and the code broke it where nobody walks
+
+**Decision:** (2026-09-07) Four sites that reached for user data through the
+*install* directory now resolve through `tools.paths`. The container is what
+found them, before it ran.
+
+CLAUDE.md states the rule in so many words, after the wheel that could not
+render a resume: *"Nothing may compute `Path(__file__).parent.parent` and reach
+for `data/`."* It was correct, it was written down, and:
+
+- `agents/orchestrator.py:690-693` resolved a relative `master_resume_path`
+  against `Path(__file__).parent.parent` — on **every run**
+- `scripts/init_profile.py` stored that path relative to the same place, and
+  re-read it there in `rebuild_components`
+- `scripts/acceptance.py` looked for Priya's PDF under the install
+- `tools/profile/profile_loader.py` found `user_profiles/` from `Path.cwd()`
+  and did not import `tools.paths` at all
+
+### Why a rule that was written down did not hold
+
+**In a checkout, `data_home()` *is* the repo root.** Every wrong spelling and
+the right one name the same directory, so nothing diverges, no test can see it,
+and the author never walks the path where they differ. R69/R70's shape exactly:
+the fix landed where the author goes.
+
+The profile split is the sharpest of the four, because it is one feature
+resolving one directory two ways. `init_profile` **writes** through
+`paths.user_path` — migrated in R80 — and `profile_loader` **reads** through
+`Path.cwd()`, which R80 never touched. Hosted, that is `/data/user_profiles`
+against `/app/user_profiles`: the wizard saves a profile, the API answers 200,
+and the dropdown is empty. Every run then fails on a profile that imported
+perfectly.
+
+A fifth, found by running it rather than reading it:
+`paths.user_path("user_profiles", create_parent=True)` creates the *data home*,
+not the directory — and unlike `RESUME_DIR` nothing ever called `mkdir` on it.
+On a fresh volume the first profile write raises `FileNotFoundError`. Invisible
+in a checkout, where `user_profiles/` is in git.
+
+### The container found it before the container ran
+
+None of this came from a deploy. It came from asking what
+`acceptance.py --rung none` would do inside an image and reading the paths —
+`acceptance.py:368` checks `spec["profile"] in list_available_profiles()`, which
+would have received `[]` for **all three fixtures**, including the two that
+build their own profiles moments earlier. That is the argument for having an
+exit condition that names a real environment: it pays out before it is run.
+
+### Verified
+
+`--target runtime` is the shipping image and contains no `tests/` or
+`baselines/`; `--target verify` adds them. Checked, because "obviously true" is
+what this repo keeps finding is not.
+
+Inside the container: three baselines match; `acceptance.py --rung none`
+**passes 3 of 3**. Smoke against the *runtime* image — the artifact, which no
+`python` invocation above touches: `/healthz` 200 unauthenticated,
+`/api/board` 401 without the secret and 200 with it, React served from the
+API's own origin.
+
+The suite does not fully pass in-image. See Q29; it does not block acceptance,
+so plan.md's rule 3 applies and this gate proceeds.
+
+### R85's Linux measurement, and an instrument that nearly lied
+
+R85 recorded **79 packages / 450 MB** of site-packages on Windows / Python 3.14
+and said a Linux / 3.12 number was owed. Measured inside `jobscout:run`:
+**78 packages / 565 MB**. One package fewer and 115 MB larger — Windows carries
+`colorama` and `tzdata`, Linux carries `uvloop` (`uvicorn[standard]` installs it
+only on POSIX), and the rest is Linux wheels being bigger. Image size is
+**1.71 GB**, which is a different quantity and is recorded as one.
+
+The acceptance numbers first came back **6 / 81.2%, 6 / 85.0%, 6 / 77.5%**
+against R84's `4 / 48.9%, 6 / 59.9%, 2 / 42.0%` — a difference large enough to
+read as a platform regression. It was not. `.env` is dockerignored, correctly,
+so the container had no key and fell back to local embeddings:
+`('local', 'minishlab/potion-base-8M', 256)` against
+`('gemini', 'gemini-embedding-001', 768)`, a different model, a different
+dimensionality and a different normalisation band. Re-run with the key passed
+in, the container reproduces **4 / 48.9%, 6 / 59.9%, 2 / 42.0%** exactly.
+
+**So the acceptance numbers held across platform and Python version, and the
+first reading compared two different measurements.** R81's rule pointed at this
+project's own harness: check the instrument before trusting the reading, and
+re-derive a result that is surprising enough to change a conclusion. The
+free-tier numbers are the more interesting half — they are what a stranger with
+no key gets — but they are a separate measurement and are not comparable to the
+frozen ones.
+
+---
+
+## Q29. Part of this suite tests the repository, not the product
+
+**Status:** Open, found 2026-09-07 while running the suite inside the container
+for the first time (R86). **1027 tests ran, 35 errors and 1 failure**, against
+1035 passing on the host. Nothing here blocks `acceptance.py --rung none`, so
+plan.md's rule 3 applies: logged, not fixed.
+
+Two distinct groups, and the second is the interesting one.
+
+**Harness path assumptions — about 20.** `tests/test_board_facades.py:42` is
+`TEMP = ROOT / "user_profiles" / "_board_test.json"`: the test writes its
+fixture to the install directory while the product now correctly reads the data
+home. This is R86's own bug, surviving in the tests that were supposed to guard
+against it — and it is invisible in a checkout for the same reason R86 was.
+`test_page_is_a_page` fails the same way.
+
+**Tests that inspect the repository — about 16.** `test_form_and_renderer_agree`
+reads `web/src/components/*.tsx`; `test_backend_selection` shells out to `git`
+and reads `RunStep.tsx`; `test_packaging` reads `pyproject.toml`. None of those
+are in a shipping image and **none of them should be** — `pyproject.toml` in
+particular would flip `in_checkout()` to True and silently move the data home
+into an image layer.
+
+So **"the whole suite passes inside the container" was never a coherent bar**,
+which is R81's third finding again: the bar itself was wrong. A shipping image
+is not a checkout, and a test that asserts the React form offers every field
+the renderer prints is asserting something about a repository.
+
+The open question is which of three this should become: fix the ~20 harness
+paths and add skip guards to the ~16 so the suite passes honestly in both
+places; split a "product" suite from a "repository" suite and run only the
+first in-image; or accept that the suite is a checkout-only gate and say so, and
+let the container's bar be the baselines and acceptance, which is what it
+actually is today.
+
+Related: **`pyarrow` is 156 MB, the single largest package in the image**, and
+it arrives via `streamlit` — which exists for `app.py`, the local UI the
+container never serves. With `pandas`, `pydeck` and `streamlit` itself that is
+roughly 290 MB of a 565 MB site-packages tree present for a front end the
+hosted product does not run. R85 removed a dependency nothing imported; this is
+a dependency something imports on a path the container never takes.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format

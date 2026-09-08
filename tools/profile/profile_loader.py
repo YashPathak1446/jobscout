@@ -13,9 +13,30 @@ from pathlib import Path
 from typing import Optional
 import logging
 
+from tools import paths
+
 from .profile_schema import UserProfile
 
 logger = logging.getLogger(__name__)
+
+
+def _default_profiles_dir() -> Path:
+    """
+    Where profiles live when the caller does not name a directory.
+
+    Through `tools.paths`, which is the one module that knows the difference
+    between a checkout, an installed copy and a container. This walked
+    `Path.cwd()` and its parent until R86 — while `init_profile` has *written*
+    through `paths.user_path` since R80, so the two halves of one feature
+    resolved the same directory by two different mechanisms.
+
+    In a container that is `/app/user_profiles` for the read against
+    `/data/user_profiles` for the write: the wizard saves a profile, the API
+    answers 200, and the dropdown is empty. Which is also why nothing caught
+    it here — in a checkout `data_home()` is the repo root and both spellings
+    happen to land on the same directory.
+    """
+    return paths.user_path("user_profiles")
 
 
 class ProfileLoadError(Exception):
@@ -44,19 +65,14 @@ def load_profile(profile_name: str, profiles_dir: Optional[str] = None) -> UserP
     """
     # Determine profiles directory
     if profiles_dir is None:
-        # Try to find user_profiles/ relative to current location
-        current_dir = Path.cwd()
-        if (current_dir / 'user_profiles').exists():
-            profiles_dir = current_dir / 'user_profiles'
-        elif (current_dir.parent / 'user_profiles').exists():
-            profiles_dir = current_dir.parent / 'user_profiles'
-        else:
-            raise ProfileLoadError(
-                f"Could not find user_profiles/ directory. "
-                f"Searched: {current_dir} and {current_dir.parent}"
-            )
+        profiles_dir = _default_profiles_dir()
     else:
         profiles_dir = Path(profiles_dir)
+
+    if not profiles_dir.is_dir():
+        raise ProfileLoadError(
+            f"Could not find user_profiles/ directory. Looked in: {profiles_dir}"
+        )
     
     # Build profile path
     profile_path = profiles_dir / f"{profile_name}.json"
@@ -96,13 +112,7 @@ def list_available_profiles(profiles_dir: Optional[str] = None) -> list[str]:
         List of profile names
     """
     if profiles_dir is None:
-        current_dir = Path.cwd()
-        if (current_dir / 'user_profiles').exists():
-            profiles_dir = current_dir / 'user_profiles'
-        elif (current_dir.parent / 'user_profiles').exists():
-            profiles_dir = current_dir.parent / 'user_profiles'
-        else:
-            return []
+        profiles_dir = _default_profiles_dir()
     else:
         profiles_dir = Path(profiles_dir)
     

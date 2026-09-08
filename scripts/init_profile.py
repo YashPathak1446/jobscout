@@ -45,7 +45,6 @@ from tools.profile.derivation import (  # noqa: E402
 )
 from tools.resume.resume_parser import ResumeParser  # noqa: E402
 
-ROOT = Path(__file__).parent.parent
 # Ships with the package; it is a starter, not one of the user's profiles.
 TEMPLATE = paths.asset("profile_template.json")
 
@@ -71,10 +70,16 @@ def build_profile(resume_path: Path, name: str) -> dict:
     profile["personal_info"].update(derived_info)
 
     rp = profile["resume_preferences"]
+    # Relative to the **data home**, which is what reads it resolves against
+    # (`orchestrator._refuse_an_empty_resume`, `rebuild_components` below). It
+    # was relative to the install directory, and in a checkout those are the same
+    # directory, so the mismatch only appeared in a container (R86).
     try:
-        rel = resume_path.resolve().relative_to(ROOT.resolve())
+        rel = resume_path.resolve().relative_to(paths.data_home().resolve())
         rp["master_resume_path"] = str(rel).replace("\\", "/")
     except ValueError:
+        # Outside the data home entirely — a temp dir, another drive. Store it
+        # absolute; there is no relative spelling that would mean anything.
         rp["master_resume_path"] = str(resume_path)
 
     rp["component_importance"] = {
@@ -102,6 +107,11 @@ RESUME_DIR = paths.user_path("data", "master_resumes", create_parent=True)
 # Where a person's profiles live. Seven sites read or wrote this from
 # the repo root; installed, that is site-packages.
 PROFILES = paths.user_path("user_profiles", create_parent=True)
+# `create_parent` makes the data home, not this directory. On a fresh volume
+# `user_profiles/` therefore did not exist and the first profile write failed
+# with FileNotFoundError — never seen in a checkout, where `data_home()` is the
+# repo root and this directory is already in git (R86).
+PROFILES.mkdir(parents=True, exist_ok=True)
 
 
 def save_resume(file_bytes: bytes, filename: str, backend: str = None) -> Path:
@@ -415,7 +425,8 @@ def read_component_rules(name: str) -> dict:
     profile = json.loads(path.read_text(encoding="utf-8"))
     rp = profile["resume_preferences"]
 
-    parser = ResumeParser(str(ROOT / rp["master_resume_path"]), skip_embeddings=True)
+    parser = ResumeParser(str(paths.data_home() / rp["master_resume_path"]),
+                          skip_embeddings=True)
     resume = parser.parsed_resume
 
     from tools.profile.derivation import merge_importance

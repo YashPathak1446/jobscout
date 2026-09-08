@@ -35,7 +35,7 @@ except ImportError:
 # Add project root to path (parent of agents/)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.paths import outputs_root
+from tools.paths import outputs_root, data_home
 from tools.profile import load_profile
 from tools.resume import ResumeParser
 from agents import DiscoveryAgent, EnrichmentAgent, AnalysisAgent, GenerationAgent
@@ -686,10 +686,19 @@ class JobScoutOrchestrator:
             'generation_results': [],
         }
         
-        # Resume path (resolved relative to project root)
+        # Resume path. A relative `master_resume_path` anchors at the data
+        # home, not at the code: `data/master_resumes/` is the user's own file
+        # and lives wherever their data lives, while
+        # `Path(__file__).parent.parent` is the install directory.
+        #
+        # In a checkout those are the same directory, which is the only reason
+        # this survived being written the wrong way (R86). In a container it is
+        # `/app/data/` against `/data/data/` — and `/app/data/` is
+        # dockerignored, so it never exists and every run dies on a profile
+        # that was imported perfectly.
         resume_path = self.profile.resume_preferences.master_resume_path
         if not Path(resume_path).is_absolute():
-            resume_path = str(Path(__file__).parent.parent / resume_path)
+            resume_path = str(data_home() / resume_path)
         self.resume_path = resume_path
 
         logger.info(f"📄 Resume: {resume_path}")
