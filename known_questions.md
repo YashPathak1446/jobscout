@@ -8248,6 +8248,65 @@ PDF import after all.
 
 ---
 
+## R89. The deploy config shipped the test image, and the gate could not see onboarding
+
+**Decision:** (2026-09-08) Four fixes ahead of the first deploy. `fly.toml` had
+no `build-target`, so `fly deploy` built the *last* Dockerfile stage — `verify`,
+the one documented as never deployed; the file predates that stage by ten days
+and nothing pointed them at each other. The shipping `runtime` stage carried no
+`tests/fixtures/`, so `acceptance.py` — the deploy's exit condition — died on a
+missing corpus on the instance while passing locally, where `verify` and
+`runtime` are built from the same tree. `fly.toml:67` named `GEMINI_API_KEY`;
+`config.py:173` reads `GOOGLE_API_KEY`. And `api/main.py:349` computed
+`RESUME_DIR` from `Path.cwd()`, R86's fifth site.
+
+**The last one was going to be logged, not fixed, and that was wrong.** The
+standing rule for this phase — *fix only what blocks the exit condition* —
+assumes the exit condition covers the goal. `acceptance.py` calls
+`create_profile` directly and never walks `POST /api/profile`, so the gate goes
+green on an instance where the wizard 404s on its confirm step and nobody can
+onboard. R81's mis-specified bar, one level up: **the gate was measuring
+something adjacent to what is cared about.** The correction is a fix plus a
+manual pass through the deployed UI, because the bar was the thing at fault.
+
+Two guards, because the fixtures COPY thins one: `in_checkout()` is
+`pyproject.toml AND tests/`, and the second is now True in the shipping image,
+leaving `pyproject.toml` alone between the container and a data home in an
+image layer. Pinned by a test rather than the comment that described it — that
+comment was wrong the moment the COPY landed. The corpus was **not** moved to
+`tools/assets/`: those three files are product-runtime data read on every user
+run and they ship in the wheel, and the move would edit four files including
+the frozen gate.
+
+**And the first draft of the twin test proved nothing** — it compared the two
+roots in a checkout, where `cwd` *is* the data home, so it passed against the
+broken code. It moves `JOBSCOUT_HOME` now. A test that checks one path against
+itself is the thing this codebase keeps re-learning.
+
+## Q31. The caches are cwd-relative and miss the volume
+
+**Status:** Open, found 2026-09-08 while reading the container's write paths.
+`cache/job_cache.json`, `cache/resume_embeddings.json`, `.cache/llm/` and
+`.cache/embeddings/` all resolve against the working directory, so on Fly they
+land in `/app` — an image layer replaced every deploy — while `fly.toml:19-22`
+and `Dockerfile:64-66` both state in writing that the caches are on the volume.
+Not fatal (caches rebuild, and a fresh volume has none anyway), but it re-spends
+Gemini quota on every deploy and the written invariant is false. Note
+`purge_fabricated.py:38` uses a third spelling that matches neither writer.
+
+## Q32. A blocked board and an empty board are the same event
+
+**Status:** Open, found 2026-09-08 while planning the datacenter-IP check.
+`ats_search._fetch` returns `None` for 403, 429, 404 and a Cloudflare HTML 200
+alike (the last fails in `json.loads`, not as an `HTTPError`), every reader
+turns that into `[]`, and `search_ats`'s counter conflates *blocked*, *gone* and
+*no open roles* at INFO. For a non-new-grad profile with no Serper/Adzuna keys
+ATS is the only source, so a block is a silent empty board — which is why
+verifying Fly's egress needs a probe that reads status codes, and why the same
+probe has to be run from a home connection as a control.
+
+---
+
 # Out of scope
 
 ## OOS1. DOCX output format
