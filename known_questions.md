@@ -8104,68 +8104,52 @@ The first two are open. Filed as Q30 rather than fixed here, since neither
 blocks the deploy gate and both are bigger than this change.
 
 
-## Q30. A baseline nobody else can reproduce, and a flag that half-fires
+## Q30. An ignore pattern ate a fixture, and a flag that half-fires
 
-**Status:** Item 1 is **a blocker for the Fly deploy gate**, not a log entry —
-escalated 2026-09-07, the same day it was filed, once its consequence for the
-instance run was worked through. Item 2 stays logged under rule 3.
+**Status:** Item 1 **resolved 2026-09-07** — the fixture is committed. Item 2
+stays open under rule 3. The entry is kept whole because item 1 went through a
+wrong answer on the way to the right one; that detour is R88.
 
-### 1. Priya's fixture is in no commit, and the instance cannot be given it
+### 1. A pattern protecting real resumes swallowed a fixture that is not one
 
-`.gitignore:91` ignores `user_profiles/*.json`; `.gitignore:74` ignores
-`data/master_resumes/*.tex`. Both patterns are right: they exist to keep a real
-person's resume and profile out of a public repository. But the harness never
-rebuilds Priya by design — *"profiles it does not own are used as they are"* —
-so the frozen row `6 valid, best job 59.9%` measures two files that exist on
-one laptop. A fresh checkout cannot run `--fixture priya` at all.
+`.gitignore:74` ignores `data/master_resumes/*.tex` and `:91` ignores
+`user_profiles/*.json`. Both are correct and both stay: they exist so that a
+real person's resume and profile cannot be committed by accident, and R38 and
+R51 are the entries explaining why the rule is *ignore by pattern, never by
+filename*.
 
-**The consequence nobody planned for.** Gate 1's exit condition is "deploy,
-then run `scripts/acceptance.py` against the instance". The instance *cannot
-run that fixture*. `.dockerignore` keeps `data/` and `user_profiles/` out of
-the image deliberately, and a Fly volume starts empty. R86's container run only
-worked because the files were hand-copied onto the mount, and there is no
-equivalent of that on Fly which is not a deliberate act of publishing.
+The cost of a pattern is that it cannot tell a category from a member.
+`priya_raghunathan` is an **invented** fixture — `priya.raghunathan@example.com`
+is the RFC 2606 reserved domain and `(617) 555-0142` is the reserved fictional
+number block, which is what a constructed resume looks like — and the pattern
+swallowed it exactly as it would swallow a real one. So the default fixture for
+"anything touching profile shape, gates, defaults or onboarding" shipped with
+nothing, the frozen row `6 valid, best job 59.9%` described two files on one
+laptop, and a fresh checkout could not run `--fixture priya` at all.
 
-**And the obvious workaround is the wrong one.** Copying Priya onto a
-production volume trades a `.gitignore` protection for a hosting one, on a
-machine that will shortly have a public URL and whose entire access control is
-one shared password. Do not do it. This entry previously reasoned that "she is
-a synthetic persona, so committing her is probably fine" — that was wrong, and
-it is precisely the reasoning this note now exists to stop.
+**Resolved by exception, not by redesign.** `git add -f` on the three files —
+`.tex`, `.pdf`, `.json` — and the patterns are untouched. A negation line in
+`.gitignore` would have been the wrong shape: it makes the *pattern* carry the
+list of exceptions, which is the filename-list failure R51 named, arriving one
+level up. An `add -f` records the exception in the commit that makes it, where
+it is visible, and leaves the rule saying only what it means.
 
-**A documentation hazard, which is how that error happened.** `CLAUDE.md:288`
-says Priya *"was invented to test the importer"*, while `CLAUDE.md:359` says
-she was *"imported from a PDF this repo did not produce"*. The first reading
-invites committing the file. The second is the one that governs. Worth
-reconciling in CLAUDE.md, because the dangerous reading is the one stated first
-and in bold.
+The `.pdf` is committed alongside the `.tex` deliberately. It is the only
+fixture in this repository in a format the repo does not write, so it is the
+only thing that tests the PDF import path — the path a stranger actually takes.
 
-**So the hosted gate runs two fixtures, not three — and it loses the only one
-that tests PDF import**, which is exactly the path a stranger takes: upload a
-resume this repo did not make, in a format it did not write. `two_degrees` and
-`glued_runs` are committed as anonymized *text*, so they exercise the parser
-and not the PDF reader.
-
-**For the deploy:** run the instance gate with the two committed fixtures, and
-record in that entry that **the hosted gate has never tested PDF import**. Not
-as a caveat discovered when the numbers come back a row short — as a stated
-hole, in advance.
-
-**The durable fix**, which is not deploy-week work: a committed *synthetic* PDF
-fixture standing in for her on the hosted gate — a resume this repo did make,
-rendered into a format it does not write, so the PDF path has something to
-read that nobody needs protecting.
-
-### The shape of it, which outlives the deploy
+### The shape, which outlives this instance
 
 **A frozen baseline nobody but its author can reproduce is not frozen, it is
-remembered.** A fresh checkout, a new laptop, or anyone reading this repository
-gets a manifest of numbers they cannot verify and an instruction to treat them
-as a bar. That is the same class of problem as R85's undemonstrated
-declaration: `fastapi` was declared and the declaration was never exercised,
-because the thing that would have tested it was still installed. Here the bar
-is written down and the inputs that produce it are not, so nothing can fail —
-which is also what made R87 possible.
+remembered.** A fresh checkout gets a manifest of numbers it cannot verify and
+an instruction to treat them as a bar. That is the same class as R85's
+undemonstrated declaration — written down, never exercised, therefore unable to
+fail — and it is what made R87 possible.
+
+Committing Priya fixes this instance and not the class. The question to keep
+asking is *what else do the ignore patterns eat that the baselines depend on?*
+Any measurement whose inputs are ignored has this property, and the ignore
+rules are broad by design because that is what makes them safe.
 
 ### 2. `--no-cache` does not reach the embeddings
 
@@ -8184,6 +8168,83 @@ passes one.
 **Left open deliberately.** It is a real defect, R11 genuinely holds it up, and
 a fresh Fly volume has an empty cache — so it cannot bite the first instance
 run, which is the thing this is being weighed against.
+
+
+## R88. A confident assertion overrode a correct reading, and got written down
+
+**Decision:** (2026-09-07) `priya_raghunathan`'s `.tex`, `.pdf` and profile are
+committed. She is an invented fixture. The retraction that briefly said
+otherwise is itself retracted, and the round trip is recorded because the
+mechanism is more interesting than the fact.
+
+### What happened
+
+Q30 originally read: *"she is a synthetic persona, so committing her is
+probably fine."* **That was right.** It was supported by `CLAUDE.md:288` —
+*"Priya was invented to test the importer"* — which had been in the repository
+the whole time and which this session had already read and quoted.
+
+It was then asserted, from outside the repository and with confidence, that
+Priya is a real person's real resume kept out of a public repo on purpose. The
+assertion was withdrawn a message later as *"more confidence than I'd earned"*.
+In between, this happened:
+
+- the correct sentence was deleted from `known_questions.md` and replaced with
+  an explicit retraction of itself
+- `CLAUDE.md:288` — the evidence — was reclassified as *"a documentation
+  hazard"* whose *"dangerous reading"* invited publishing a real person's file
+- Gate 1's deploy item in `plan.md` was marked blocked, losing the only fixture
+  that tests PDF import
+- all of it was committed and pushed
+
+The evidence never moved. Only the confidence did.
+
+### Why the guard did not fire
+
+The conflict *was* noticed. The retraction itself pointed out that
+`CLAUDE.md:288` says "invented" and `:359` says "imported from a PDF this repo
+did not produce", and called them contradictory. **They are not.** A resume can
+be constructed and rendered by something other than this repo — that is exactly
+what makes her useful for testing an importer, and it is what the two lines
+together say. The contradiction was manufactured to accommodate the assertion,
+and then the manufactured contradiction was used as evidence *for* it.
+
+The tell was available and cheap, and was only checked afterwards, when the
+`git add -f` was about to make something irreversible:
+`priya.raghunathan@example.com` is the RFC 2606 reserved domain and
+`(617) 555-0142` is the reserved fictional-number range. Both are the
+conventions that exist to say *this is not a real person*. **Two greps would
+have settled it before the retraction was written, not after.**
+
+### The rule
+
+**Deference is a fine default and a bad reason to edit the record.** Doing what
+someone asks is not the same as writing their claim into the permanent log as a
+finding — the first is reversible, the second is what the next reader will
+believe. Where an assertion contradicts documented evidence, the correct move
+is to say so and hold both, not to resolve it in the log and reclassify the
+evidence as a hazard.
+
+This is the shape R55 and R80 keep producing, from a new direction. Those were
+*"a correct sentence that stopped being correct while nobody was editing it"*.
+This is a correct sentence that stopped being correct **because** somebody
+edited it, on no new evidence. A doc entry has the same failure mode as a cache
+key: it encodes a claim about what is true, and the way it goes wrong silently
+is that the claim gets rewritten while the world does not.
+
+Practically, for this repository: `known_questions.md` is the substrate the
+next session reasons from. A wrong entry there is not a wrong sentence, it is a
+wrong premise with a number on it, and R44's verdict survived four months on
+exactly that basis.
+
+### Verified
+
+Committed by exception, not by loosening the rule: `git add -f` on the three
+files, with `.gitignore:74` and `:91` unchanged and still ignoring
+`yash_pathak.tex` and `yash_pathak.json`. `CLAUDE.md` now states the provenance
+in one place instead of two that could be read against each other. Gate 1's
+deploy item is unblocked and runs three fixtures, so the hosted gate does test
+PDF import after all.
 
 ---
 

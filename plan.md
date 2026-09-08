@@ -76,16 +76,19 @@ gate.** Verified against the tree on 2026-09-02, not from memory.
 - [~] Secrets: Gemini key via `fly secrets`, never in the image — **decided and
       written down** (`fly.toml:67`), executes at deploy
 - [ ] **Deploy, then run `scripts/acceptance.py` against the instance** —
-      **with two fixtures, not three.** Priya's profile and master resume are
-      gitignored (`.gitignore:74`, `:91`), the harness never rebuilds her, and
-      `.dockerignore` keeps `data/` and `user_profiles/` out of the image, so
-      the instance cannot run `--fixture priya`. Putting her on the volume
-      would trade a `.gitignore` protection for a hosting one on a box with a
-      public URL and one shared password — don't. **She is the only fixture
-      that tests PDF import**, the path a stranger actually takes, so the
-      hosted gate has a stated hole in it until a committed synthetic PDF
-      fixture replaces her (Q30). Record that in the entry, not as a surprise
-      when the report comes back a row short.
+      **all three fixtures, and PDF import does get tested on Fly.** Priya's
+      `.tex`, `.pdf` and profile are committed as of 2026-09-07 (`git add -f`,
+      an exception; the ignore patterns stand), so nothing has to be published
+      to run the full gate.
+      One mechanical step remains and it is not a blocker: `.dockerignore`
+      keeps `data/` and `user_profiles/` out of the image by design and a Fly
+      volume starts empty, so the deploy **seeds the volume from the committed
+      fixture** — safe now precisely because those files are synthetic and in
+      the repo. Without that seed the run is two fixtures and silently loses
+      the only PDF-import test.
+      This item read "two fixtures, not three" for part of one day, on the
+      premise that Priya was a real person and could not be published. She is
+      not; see R88.
 
 **Everything except the deploy is done.** The remaining item is not the small
 one: it is the only step that produces information nobody here has. A container

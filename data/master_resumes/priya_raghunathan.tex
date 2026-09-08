@@ -1,0 +1,173 @@
+%-------------------------
+% Resume in Latex
+% Base template: Jake Gutierrez - https://github.com/jakegut/resume
+% License : MIT
+%------------------------
+
+\documentclass[letterpaper,11pt]{article}
+
+% No \usepackage[T1]{fontenc} here, and that is deliberate (R69).
+%
+% T1 does fix the three glyphs OT1 gets wrong — `<`, `>` and a literal tilde —
+% and it was tried. It also breaks the ToUnicode mapping for the en-dash, so
+% every date range extracts from the PDF as a control character instead of
+% "2021 - 2025". For a resume that ATS software reads as text, trading every
+% date for three glyphs is the wrong way round. Measured by compiling both
+% ways and extracting the text, not assumed.
+%
+% The glyphs are handled where they arise instead: escaped in the two
+% renderers, with a tilde written as $\sim$ rather than \textasciitilde.
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\input{glyphtounicode}
+
+
+%----------FONT OPTIONS----------
+% sans-serif
+% \usepackage[sfdefault]{FiraSans}
+% \usepackage[sfdefault]{roboto}
+% \usepackage[sfdefault]{noto-sans}
+% \usepackage[default]{sourcesanspro}
+
+% serif
+% \usepackage{CormorantGaramond}
+% \usepackage{charter}
+
+
+\pagestyle{fancy}
+\fancyhf{} % clear all header and footer fields
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Adjust margins
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-.5in}
+\addtolength{\textheight}{1.0in}
+
+\urlstyle{same}
+
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Sections formatting
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+% Ensure that generate pdf is machine readable/ATS parsable
+\pdfgentounicode=1
+
+%-------------------------
+% Custom commands
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubSubheading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \textit{\small#1} & \textit{\small #2} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{-4pt}}
+
+\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+%-------------------------------------------
+%%%%%%  RESUME STARTS HERE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\begin{document}
+
+%----------HEADING----------
+% \begin{tabular*}{\textwidth}{l@{\extracolsep{\fill}}r}
+%   \textbf{\href{http://johndoe.com/}{\John Doe}} & Email : \href{mailto:johndoe@gmail.com}{johndoe@gmail.com}\\
+%   \href{http://johndoe.com/}{http://www.johndoe.com} & Mobile : +1-123-456-7890 \\
+% \end{tabular*}
+
+\begin{center}
+    \textbf{\Huge \scshape Priya Raghunathan} \\ \vspace{1pt}
+    \small (617) 555-0142 $|$ \href{mailto:priya.raghunathan@example.com}{\underline{priya.raghunathan@example.com}} $|$ \href{linkedin.com/in/priyaraghunathan}{\underline{LinkedIn}} $|$ \href{github.com/praghunathan}{\underline{GitHub}}
+\end{center}
+
+\section{Education}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {Northeastern University}{Boston, MA}
+      {Bachelor of Science in Computer Engineering}{Sep 2014 - May 2018}
+  \resumeSubHeadingListEnd
+
+\section{Experience}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {Staff Software Engineer}{Mar 2023 - Present}
+      {Wayfair}{Boston, MA}
+      \resumeItemListStart
+        \resumeItem{Led the migration of the checkout ledger from a single Postgres instance to a sharded topology, cutting p99 write latency from 340ms to 48ms across 12 shards with no customer-visible downtime.}
+        \resumeItem{Designed an idempotency layer for payment retries that eliminated roughly 4,200 duplicate charges per month.}
+        \resumeItem{Mentored four engineers through promotion; ran the team's design review process.}
+      \resumeItemListEnd
+    \resumeSubheading
+      {Senior Software Engineer}{Jun 2020 - Feb 2023}
+      {Toast}{Boston, MA}
+      \resumeItemListStart
+        \resumeItem{Built the restaurant onboarding API in Java and Kotlin, serving 18K+ merchants and sustaining 2.5K requests per second at peak.}
+        \resumeItem{Cut nightly settlement job runtime from 6 hours to 40 minutes by replacing row-by-row processing with batched Spark stages.}
+        \resumeItem{Introduced contract testing across nine services with Pact.}
+      \resumeItemListEnd
+    \resumeSubheading
+      {Software Engineer}{Jul 2018 - May 2020}
+      {Vistaprint}{Waltham, MA}
+      \resumeItemListStart
+        \resumeItem{Rebuilt the product configurator's pricing engine in Python, reducing quote errors by 31\% year over year.}
+        \resumeItem{Migrated 40 legacy cron jobs onto Airflow with alerting and retries.}
+      \resumeItemListEnd
+  \resumeSubHeadingListEnd
+
+\section{Technical Skills}
+  \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     \textbf{Languages}{: Java, Kotlin, Python, Go, SQL, TypeScript} \\
+     \textbf{Data}{: PostgreSQL, Kafka, Spark, Redis, Snowflake} \\
+     \textbf{Infrastructure}{: AWS, Kubernetes, Terraform, Datadog, PagerDuty} \\
+     \textbf{Practices}{: Distributed systems, on-call, contract testing, mentoring}
+    }}
+  \end{itemize}
+
+\end{document}

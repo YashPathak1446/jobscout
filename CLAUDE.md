@@ -286,8 +286,12 @@ That last one is the worst of them in product terms. **A stranger does not
 file a bug report; they close the tab.**
 
 **And a fixture you wrote is a fixture that agrees with you (R77, R78).** Priya
-was invented to test the importer, so she can only contain problems somebody
-thought of. Two real resumes from outside the project have now found eight
+is **invented** — a constructed resume, `@example.com` and a `555-01xx` number,
+written here to test the importer — so she can only contain problems somebody
+thought of. (She is committed, and safe to commit, for that reason. The PDF she
+is imported from was not produced by this repo, which is what makes her useful;
+it does not make her a person. Reading those two facts as a contradiction is
+what R88 was.) Two real resumes from outside the project have now found eight
 defects between them — a `Research/Projects` heading that matched nothing, a
 `Publications` section filed as project bullets, two degrees merged into one
 wrong record, `\bmaster\b` never matching "Masters", the PDF link appendix
