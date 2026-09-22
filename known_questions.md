@@ -8927,6 +8927,34 @@ badge reads `gate_verdict`, `gate_reason` and `unconfirmed` defensively
 response type, because those types are in the missing file. **When it is
 committed, declare the three fields there and drop the defensive reads.**
 
+
+## Q42. An undecidable job can take a top-K slot and get a resume
+
+**Status:** Open, found 2026-09-22 while landing A4 (R92). Not changed in A4.
+
+Since A4 the pipeline gate keeps undecidable jobs and scores them: a
+requirement met by a question the profile has not answered, or a posting
+that could not be read. Generation already skips the unreadable kind
+(`orchestrator._split_unreadable`, R61). It does **not** skip the
+unanswered kind, so a posting demanding an active clearance can take a
+top-K slot, and spend a generated resume, for someone who has not said
+whether they hold one — ahead of a confirmed match.
+
+Options:
+
+1. **Leave it.** The badge is on the board; the resume costs one rung call.
+2. **Exclude undecidable jobs from generation.** Simple, but it hides the
+   job's resume from exactly the person who can apply to it and chose "prefer
+   not to say" — silent subtraction one stage later.
+3. **Rank undecidable below confirmed-shown for generation.** Confirmed
+   matches fill top-K first; undecidable ones get a resume only if slots
+   remain. Nothing is excluded, and the badge still explains the job.
+
+**Leaning (author, 2026-09-22): option 3.** Rank, do not exclude. When it is
+built, the ordering belongs where `_split_unreadable` already partitions
+results, and the run summary should say how many slots went to undecidable
+jobs — a quota filled silently is the R62 shape.
+
 ---
 
 # Out of scope
