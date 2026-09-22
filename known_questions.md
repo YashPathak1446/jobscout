@@ -8895,6 +8895,30 @@ a scraped body should replace a non-empty listing body (probably yes, it is
 the fuller text), and whether that write should invalidate `gate_checked`
 for the row (it must — a verdict on old text is R62's stale verdict).
 
+
+## Q41. `web/src/lib/` has never been committed — `.gitignore`'s `lib/` ate it
+
+**Status:** Open, found 2026-09-22 while adding A4's board badge. **Blocks
+any build from a clone**, including A11b's `docker build --target verify`.
+
+`.gitignore:13` is `lib/`, a line from the standard Python template for
+packaging output. Unanchored, it matches every directory named `lib` at any
+depth, including `web/src/lib/`, which holds `api.ts` and `utils.ts`.
+`git log --all -- 'web/src/lib/*'` is empty. 29 imports across `web/src`
+reach `@/lib/api` or `@/lib/utils`, so no clone can compile the React app.
+
+It has not been seen for the same reason as Q35 and Q38: the author's
+checkout has the files, and the Dockerfile copies the *build context*
+(`COPY web/ ./`), not the git tree, so a deploy from his machine includes
+them. The pilot plan cites `web/src/lib/api.ts:186` and `:135`, lines that
+exist only on one disk.
+
+This is CLAUDE.md's "ignore by pattern, never by filename" rule failing the
+other way: a pattern wider than its intent. The ignore line is now anchored
+to `/lib/`, the only `lib` that packaging writes. **The files still have to
+be committed from the author's machine.** Anchoring makes them show up as
+untracked there, which is the prompt to add them.
+
 ---
 
 # Out of scope
