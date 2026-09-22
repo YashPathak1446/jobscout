@@ -8487,6 +8487,57 @@ names one component", which is the one thing a failed check does not know.
 
 ---
 
+## Q35. The suite has never been run on a clean clone
+
+**Status:** Open, found 2026-09-22 while verifying that each of A2's two
+commits was green on its own. Checking out the Q34 commit into a fresh
+worktree and running the suite gives **14 errors and 66 skips**, against 1 skip
+and no errors in the author's working tree. Logged, not fixed: the pilot plan
+carries it as A11b, before A12, because `docker build --target verify` runs the
+suite inside an image built from a clone.
+
+Every one of the 14 is the same line, once in each of three modules:
+
+```
+tests/test_page_is_a_page.py:89       load_profile("yash_pathak", ...)   9 tests
+tests/test_renderers_agree.py:79      load_profile("yash_pathak", ...)   4 tests
+tests/test_empty_resume_refused.py:132 load_profile("yash_pathak", ...)  1 test
+```
+
+`user_profiles/*.json` is gitignored, so on a clone that file does not exist
+and `ProfileLoadError` propagates out of `setUp`. All three modules already
+guard on the *master resume* and skip cleanly when it is missing; none guards
+on the profile, so each gets a guard that fires and one that does not — the
+two-paths-one-walked shape, inside a single `setUp`.
+
+**The convention already exists and this is where it was not applied.** 37 of
+the 66 skips say `"... skipped on a clean clone"` in so many words
+(`test_component_editor.py:26`, `test_fabrication_guards.py:150`,
+`test_import_confirmation.py:252` and others). So the repository already
+decided how a test that needs the author's private data should behave. These
+14 predate that decision, or were missed by it.
+
+**Two things make this worse than a count of red tests.**
+
+*It went unnoticed because nobody here is ever on a clean clone.* The author's
+checkout has `yash_pathak.json`, the baselines and a populated `outputs/`, so
+the suite is green on the one machine that runs it — the same fork that hid
+R69, R70 and R86, pointed at the test harness rather than at a renderer.
+
+*The 14 depend on the fixture this project documents as unrepresentative.*
+CLAUDE.md's own heading is "`yash_pathak.json` is the least representative
+fixture in this repo", and these are the tests that cannot run without it.
+`priya_raghunathan` is committed, and `rohan_deshmukh` is now committed too.
+
+**Skipping is not automatically the right answer.** A skip on a clean clone is
+a test that never runs in CI, and 66 of them is most of what a container build
+would be checking. Where a committed fixture can carry the test, moving it
+there is worth more than a clean skip. That is not mechanical: Priya has
+**0 projects to Yash's 13**, and most of `test_page_is_a_page` is about the
+projects half of the bullet budget (R74) — it would pass against Priya while
+measuring nothing. Rohan has 4 projects and 3 experiences and is the closer
+substitute. Each of the three modules needs deciding on its own.
+
 ---
 
 # Out of scope

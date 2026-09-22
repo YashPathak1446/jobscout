@@ -745,6 +745,62 @@ look at: whether the parser produces a sane profile, and whether the
 R74's bullet-budget problem waiting to happen. Cheap, and it is the last chance
 to find a parser bug before it costs a first impression.
 
+### A11b. A clean clone runs green (½ day) — before A12, because the image is a clone
+
+**Found 2026-09-22 (Q35), verifying that A2's two commits were each green on
+their own.** Checking the Q34 commit out into a fresh worktree and running the
+suite gives **14 errors and 66 skips**. The author's working tree gives 1 skip
+and no errors. The suite has never been run anywhere else.
+
+This sits before A12 and not after because **`docker build --target verify`
+runs the suite inside an image built from a clone** (Verification step 2). That
+step would fail on 14 tests that have nothing to do with the container, and the
+natural reading of a red container build is that the container is wrong.
+
+#### What the 14 are
+
+One line, once in each of three modules, all of them `load_profile
+("yash_pathak", ...)` in `setUp`:
+
+| Module | Line | Tests |
+|---|---|---|
+| `tests/test_page_is_a_page.py` | `:89` | 9 |
+| `tests/test_renderers_agree.py` | `:79` | 4 |
+| `tests/test_empty_resume_refused.py` | `:132` | 1 |
+
+`user_profiles/*.json` is gitignored, so the file is absent on a clone and
+`ProfileLoadError` propagates. All three modules **already** guard on the
+master resume and skip cleanly without it; none guards on the profile. Two
+paths, one walked, inside one `setUp`.
+
+#### The goal
+
+A clean clone runs green. A test that needs a file only the author has either
+skips explicitly with a reason, or moves to a committed fixture.
+
+The convention already exists — 37 of the 66 skips say `"... skipped on a clean
+clone"` verbatim (`test_component_editor.py:26`,
+`test_fabrication_guards.py:150`, `test_import_confirmation.py:252`). These 14
+are where it was not applied, not a new policy.
+
+**But do not reach for the skip first.** A skip on a clean clone is a test that
+never runs in CI, and 66 of them is most of what the container build would be
+checking — a green `--target verify` over 66 skips is R81's shape, a harness
+reporting success on the cases it cannot reach. Where a committed fixture can
+carry a test, moving it there is worth more than a clean skip.
+
+That trade is **not mechanical**, which is why this is half a day and not an
+hour: Priya has **0 projects against Yash's 13**, and most of
+`test_page_is_a_page` is about the projects half of the bullet budget (R74) —
+swapped to Priya it would pass while measuring nothing, which is worse than
+skipping. `rohan_deshmukh` (4 projects, 3 experiences, committed at A2) is the
+closer substitute. Decide per module.
+
+**And the count is the thing to watch.** The bar is not "14 fixed" — it is a
+clean clone going green, with the number of skips *falling*. Re-run the fresh
+worktree afterwards rather than trusting the working tree, because the working
+tree is the one machine where this was never visible.
+
 ### A12. Deploy, acceptance, invite (½ day)
 
 Deploy and run `scripts/acceptance.py` against the instance, gated on the `none`
@@ -833,7 +889,9 @@ End-to-end, in order:
 1. `python -m agents.orchestrator --profile priya_raghunathan --max-jobs 5 --mock`
    still passes unscoped — the checkout fork must not move.
 2. `docker build --target verify` — baselines plus `acceptance.py --rung none`
-   inside the container, 3 of 3.
+   inside the container, 3 of 3. **A11b first:** the image is built from a
+   clone, and a clone currently fails 14 tests that have nothing to do with
+   the container (Q35).
 3. Two-user acceptance: create a second account, run both under `--mock`,
    assert the A2 tests pass.
 4. `DELETE /api/account` then the residue walker.
