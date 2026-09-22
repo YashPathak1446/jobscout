@@ -681,6 +681,113 @@ stopped inflating the rendered length; a later measurement should revisit it.
 
 # Active questions
 
+## Q28. The bullet repair loop is Gemini-only, and a comment says it is not
+
+**Status:** Open, found 2026-09-02 while closing out the skills change. This is
+**evidence on R81's hypothesis 2**, which asked whether Ollama's failures are
+the model or the missing repair loop. It does not close that question, because
+it does not measure how much of Gemini's success the loop accounts for.
+
+### The asymmetry
+
+On the acceptance fixtures, the same defect had two different fates:
+
+- **Gemini** produced a bullet in the line-2 orphan zone, the run repaired it,
+  and it ended `valid`.
+- **Ollama** produced the same class of failure and it was quarantined
+  unrepaired — reported as six occurrences.
+
+The bullet fitter is deterministic Python. It has no business caring which
+model wrote the text, so the divergence has to be upstream of it.
+
+**Provenance, stated because R81 exists.** The run counts above are as
+reported, from a run this entry's author did not take, and they are **not
+re-derived** — the entry that made re-derivation a rule is the same entry this
+one extends. What *is* re-derived, independently and from the code, is
+everything in the next section. Treat the counts as the thing that prompted
+the reading, not as the finding.
+
+### What the code says
+
+Two candidate explanations were on the table. The code eliminates one and
+confirms the other.
+
+**The fitter is reached.** `_chat_tailor` ends at
+`return self._apply_bullet_fitting(parsed)`
+(`agents/generation_agent.py:1639`), and its cache-hit branch fits too. Ollama
+output reaches the fitter. That hypothesis is out.
+
+**The repair loop is not reached.** `build_validation_repair_prompt` has
+**exactly one call site in the repository** — `agents/generation_agent.py:1728`,
+inside `_gemini_tailor`. That method validates, builds a repair prompt,
+re-calls the model, re-fits, re-validates, and returns. `_chat_tailor` does
+none of it: no `validate_resume_output` call, no repair prompt, no second
+attempt. It fits once and returns.
+
+So `gemini` gets *write → fit → validate → repair → fit → validate*, and every
+other model rung gets *write → fit*. `ollama` and `openai` are the same
+`/chat/completions` client, so this is not an Ollama fact — **`openai` has no
+repair loop either**, and nothing has measured that rung at all.
+
+### The comment that credits a guard which never fires
+
+`_chat_tailor`'s docstring says, of a smaller model following the Gemini-tuned
+prompt less exactly:
+
+> that is the known cost of this rung, and the validation and repair loop
+> downstream is what catches the difference
+
+and an inline comment fifteen lines later repeats it. **There is no repair loop
+downstream.** What is downstream is `generate_resumes()`, which *classifies* a
+result as `valid` or `needs_review`. Classifying a failure is not catching it.
+
+This is the shape `CLAUDE.md` already names from R55 — a comment crediting a
+guard that never fired — and the same shape as the cache-key comment in R80
+that was correct when written and stopped being correct while nobody edited
+it. The sentence describes the Gemini path and sits in the method that is not
+it: the two-paths-one-walked bug (R69, R70, R80), in prose rather than in code.
+
+### Why it matters beyond Ollama
+
+R81 said this in prose already: *"comparing a rung that has one against a rung
+that does not is not a comparison of models."* This is the code confirming it,
+which changes what R81's measurement means. The table there reads as a
+statement about `llama3.1:8b`. **It is at least partly a statement about which
+rung has a repair loop**, and no one knows the split. R44's four-month-old
+verdict on Ollama was taken under the same asymmetry.
+
+It also touches R76, which measured llama3.1 landing at 122-126 characters
+every time — inside the orphan zone. If the failures are fitting rather than
+substance, they are the exact class a repair attempt is built to fix.
+
+### What this does not cast doubt on
+
+The `none` row, the unit suite and the three frozen baselines. `none` never
+calls a model, so it has nothing to repair and nothing to fail asymmetrically.
+The acceptance run passes 3 of 3 on it.
+
+### Options, none chosen
+
+1. **Give `_chat_tailor` the same validate-and-repair attempt.** Straightforward
+   — the prompt builder and validator are already imported in that module and
+   are rung-agnostic. Costs a second call per failing job on a rung whose whole
+   appeal is that calls are free. Would make R81's Ollama number mean what it
+   was read as meaning.
+2. **Hoist the loop out of both and run it in `_tailor_resume`.** One repair
+   path for every rung, which is what the two-paths rule argues for. Larger
+   change to the largest file in the repo, and `_gemini_tailor`'s repair uses
+   `_call_gemini_json` directly, so the hoist has to abstract that first.
+3. **Change nothing and fix the comment.** The cheapest honest move. Leaves the
+   asymmetry but stops the code claiming a guard it does not have — and the
+   claim is the part that would mislead the next person measuring a rung.
+4. **Measure first.** Re-run the fixtures on `gemini` with repair disabled. That
+   is the number that actually answers R81 hypothesis 2, and none of the above
+   produce it.
+
+**Logged, not fixed**, per the standing rule that anything found outside the
+acceptance run is backlog. Note that option 3 is a comment edit and would
+still be a fix.
+
 ## Q27. The acceptance run is not reproducible on any rung that uses a model
 
 **Status:** Open, found 2026-08-27 while verifying R83. It is a question about
@@ -7855,7 +7962,6 @@ A control venv built from the *pre-edit* manifest passes the suite too, so
 `jobscout.egg-info/requires.txt` still lists `google-adk`. It is a build
 artifact, regenerated on the next build, and was deliberately not hand-edited.
 
----
 
 ## R86. The invariant was written down, and the code broke it where nobody walks
 
@@ -7990,7 +8096,6 @@ roughly 290 MB of a 565 MB site-packages tree present for a front end the
 hosted product does not run. R85 removed a dependency nothing imported; this is
 a dependency something imports on a path the container never takes.
 
----
 
 ## R87. The gate could not fail the way it was about to fail
 
@@ -8304,8 +8409,6 @@ turns that into `[]`, and `search_ats`'s counter conflates *blocked*, *gone* and
 ATS is the only source, so a block is a silent empty board — which is why
 verifying Fly's egress needs a probe that reads status codes, and why the same
 probe has to be run from a home connection as a control.
-
----
 
 ## Q33. A cap that never binds is not a measurement
 

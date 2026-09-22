@@ -32,6 +32,15 @@ gets discovered* rather than only what gets ranked, there is no shared half
 
 ---
 
+## Current work: friends pilot
+- Source of truth: docs/pilot-plan.md. Read it before doing anything.
+- Do only the stage items named in the prompt, in plan order. Stop and report after.
+- Both gates must pass before every commit:
+  python -m unittest discover -s tests -q
+  python scripts/baseline.py verify --all
+- If the plan and the code disagree, stop and ask. Don't improvise.
+- Never put a Gemini key in fly.toml, logs, or any file.
+
 ## Working here
 
 - `known_questions.md` is the decision log and the planning substrate. Every
@@ -42,8 +51,9 @@ gets discovered* rather than only what gets ranked, there is no shared half
 - Decisions are recorded as `R<n>`, open questions as `Q<n>`, one commit each.
   Commit subjects name the finding, not the file: *"fix: the acceptance run
   imported through a rung it was not asked for (R83)"*.
-- `plan.md` is the current tracker — the week-to-a-URL plan.
-  `known_questions.md` is why; `plan.md` is what next.
+- `plan.md` is the long-range tracker. For the friends pilot, docs/pilot-plan.md
+  supersedes it; plan.md gate 1 is complete when pilot stage A12 is.
+  `known_questions.md` is why; the pilot plan is what next.
 - `app.py` is a view layer and imports only `agents.orchestrator` and
   `scripts.init_profile`. `tests/test_ui_contract.py` fails the build otherwise,
   and it enforces the same rule on `api/main.py`.
