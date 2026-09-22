@@ -154,5 +154,56 @@ class TestTheSaveGateLetsANewProfileThrough(unittest.TestCase):
                                ["new grad", "entry level", "junior"], 0))
 
 
+class TestABlankYearsNeverReachesTheWire(unittest.TestCase):
+    """
+    `/api/levels` takes `years: Optional[int]`, and FastAPI parses an empty
+    `?years=` as a malformed int — a 422, not "unanswered". PreferencesStep
+    swallows a failed levels call, so a 422 there would leave the levels
+    derived from the *previous* answer on screen, unmarked (Q41, checked
+    2026-09-22 once `lib/api.ts` was in the repository).
+
+    It does not happen, on two independent guards, and each is held here on
+    its own so that removing either one fails a test: the input maps `''` to
+    `null`, and `api.levels(null)` sends no parameter at all.
+    """
+
+    WEB = ROOT / "web" / "src"
+
+    def _source(self, rel):
+        path = self.WEB / rel
+        if not path.is_file():
+            self.skipTest(f"{rel} is not in this checkout")
+        return path.read_text(encoding="utf-8")
+
+    def test_the_endpoint_does_reject_an_empty_years(self):
+        """Why the guards matter: the server does not forgive it."""
+        try:
+            from fastapi.testclient import TestClient
+            from api.main import app
+        except ImportError:
+            self.skipTest("fastapi not installed")
+        client = TestClient(app)
+        self.assertEqual(client.get("/api/levels?years=").status_code, 422)
+        omitted = client.get("/api/levels")
+        self.assertEqual(omitted.status_code, 200)
+        self.assertEqual(omitted.json()["derived"], [])
+
+    def test_the_input_turns_blank_into_null_not_zero(self):
+        step = self._source("components/steps/PreferencesStep.tsx")
+        self.assertIn(
+            "years_experience: e.target.value === '' ? null : Number(e.target.value)",
+            step)
+
+    def test_levels_omits_the_parameter_for_null(self):
+        api = self._source("lib/api.ts")
+        self.assertRegex(api, r"years === null \? \{\} : \{ years \}")
+
+    def test_the_query_builder_drops_empty_strings_too(self):
+        """The second guard, for any caller that hands `get` a `''`."""
+        api = self._source("lib/api.ts")
+        self.assertIn(
+            "value !== undefined && value !== null && value !== ''", api)
+
+
 if __name__ == "__main__":
     unittest.main()

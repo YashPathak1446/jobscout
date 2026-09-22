@@ -122,14 +122,7 @@ export function Board() {
         setJobs(result.jobs)
         setTotal(result.total)
         setHidden(result.hidden)
-        // Read defensively until `lib/api.ts` is committed and names the
-        // field (Q41). A server that does not send it leaves the count
-        // unknown rather than zero.
-        setUnconfirmed(
-          'unconfirmed' in result && typeof result.unconfirmed === 'number'
-            ? result.unconfirmed
-            : null,
-        )
+        setUnconfirmed(result.unconfirmed)
         setError(null)
       })
       .catch((e: Error) => setError(e.message))

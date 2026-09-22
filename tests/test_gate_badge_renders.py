@@ -7,8 +7,8 @@ so this asserts the *render*, on each UI, for both halves — the per-row badge
 and the count — rather than asserting that the data exists.
 
 Streamlit is rendered for real with `AppTest` against a seeded store. The
-React app has no test runner and `lib/api.ts` is not committed (Q41), so its
-half is source-level, in the shape of `test_component_ids.py`; the API it
+React app has no test runner, so its half is source-level — `tsc` in
+`npm run build` is what checks the types it declares, in the shape of `test_component_ids.py`; the API it
 reads from is exercised for real.
 
 One store, three verdicts, built against Priya — an H-1B holder who has not
@@ -21,6 +21,7 @@ said whether she holds a clearance:
 """
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -183,8 +184,7 @@ class TestTheApiCarriesIt(_SeededHome):
 
 class TestReactDrawsIt(unittest.TestCase):
     """
-    Source-level: no runner, and no `lib/api.ts` in a clone to build with
-    (Q41). What it holds is the specific failure — a field the server sends
+    Source-level: the React app has no runner. What it holds is the specific failure — a field the server sends
     and no component reads.
     """
 
@@ -219,6 +219,52 @@ class TestReactDrawsIt(unittest.TestCase):
         self.assertNotRegex(badge, r"if \(\s*(?:job\.)?(?:gate_)?reason\b",
                             "a reason alone is not a verdict: undecidable "
                             "rows carry one too")
+
+
+class TestTheTypesNameIt(unittest.TestCase):
+    """
+    The fields are declared, not read around (Q41).
+
+    Until `lib/api.ts` was committed, `GateBadge` took any `object` and
+    probed it with `'gate_verdict' in job`, and the board did the same for
+    `unconfirmed`. That compiles against anything, so a renamed field would
+    have rendered nothing with no error. Declared, `tsc` fails on a rename or
+    a misspelt verdict — and this holds the declaration to what the server
+    actually sends.
+    """
+
+    WEB = ROOT / "web" / "src"
+
+    def _source(self, rel):
+        path = self.WEB / rel
+        if not path.is_file():
+            self.skipTest(f"{rel} is not in this checkout")
+        return path.read_text(encoding="utf-8")
+
+    def test_job_declares_every_verdict_the_gate_can_write_and_null(self):
+        from tools.jobs.job_filter import VERDICTS
+        api = self._source("lib/api.ts")
+        declared = re.search(r"^\s*gate_verdict:\s*([^\n]+)$", api, re.M)
+        self.assertIsNotNone(declared, "Job does not declare gate_verdict")
+        literals = set(re.findall(r"'([a-z]+)'", declared.group(1)))
+        self.assertEqual(literals, set(VERDICTS))
+        # NULL is a row no gate has judged — the store writes it, so the
+        # type has to admit it, or the badge's "renders nothing" branch is
+        # a case the compiler believes cannot happen.
+        self.assertIn("null", declared.group(1))
+        self.assertRegex(api, r"(?m)^\s*gate_reason:\s*string \| null$")
+
+    def test_the_board_response_declares_the_count(self):
+        self.assertRegex(self._source("lib/api.ts"),
+                         r"(?m)^\s*unconfirmed:\s*number$")
+
+    def test_nothing_reads_around_the_types_any_more(self):
+        badge = self._source("components/GateBadge.tsx")
+        board = self._source("components/Board.tsx")
+        self.assertNotIn("'gate_verdict' in", badge)
+        self.assertNotIn("'gate_reason' in", badge)
+        self.assertNotIn("job: object", badge)
+        self.assertNotIn("'unconfirmed' in", board)
 
 
 if __name__ == "__main__":

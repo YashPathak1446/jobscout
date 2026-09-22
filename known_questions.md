@@ -8937,8 +8937,22 @@ for the row (it must — a verdict on old text is R62's stale verdict).
 
 ## Q41. `web/src/lib/` has never been committed — `.gitignore`'s `lib/` ate it
 
-**Status:** Open, found 2026-09-22 while adding A4's board badge. **Blocks
-any build from a clone**, including A11b's `docker build --target verify`.
+**Status:** Resolved 2026-09-22. `web/src/lib/` is committed (bc4341b), and
+`npm ci && npm run build` — `tsc -b` then `vite build` — passes from a clone
+against the real files, not a stub. `Job` declares `gate_verdict` (the three
+`job_filter.VERDICTS` plus `null`, a row no gate has judged) and the board
+response declares `unconfirmed`; `GateBadge` takes a `Pick<Job, ...>` and the
+board reads `result.unconfirmed` directly. `tsc` now fails on a misspelt
+verdict or a renamed field — both mutated and seen to fail — where the
+`'x' in job` reads compiled against anything. `test_component_ids`' `api.ts`
+half runs on a clone for the first time. The blank-years question Q43 left
+open is answered there. Found 2026-09-22 while adding A4's board badge; it
+blocked any build from a clone, including A11b's `docker build --target
+verify`.
+
+*Kept: the board's count is still `number | null`.* The server always sends
+a number, but `null` is "not loaded yet", and rendering that as zero is the
+invariant this codebase keeps breaking. The type narrowed; the state did not.
 
 `.gitignore:13` is `lib/`, a line from the standard Python template for
 packaging output. Unanchored, it matches every directory named `lib` at any
@@ -9009,9 +9023,12 @@ assumes a level. That is what React's `excludeOptions(null)` already did,
 and a test now reads both lists from source and holds them equal. **React
 did not have the crash**, checked rather than assumed: its options are
 built locally and handle null, and its levels fetch swallows errors. The one
-thing left unverified is whether `api.ts` sends a null `years` as `?years=`,
-which `GET /api/levels` answers with 422, leaving the level list empty. That
-file is not in the repository (Q41). Found 2026-09-22 by A4's About-you test:
+thing left unverified was whether `api.ts` sends a null `years` as `?years=`,
+which `GET /api/levels` answers with 422. *Checked once `api.ts` was
+committed (Q41): it does not,* on two independent guards — the input maps
+`''` to `null`, and `api.levels(null)` sends no parameter; `get()` also
+drops `''` for any other caller. `TestABlankYearsNeverReachesTheWire` holds
+each guard on its own. A non-blank value can still 422; see Q44. Found 2026-09-22 by A4's About-you test:
 pressing Continue on Rohan's profile moved to step 3, which raised. The test
 clicked Continue and never checked what it reached; the new one does.
 
@@ -9027,6 +9044,37 @@ has no years. The save path three lines further on already guards it
 R75's shape exactly — "any test that walks a range has not walked the
 absence" — on the one line of the screen that walks it twice. The React
 `PreferencesStep` has its own options logic and was not checked; count both.
+
+## Q44. A years value the input allows, the API refuses — and the save writes it anyway
+
+**Status:** Open, found 2026-09-22 while checking Q43's blank-years question.
+Not changed: the fix is a decision about where validation lives, not a
+one-liner.
+
+The years box is `type="number" min={0} max={40}`, and those attributes
+constrain the spinner, not typing. Measured against the real endpoints:
+
+| typed | `GET /api/levels?years=` | `PATCH /api/profile` | profile afterwards |
+|---|---|---|---|
+| `2.5` | 422 | 200, stored `2.5` | **fails validation** (`Optional[int]`) |
+| `-1`  | 422 | 200, stored `-1`  | validates |
+| `61`  | 422 | 200, stored `61`  | validates |
+| `41`–`60` | 200 | 200 | validates; the input's `max` is 40, the API's 60 |
+
+Two defects. **The screen:** `PreferencesStep` swallows the levels 422, so
+the levels derived from the *previous* answer stay on screen, unmarked,
+beside a number they were not derived from — the R75/Q43 shape, stale shown
+as current. **The save:** `PATCH` merges without validating, so `2.5` writes
+a profile that will not load. That is R30's outcome by a different route.
+
+Options: validate in `update_profile_fields` against the schema before
+writing (covers both UIs and every field; refuses the save with a reason);
+constrain the input to integers in `[0, 60]` client-side (covers React only
+— Streamlit's `number_input` already coerces); and, separately, make a
+failed levels fetch clear `derived` and say so, not keep the old list.
+**Leaning: the first and the third.** Server-side is the only one that
+survives a third client, and the input bound alone would leave the next
+field with the same hole. Also align the two maxima (40 vs 60).
 
 ---
 

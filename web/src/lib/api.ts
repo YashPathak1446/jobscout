@@ -23,6 +23,12 @@ export type Job = {
   resume_tex: string | null
   resume_pdf: string | null
   run_date: string | null
+  /** What the gate made of this job for your profile (A4). `null` is a row
+   *  no gate has judged yet — not a pass: the store shows it, and the badge
+   *  says nothing about it. Mirrors `job_filter.VERDICTS`. */
+  gate_verdict: 'shown' | 'hidden' | 'undecidable' | null
+  /** Why, for `hidden` and `undecidable`. An undecidable job carries one
+   *  too, so a set reason is not "rules you out" — branch on the verdict. */
   gate_reason: string | null
   has_jd: boolean
   full_jd?: string
@@ -186,7 +192,16 @@ export const api = {
     }>('/health'),
 
   board: (query: BoardQuery) =>
-    get<{ jobs: Job[]; total: number; hidden: number; offset: number; limit: number }>(
+    get<{
+      jobs: Job[]
+      total: number
+      /** Jobs the gates hide under the current filters (R62). */
+      hidden: number
+      /** Shown jobs the gate could not decide, same filters (A4). */
+      unconfirmed: number
+      offset: number
+      limit: number
+    }>(
       '/board',
       query as Record<string, unknown>,
     ),

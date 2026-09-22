@@ -1,24 +1,24 @@
 import { CircleHelp, Ban } from 'lucide-react'
 
+import type { Job } from '@/lib/api'
+
 /**
  * What the gate made of a job, when it is anything but a plain pass (A4).
  *
- * Takes any row and reads the two fields by name, because `lib/api.ts` is
- * not yet in the repository (Q41) and so cannot be relied on to declare
- * them; once it is, `Job` should carry them and this should take a `Job`.
- * A row the gate has never judged has no verdict, and that renders as
+ * A row the gate has never judged has a `null` verdict, and that renders as
  * nothing — not as a pass or a fail.
  *
  * Branches on `gate_verdict`, never on whether `gate_reason` is set: an
  * undecidable job carries a reason too, and reading "has a reason" as "rules
  * you out" would mark every job the gate could not decide as ineligible.
  */
-export function GateBadge({ job }: { job: object }) {
-  const verdict = 'gate_verdict' in job ? job.gate_verdict : null
-  const reason =
-    'gate_reason' in job && typeof job.gate_reason === 'string'
-      ? job.gate_reason
-      : ''
+export function GateBadge({
+  job,
+}: {
+  job: Pick<Job, 'gate_verdict' | 'gate_reason'>
+}) {
+  const verdict = job.gate_verdict
+  const reason = job.gate_reason ?? ''
 
   if (verdict === 'undecidable') {
     return (
