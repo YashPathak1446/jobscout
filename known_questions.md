@@ -9283,6 +9283,27 @@ precedent), sending paths relative to the caller's home where a client
 genuinely needs one, as `/api/file` already takes. **Leaning:** that,
 checking each field for a React reader first. `runs[].path` has one.
 
+## Q48. Streamlit serves every interface by default, in local mode
+
+**Status:** Open, found 2026-09-22 while adding A5's loopback guard.
+Measured: `streamlit run app.py` with default settings (Streamlit 1.64,
+`server.address` unset) answered 200 on the machine's non-loopback address,
+and printed "Network URL" and "External URL". Streamlit is the local UI,
+with no accounts and one unscoped user, so on a laptop that is the whole
+profile, resume and board open to the network the laptop is on.
+
+A5 guarded exactly this on the API: local mode refuses non-loopback peers.
+Streamlit is the twin path, and the guard was written on the one the author
+does not use. `docs/pilot-plan.md` does not deploy Streamlit (the Dockerfile
+runs uvicorn), so this is a laptop exposure, not a hosted one.
+
+Options: a committed `.streamlit/config.toml` with
+`server.address = "localhost"`; or `app.py` refusing to render when it sees a
+non-loopback client. **Leaning:** the config file. It is one line and applies
+before any code runs. **Blast radius:** anyone who opens Streamlit from a
+phone on the same Wi-Fi loses that. It is the author's workflow to decide,
+so it is not done inside A5.
+
 ---
 
 # Out of scope
