@@ -8958,8 +8958,17 @@ jobs — a quota filled silently is the R62 shape.
 
 ## Q43. Streamlit's preferences screen crashes when years is unanswered
 
-**Status:** Open, found 2026-09-22 by A4's About-you test: pressing Continue
-on Rohan's profile moved to step 3, which raised. Not fixed in A4.
+**Status:** Resolved 2026-09-22. `_exclude_options(None)` returns
+`EXCLUDE_ALWAYS` only: unanswered is not zero, so it offers nothing that
+assumes a level. That is what React's `excludeOptions(null)` already did,
+and a test now reads both lists from source and holds them equal. **React
+did not have the crash**, checked rather than assumed: its options are
+built locally and handle null, and its levels fetch swallows errors. The one
+thing left unverified is whether `api.ts` sends a null `years` as `?years=`,
+which `GET /api/levels` answers with 422, leaving the level list empty. That
+file is not in the repository (Q41). Found 2026-09-22 by A4's About-you test:
+pressing Continue on Rohan's profile moved to step 3, which raised. The test
+clicked Continue and never checked what it reached; the new one does.
 
 `screen_preferences` renders the years box with `value=None` when no years
 are stored — correctly, per R75 — and three lines later calls

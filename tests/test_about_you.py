@@ -136,6 +136,18 @@ except ImportError:  # pragma: no cover
     AppTest = None
 
 
+def _always_offered() -> list:
+    """`app.EXCLUDE_ALWAYS`, read from the source without running the page."""
+    import ast
+    tree = ast.parse((ROOT / "app.py").read_text(encoding="utf-8"))
+    for node in tree.body:
+        if (isinstance(node, ast.Assign)
+                and any(getattr(t, "id", None) == "EXCLUDE_ALWAYS"
+                        for t in node.targets)):
+            return ast.literal_eval(node.value)
+    raise AssertionError("app.py no longer defines EXCLUDE_ALWAYS")
+
+
 @unittest.skipIf(AppTest is None, "streamlit not installed")
 class TestTheStreamlitScreen(_Home):
     """Rohan never answered: every question must render unanswered."""
@@ -193,6 +205,41 @@ class TestTheStreamlitScreen(_Home):
             "holds_clearance": "no"})
         for key in LEGACY:
             self.assertNotIn(key, personal)
+
+    def test_continuing_reaches_a_preferences_screen_that_renders(self):
+        """
+        Q43. Continue from here lands on Preferences, and for a profile whose
+        years are unanswered — Rohan, and every profile the wizard builds —
+        that screen raised on `int(None)` while building its options. The
+        test above clicked Continue and never looked at what it reached.
+        """
+        app = self._screen()
+        app.text_input[0].input("Austin, TX").run()
+        for field in ("us_person", "needs_sponsorship", "holds_clearance"):
+            self._radio(app, field).set_value("unknown").run()
+        self._continue(app).click().run()
+
+        self.assertFalse(app.exception, app.exception)
+        self.assertEqual(app.session_state["step"], 2)
+        skip = next(m for m in app.multiselect
+                    if m.label == "Skip postings mentioning")
+        # Only the level-independent options: unanswered is not zero years,
+        # so nothing is offered that assumes where this person sits. Read
+        # from source rather than imported — importing app.py runs the page.
+        self.assertEqual(skip.options, _always_offered())
+
+    def test_both_screens_offer_the_same_when_years_are_unanswered(self):
+        """
+        The twin (R70). React's `excludeOptions(null)` already returned
+        `EXCLUDE_ALWAYS`; Streamlit now does too, and the two lists are one
+        claim kept in two files.
+        """
+        import re
+        tsx = (ROOT / "web" / "src" / "components" / "steps"
+               / "PreferencesStep.tsx").read_text(encoding="utf-8")
+        self.assertIn("if (years === null) return EXCLUDE_ALWAYS", tsx)
+        react = re.search(r"const EXCLUDE_ALWAYS = \[([^\]]*)\]", tsx).group(1)
+        self.assertEqual(re.findall(r"'([^']*)'", react), _always_offered())
 
 
 @unittest.skipIf(AppTest is None, "streamlit not installed")

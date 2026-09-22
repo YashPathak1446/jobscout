@@ -80,8 +80,21 @@ ROLE_OPTIONS = [
 EXCLUDE_ALWAYS = ["PhD required", "security clearance required"]
 
 
-def _exclude_options(years: int) -> list:
-    """Levels above where the user sits, plus year floors beyond their reach."""
+def _exclude_options(years) -> list:
+    """
+    Levels above where the user sits, plus year floors beyond their reach.
+
+    `years` may be None — unanswered, which is what every profile the wizard
+    builds starts as (R75) — and then only the level-independent options are
+    offered. Not `int(None)`, which crashed the screen for every new user
+    (Q43), and not 0 either: reading unanswered as zero would suggest
+    excluding senior, staff, principal and lead to someone who may be all of
+    them. Same rule as `excludeOptions` in React's PreferencesStep, which
+    already did this.
+    """
+    if years is None:
+        return list(EXCLUDE_ALWAYS)
+    years = int(years)
     above = [
         (1, ["senior", "staff", "principal", "lead"]),
         (4, ["staff", "principal", "lead"]),
@@ -730,10 +743,10 @@ def screen_preferences():
             placeholder="Texas, Washington")
         relocate = st.checkbox("Willing to relocate",
                                value=current["willing_to_relocate"])
+    offered = _exclude_options(years)
     excludes = st.multiselect(
         "Skip postings mentioning",
-        _exclude_options(int(years)) + [e for e in current["exclude_keywords"]
-                                        if e not in _exclude_options(int(years))],
+        offered + [e for e in current["exclude_keywords"] if e not in offered],
         default=current["exclude_keywords"],
         help="A hard filter on wording, separate from the levels above. "
              "Excluding 'senior' while asking for senior roles will find you "
