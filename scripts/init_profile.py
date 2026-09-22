@@ -253,7 +253,7 @@ def import_to_tex(source, destination=None, backend: str = None) -> Path:
     return save_extracted(extracted["schema"], extracted["source"], destination)
 
 
-def _id_problems(name: str, resume_path) -> list:
+def _id_problems(name: str, resume_path=None, parser=None) -> list:
     """
     Rules in the profile just written whose component ID names no component, or
     more than one.
@@ -288,9 +288,9 @@ def _id_problems(name: str, resume_path) -> list:
         from tools.profile.validation import find_id_problems
         from tools.resume.resume_parser import ResumeParser
 
-        return find_id_problems(
-            load_profile(name),
-            ResumeParser(str(resume_path), skip_embeddings=True))
+        if parser is None:
+            parser = ResumeParser(str(resume_path), skip_embeddings=True)
+        return find_id_problems(load_profile(name), parser)
     except Exception as exc:  # pragma: no cover - reporting must not fail
         return [f"component IDs could not be checked ({exc}) — the rules in "
                 f"this profile may name components that do not exist"]
@@ -451,6 +451,24 @@ def read_personal(name: str) -> dict:
 
 def read_component_rules(name: str) -> dict:
     """
+    The editor's view of every component, plus what is wrong with its rules.
+
+    `{experiences, projects, id_problems}`. The first two are the screen; see
+    `_component_rules`. The third is here rather than only on save because
+    **this is the render that lists the rules**, so it is the one place a
+    warning about them is actionable — and a warning a user meets only after
+    pressing Save is a warning attached to the wrong moment.
+
+    It costs nothing extra: `_component_rules` parses the resume to build the
+    screen either way, and the check reuses that parser. Consumers index by
+    section name, so the added key reaches nobody iterating.
+    """
+    rules, parser = _component_rules(name)
+    return {**rules, "id_problems": _id_problems(name, parser=parser)}
+
+
+def _component_rules(name: str):
+    """
     Every component with its importance tier and JD triggers, for an editor.
 
     Derivation reaches a component's *tech stack* — `ionic`, `capacitor` — but
@@ -498,17 +516,23 @@ def read_component_rules(name: str) -> dict:
             for c in components
         ]
 
-    return {
+    rules = {
         "experiences": collect(
             "experiences", resume.experiences,
             lambda c: f"{c.title} — {c.company}",
         ),
         "projects": collect("projects", resume.projects, lambda c: c.name),
     }
+    # The parser comes back with them because `write_component_rules` needs
+    # one and this is the call that already built it. Parsing a second time
+    # for the ID check would be 67 ms spent re-deriving what is in hand — and
+    # a second parse is a second answer, which is how two readers of one
+    # resume start disagreeing.
+    return rules, parser
 
 
 def write_component_rules(name: str, importance: dict, triggers: dict,
-                          always: dict = None, never: dict = None) -> Path:
+                          always: dict = None, never: dict = None) -> dict:
     """
     Save edited tiers and trigger lists back to the profile.
 
@@ -517,6 +541,22 @@ def write_component_rules(name: str, importance: dict, triggers: dict,
     emptied has its rule removed rather than stored empty — an empty rule
     cannot fire and is indistinguishable from one that never matched, which is
     the silence R17 set out to remove.
+
+    Returns `{profile_path, id_problems}`, the same shape `create_profile`
+    returns, rather than the bare `Path` it used to — which nothing read.
+
+    **`id_problems` reports; it does not repair.** Writes here are already
+    filtered to the IDs on the screen, so this call cannot *introduce* a
+    dangling key. What it can do is leave one: R17 deliberately keeps a rule
+    for a component the resume no longer has, rather than dropping it silently,
+    on the grounds that a rule somebody wrote is worth more than a tidy file.
+    That is still the behaviour. The only thing that changes is that saving now
+    *says so*, which is the half R17 could not supply on its own — a rule kept
+    and never mentioned is indistinguishable from a rule that works.
+
+    Free, as checks go: `_component_rules` below already parses the resume to
+    build the screen, and the check reuses that parser rather than spending a
+    second 67 ms.
     """
     path = PROFILES / f"{name}.json"
     if not path.exists():
@@ -527,7 +567,7 @@ def write_component_rules(name: str, importance: dict, triggers: dict,
 
     # Read the component list once. Resolving section membership per component
     # would re-parse the resume for every id on the screen.
-    known = read_component_rules(name)
+    known, parser = _component_rules(name)
 
     for section in ("experiences", "projects"):
         ids = {c["id"] for c in known[section]}
@@ -569,7 +609,10 @@ def write_component_rules(name: str, importance: dict, triggers: dict,
             rp[section][field] = sorted(current)
 
     path.write_text(json.dumps(profile, indent=2) + chr(10), encoding="utf-8")
-    return path
+
+    # After the write, so what is reported is the state the user just saved
+    # rather than the one they arrived with.
+    return {"profile_path": path, "id_problems": _id_problems(name, parser=parser)}
 
 
 def main():

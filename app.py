@@ -223,6 +223,8 @@ def screen_resume():
         b.metric("Projects", counts["projects"])
         c.metric("Match rules derived", counts["trigger_rules"])
 
+        _show_id_problems(summary.get("id_problems"))
+
         if summary.get("backup_path"):
             st.caption(f"Previous profile saved as `{os.path.basename(str(summary['backup_path']))}`")
 
@@ -245,6 +247,36 @@ def _build(resume_path, name, force):
     st.session_state.profile_name = name
     st.session_state.setup_summary = summary
     return True
+
+
+def _show_id_problems(problems) -> None:
+    """
+    Say which saved rules do not name exactly one component.
+
+    The failure this exists for is silence: a rule keyed to a component the
+    resume no longer has is skipped at scoring time and looks identical to a
+    rule that simply never matched, and one keyed to an ID two components share
+    fires on whichever the parser reached first (Q34). Neither produces an
+    error anywhere.
+
+    `None` is not "no problems" — it is a profile written before the check
+    existed, or one whose check could not run. Three states, and the middle one
+    gets a caption rather than a clean bill of health.
+    """
+    if problems is None:
+        st.caption("Component rules were not checked for this profile.")
+        return
+    if not problems:
+        return
+
+    st.warning(
+        f"{len(problems)} of your match rules will not do what they say. "
+        f"They are kept, not deleted — fix or remove them on the tuning "
+        f"screen.",
+        icon="⚠️",
+    )
+    for problem in problems:
+        st.caption(f"- {problem}")
 
 
 def _lines(values) -> str:
@@ -766,6 +798,9 @@ def screen_tuning():
         st.error(f"Could not read this profile: {exc}")
         return
 
+    # Above the list, because every rule it names is on the list below it.
+    _show_id_problems(rules.get("id_problems"))
+
     edits_tier, edits_triggers = {}, {}
     edits_always, edits_never = {}, {}
 
@@ -822,7 +857,9 @@ def screen_tuning():
     if forward.button("Save and continue", type="primary"):
         write_component_rules(st.session_state.profile_name, edits_tier,
                               edits_triggers, edits_always, edits_never)
-        st.success("Saved.")
+        # Advancing is never blocked on this. A rule that cannot fire is worth
+        # telling somebody about; it is not worth trapping them on a screen
+        # over, and the warning is already above the rules it refers to.
         _goto(4)
         st.rerun()
 

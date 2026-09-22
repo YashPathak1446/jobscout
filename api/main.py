@@ -479,12 +479,20 @@ class ComponentRules(BaseModel):
 
 @app.put("/api/profile/{name}/components")
 def components_write(name: str, request: ComponentRules) -> dict:
+    """
+    Save the tuning screen's edits.
+
+    `id_problems` rides back with the confirmation because this is the one
+    screen that can show a person *which* of their rules is broken next to the
+    rule itself. The write never drops a rule keyed to a component the resume
+    no longer has (R17); it now says that it kept one.
+    """
     try:
-        write_component_rules(name, request.importance, request.triggers,
-                              request.always, request.never)
+        saved = write_component_rules(name, request.importance, request.triggers,
+                                      request.always, request.never)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"saved": name}
+    return {"saved": name, "id_problems": saved["id_problems"]}
 
 
 # ------------------------------------------------------------- runs ----

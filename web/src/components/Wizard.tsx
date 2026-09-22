@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { IdProblems } from '@/components/IdProblems'
 import { Check } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -205,6 +206,7 @@ function BuiltSummary({ summary }: { summary: ProfileSummary }) {
           </div>
         ))}
       </div>
+      <IdProblems problems={summary.id_problems} />
       {summary.backup_path && (
         <p className="text-sm text-muted-foreground">
           Previous profile saved as{' '}

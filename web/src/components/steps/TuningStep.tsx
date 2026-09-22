@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, ChevronDown } from 'lucide-react'
 
+import { IdProblems } from '@/components/IdProblems'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -20,7 +21,19 @@ type Component = {
   never: boolean
 }
 
-type Rules = { experiences: Component[]; projects: Component[] }
+type Rules = {
+  experiences: Component[]
+  projects: Component[]
+  // Undefined means the check did not run, which is not the same as no
+  // problems. `IdProblems` keeps the three states apart.
+  id_problems?: string[]
+}
+
+// The two keys of `Rules` that hold components. Named rather than reusing
+// `keyof Rules`, which now also matches `id_problems` — `edit` would happily
+// be handed it and try to map over a list of strings.
+type Section = 'experiences' | 'projects'
+const SECTIONS: readonly Section[] = ['experiences', 'projects']
 
 /**
  * Step four: which of your work counts, and when.
@@ -64,7 +77,7 @@ export function TuningStep({
     )
   }
 
-  function edit(section: keyof Rules, id: string, patch: Partial<Component>) {
+  function edit(section: Section, id: string, patch: Partial<Component>) {
     setRules((r) =>
       r
         ? {
@@ -80,7 +93,7 @@ export function TuningStep({
     setError(null)
     const all = [...rules!.experiences, ...rules!.projects]
     try {
-      await api.writeComponents(profile, {
+      const saved = await api.writeComponents(profile, {
         importance: Object.fromEntries(all.map((c) => [c.id, c.tier])),
         triggers: Object.fromEntries(all.map((c) => [c.id, c.triggers])),
         // never wins over always, which is what the pipeline does with the
@@ -88,6 +101,13 @@ export function TuningStep({
         always: Object.fromEntries(all.map((c) => [c.id, c.always && !c.never])),
         never: Object.fromEntries(all.map((c) => [c.id, c.never])),
       })
+      // The save re-checks against the resume, so a rule edited into shape is
+      // reflected if the user comes back here. Continuing is never blocked on
+      // it: a rule that cannot fire is worth saying, not worth trapping
+      // somebody on a screen over.
+      setRules((current) =>
+        current ? { ...current, id_problems: saved.id_problems } : current,
+      )
       onContinue()
     } catch (e) {
       setError((e as Error).message)
@@ -113,7 +133,12 @@ export function TuningStep({
         </p>
       </div>
 
-      {(['experiences', 'projects'] as const).map((section) => (
+      {/* Above the list, because every rule it names is in the list. A
+          warning a person meets only after pressing Save is attached to the
+          wrong moment. */}
+      <IdProblems problems={rules.id_problems} />
+
+      {SECTIONS.map((section) => (
         <section key={section} className="space-y-2">
           <h3 className="font-medium capitalize">{section}</h3>
           {rules[section].length === 0 && (

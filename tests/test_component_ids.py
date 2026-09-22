@@ -30,6 +30,7 @@ both need holding down:
   survives rather than just that the two differ.
 """
 
+import json
 import sys
 import tempfile
 import unittest
@@ -263,6 +264,158 @@ class TestTheImportPathReportsIdProblems(unittest.TestCase):
         self.assertTrue(problems, "a check that could not run reported no "
                                   "problems, which reads as 'all rules fine'")
         self.assertIn("could not be checked", problems[0])
+
+
+class TestTheEditorReportsWithoutRepairing(unittest.TestCase):
+    """
+    The tuning screen already parses the resume to draw itself, so the check
+    costs it nothing — and it is the one screen that lists the rules, which
+    makes it the only place a warning about them is actionable.
+
+    R17's behaviour is unchanged and deliberately so: a rule keyed to a
+    component the resume no longer has is **kept**, on the grounds that a rule
+    somebody wrote is worth more than a tidy file. What changes is that the
+    save says so. A rule kept and never mentioned is indistinguishable from a
+    rule that works, which is the silence R17 set out to remove and could not
+    finish on its own.
+    """
+
+    NAME = "_editor_id_probe"
+
+    def setUp(self):
+        from scripts import init_profile
+
+        source = init_profile.PROFILES / "rohan_deshmukh.json"
+        if not source.is_file():
+            self.skipTest("needs the second fixture user")
+
+        self.path = init_profile.PROFILES / f"{self.NAME}.json"
+        raw = json.loads(source.read_text(encoding="utf-8"))
+        raw["user_id"] = self.NAME
+        rules = raw["resume_preferences"]["experiences"]["conditional_inclusion"]
+        # One of each kind: a key naming nothing, and a pre-Q34 bare key that
+        # now names two components.
+        rules["exp_a_company_that_left"] = {
+            "include_if_jd_contains": ["kafka"], "description": "hand written"}
+        rules["exp_vertex_technologies"] = {
+            "include_if_jd_contains": ["fraud"], "description": "pre-Q34"}
+        self.path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
+
+    def tearDown(self):
+        from scripts import init_profile
+        for leftover in init_profile.PROFILES.glob(f"{self.NAME}*.json"):
+            leftover.unlink()
+
+    def _saved(self):
+        from scripts import init_profile
+        return init_profile.write_component_rules(self.NAME, {}, {})
+
+    def test_saving_reports_both_kinds(self):
+        problems = self._saved()["id_problems"]
+        self.assertEqual(len(problems), 2, problems)
+        self.assertTrue(any("can never fire" in p for p in problems), problems)
+        self.assertTrue(any("matches 2 components" in p for p in problems),
+                        problems)
+
+    def test_saving_still_keeps_the_rules_it_warns_about(self):
+        """R17. The warning is a report, not a repair."""
+        self._saved()
+
+        kept = json.loads(self.path.read_text(encoding="utf-8"))
+        rules = kept["resume_preferences"]["experiences"]["conditional_inclusion"]
+        self.assertIn("exp_a_company_that_left", rules,
+                      "the save deleted a rule it was only meant to mention")
+        self.assertIn("exp_vertex_technologies", rules)
+
+    def test_the_screen_is_told_before_the_save_not_only_after(self):
+        """
+        A warning a person meets only on pressing Save is attached to the wrong
+        moment — the rules are on the screen they are already looking at.
+        """
+        from scripts import init_profile
+
+        rules = init_profile.read_component_rules(self.NAME)
+        self.assertEqual(len(rules["id_problems"]), 2, rules["id_problems"])
+
+    def test_the_editors_own_view_is_unchanged_otherwise(self):
+        """The added key must not disturb what the screen already draws."""
+        from scripts import init_profile
+
+        rules = init_profile.read_component_rules(self.NAME)
+        self.assertEqual(len(rules["experiences"]), 3)
+        self.assertEqual(len(rules["projects"]), 4)
+
+
+class TestBothFrontEndsActuallyReadIt(unittest.TestCase):
+    """
+    The closing move, and the reason this class exists at all.
+
+    `id_problems` was added to `create_profile`'s return and **nothing read
+    it** — `app.py` rendered `summary["counts"]`, `Wizard.tsx` rendered
+    `summary.counts`, and `api.ts` did not even name the field in its type. It
+    crossed the wire from `POST /api/profile` and went on the floor.
+
+    That is this codebase's most-repeated bug, committed by the change that
+    was quoting the rule against it: `rarely_include` (R31),
+    `scraped_successfully` (R61), the selection breakdown (R57),
+    `graduation_eligibility` (R66), `LLM_BACKEND` (R80) — and CLAUDE.md's
+    instruction is flat: *wire the consumer in the same change, or do not add
+    the field.*
+
+    So the consumer gets an assertion rather than a promise. A producer with
+    no reader now fails the build on the side where the reader should be.
+    """
+
+    WEB = ROOT / "web" / "src"
+
+    # Files that must name the field itself: the two Python views, the two
+    # React screens that pass it on, and the type the response is read
+    # through. `IdProblems.tsx` is deliberately absent — it is the renderer
+    # and takes a prop, so it never spells the field, and listing it here
+    # would only assert that a comment mentions it.
+    NAMES_THE_FIELD = {
+        "app.py": ROOT / "app.py",
+        "api/main.py": ROOT / "api" / "main.py",
+        "Wizard.tsx": WEB / "components" / "Wizard.tsx",
+        "TuningStep.tsx": WEB / "components" / "steps" / "TuningStep.tsx",
+        "api.ts": WEB / "lib" / "api.ts",
+    }
+
+    def test_every_front_end_file_that_should_name_the_field_does(self):
+        for label, path in self.NAMES_THE_FIELD.items():
+            with self.subTest(file=label):
+                if not path.is_file():
+                    self.skipTest(f"{label} is not in this checkout")
+                self.assertIn(
+                    "id_problems", path.read_text(encoding="utf-8"),
+                    f"{label} does not read `id_problems`, so a profile rule "
+                    f"that cannot fire is computed and shown to nobody")
+
+    def test_the_react_warning_has_one_renderer_and_two_call_sites(self):
+        """The same rule as the Streamlit one below, on the other front end."""
+        renderer = self.WEB / "components" / "IdProblems.tsx"
+        if not renderer.is_file():
+            self.skipTest("the React app is not in this checkout")
+
+        callers = [self.WEB / "components" / "Wizard.tsx",
+                   self.WEB / "components" / "steps" / "TuningStep.tsx"]
+        for path in callers:
+            with self.subTest(file=path.name):
+                source = path.read_text(encoding="utf-8")
+                self.assertIn("IdProblems", source,
+                              f"{path.name} renders the warning some other "
+                              f"way, so there are now two of it to improve")
+
+    def test_the_streamlit_warning_has_one_renderer_and_two_call_sites(self):
+        """
+        Both screens through `_show_id_problems`, not a block of Streamlit
+        copied twice. A warning written twice is a warning improved once,
+        which is R69 and R70's shape wearing a view layer.
+        """
+        source = (ROOT / "app.py").read_text(encoding="utf-8")
+        self.assertEqual(source.count("def _show_id_problems"), 1)
+        self.assertEqual(source.count("_show_id_problems("), 3,
+                         "expected one definition and two call sites")
 
 
 class TestTheRoundTripThatCaughtIt(unittest.TestCase):

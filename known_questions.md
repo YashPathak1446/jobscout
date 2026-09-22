@@ -8538,6 +8538,77 @@ projects half of the bullet budget (R74) — it would pass against Priya while
 measuring nothing. Rohan has 4 projects and 3 experiences and is the closer
 substitute. Each of the three modules needs deciding on its own.
 
+## Q36. `PATCH /api/profile` can swap the resume out from under the IDs
+
+**Status:** Open, found 2026-09-22 auditing every path that can change a
+master resume or an ID-keyed profile field after import. Logged, not fixed.
+
+`update_profile_fields(name, updates)` merges `updates` into the profile at
+**any depth, under any key**, and `ProfileUpdate.updates` is typed
+`dict[str, Any]` with no allowlist (`api/main.py:447-448`). The recursion is
+load-bearing and correct — R30's bug was a form replacing a nested section it
+had only partly shown — but it constrains *how* a write lands, not *what* may
+be written.
+
+Two consequences, and the second is the one with teeth:
+
+1. `conditional_inclusion`, `always_include`, `never_include` and
+   `component_importance` can be written directly, to any key, with no check
+   that the ID names a component. The check added for Q34 covers
+   `create_profile` and `write_component_rules`; this path has neither.
+
+2. **The resume-swap hole.** `resume_preferences.master_resume_path` is an
+   ordinary key, so a PATCH can repoint a profile at a different `.tex`. Every
+   ID-keyed field in that profile was derived from the *old* resume and is
+   left exactly as it was. Nothing re-derives, nothing warns, and the profile
+   stays schema-valid — so a person's trigger rules, tiers and never-include
+   list silently come to describe a resume they were not written for. The
+   symptom is a tailored resume that quietly includes the wrong work, which is
+   the failure mode this project is least able to notice.
+
+The same key also decides where `_refuse_an_empty_resume` and
+`read_component_rules` read from, so a path pointing outside the data home is
+worth thinking about at the same time — under A5/A6 this is an authenticated
+route writing a filesystem path.
+
+**Not obviously "add an allowlist".** The wizard's preferences and personal
+screens both go through here, and enumerating what they may write is a list
+that will go stale the way `_ID_FIELDS` nearly did. The alternative is to
+reject or re-derive on the specific keys that invalidate derived state —
+`master_resume_path` above all — and run the ID check on the rest. Decide when
+A3's seam has settled; a per-user partition changes what "a path" is allowed
+to mean.
+
+## Q37. `extract_resume` writes a resume that nothing is required to adopt
+
+**Status:** Open, found 2026-09-22 in the same audit. No live bug today.
+Logged because the thing preventing it is a convention, not a mechanism.
+
+Importing is three calls: `extract_resume` (writes the upload into
+`RESUME_DIR`), `save_extracted` (renders the confirmed schema to `.tex`), and
+`create_profile` (derives the profile from it, and since Q34 reports on its
+IDs). Only the third re-derives anything.
+
+Every current caller pairs them — `app.py:450` and `POST /api/profile` both
+run `save_extracted` into `create_profile`, and `POST /api/resume/extract`
+stops at the first call on purpose, which is R33: a person confirms before
+anything is adopted. So nothing is broken.
+
+What is missing is any reason it has to stay that way. `extract_resume` writes
+to `RESUME_DIR / Path(filename).name`, so **an upload whose filename matches an
+existing master overwrites it**, before any confirmation and with no profile
+rebuild. A second caller that stops after `save_extracted` would leave a
+profile whose IDs describe a file that is no longer there — the Q36 hole
+reached by a different route. `save_resume` and `import_to_tex` are both
+exported, both do part of this sequence, and **neither has a caller**, which is
+exactly the shape that invites one.
+
+Worth pairing with Q36 rather than fixing alone: both are "the resume changed
+and the profile did not notice", and one answer — re-derive or refuse when the
+master a profile points at is not the master its IDs came from — closes both.
+A content hash of the `.tex` stored beside the IDs would say it cheaply, and
+`EmbeddingCache` already hashes that exact file for its own key.
+
 ---
 
 # Out of scope
