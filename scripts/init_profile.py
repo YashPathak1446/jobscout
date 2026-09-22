@@ -57,12 +57,57 @@ TEMPLATE = paths.asset("profile_template.json")
 # and listed separately because each is its own question: one answered and
 # two left unknown is a profile the gate will badge, not a finished one (A4).
 NEEDS_HUMAN = {
-    "personal_info": ["location", "visa_status",
+    "personal_info": ["location",
                       "work_authorization.us_person",
                       "work_authorization.needs_sponsorship",
                       "work_authorization.holds_clearance"],
     "job_preferences": ["target_roles", "locations", "exclude_keywords"],
 }
+
+
+# The three work-authorization questions, worded once (A4). Streamlit renders
+# from this; the React screen cannot import Python, so it carries a copy and
+# `test_about_you.py` fails if any string here is missing from it verbatim.
+#
+# The wording is load-bearing, and was reviewed as such:
+#   - "refugee or asylee": ITAR's "US person" includes them, and a wrong "No"
+#     hides jobs they may hold without saying so.
+#   - "now or later", and help that opens on the present: readers answer about
+#     today unless told otherwise, and an F-1 on OPT does not need sponsorship
+#     *today*.
+#   - "active ... today": eligibility to obtain a clearance is question 1.
+#
+# "Prefer not to say" stores "unknown", the same as never answering — the
+# gate treats both alike, and the board's badge keeps asking.
+WORK_AUTHORIZATION_QUESTIONS = (
+    {
+        "field": "us_person",
+        "question": "Are you a US citizen, green-card holder, or admitted as "
+                    "a refugee or asylee?",
+        "options": (("yes", "Yes"), ("no", "No"),
+                    ("unknown", "Prefer not to say")),
+        "help": "Some postings are open only to US persons: ITAR, "
+                "export-control and most clearance work.",
+    },
+    {
+        "field": "needs_sponsorship",
+        "question": "Will you need visa sponsorship, now or in future?",
+        "options": (("yes", "Yes, now or later"), ("no", "No"),
+                    ("unknown", "Prefer not to say")),
+        "help": "If you're on a work visa today, the answer is yes. F-1 on OPT "
+                "or CPT: yes, you'll need it later. H-1B: yes, a transfer is "
+                "sponsorship. Green card or citizen: no.",
+    },
+    {
+        "field": "holds_clearance",
+        "question": "Do you hold an active security clearance today?",
+        "options": (("yes", "Yes"), ("no", "No"),
+                    ("unknown", "Prefer not to say")),
+        "help": "Active today. Being eligible to get one doesn't count; "
+                "postings that only need eligibility are already covered by "
+                "question 1.",
+    },
+)
 
 
 def build_profile(resume_path: Path, name: str, *, user_id) -> dict:
@@ -434,6 +479,14 @@ def update_profile_fields(user_id, name: str, updates: dict) -> Path:
     profile = json.loads(path.read_text(encoding="utf-8"))
     _merge(profile, updates or {})
 
+    # A form that writes `work_authorization` leaves the legacy booleans in
+    # the file, ignored but contradicting it for anyone reading the JSON. The
+    # migration drops them once an answer exists, so run it on the way out.
+    personal = (updates or {}).get("personal_info") or {}
+    if "work_authorization" in personal:
+        profile["personal_info"] = migrate_work_authorization(
+            profile["personal_info"])
+
     path.write_text(json.dumps(profile, indent=2) + chr(10), encoding="utf-8")
     return path
 
@@ -485,12 +538,10 @@ def read_personal(user_id, name: str) -> dict:
     # shows blanks for answers the gate is already acting on (A4). Raw JSON
     # would skip it: `PersonalInfo` is where it runs for everything else.
     personal = migrate_work_authorization(raw)
-    auth = personal["work_authorization"]
     return {
         "location": personal.get("location", "") or "",
         "visa_status": personal.get("visa_status", "") or "",
-        "holds_security_clearance": auth.get("holds_clearance") == "yes",
-        "work_authorization": auth,
+        "work_authorization": personal["work_authorization"],
     }
 
 

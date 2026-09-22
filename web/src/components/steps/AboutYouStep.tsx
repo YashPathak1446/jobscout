@@ -1,43 +1,90 @@
 import { useEffect, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { BackendPanel } from '@/components/BackendPanel'
 import { api } from '@/lib/api'
+import { cn } from '@/lib/utils'
 
-// Radix forbids a SelectItem with an empty value, and passing `undefined` as
-// the Select's value silently makes it *uncontrolled* — it then manages its
-// own selection, flips back to controlled the moment state updates, and the
-// displayed value never catches up. So "not answered yet" gets a name.
-const UNANSWERED = '__unanswered__'
+type Answer = 'yes' | 'no' | 'unknown'
+type Field = 'us_person' | 'needs_sponsorship' | 'holds_clearance'
+// null is "not answered on this screen yet" — distinct from 'unknown',
+// which is the answer "Prefer not to say".
+type Answers = Record<Field, Answer | null>
 
-const VISA_OPTIONS = [
-  'US Citizen',
-  'Green Card',
-  'F1 OPT',
-  'F1 CPT',
-  'H1B',
-  'Other / prefer not to say',
+/**
+ * The three work-authorization questions (A4).
+ *
+ * A copy of `WORK_AUTHORIZATION_QUESTIONS` in `scripts/init_profile.py`,
+ * which Streamlit renders from. The wording is load-bearing and was reviewed
+ * as such; `tests/test_about_you.py` fails if any string there is missing
+ * here verbatim, so edit both or neither.
+ */
+const QUESTIONS: {
+  field: Field
+  question: string
+  options: [Answer, string][]
+  help: string
+}[] = [
+  {
+    field: 'us_person',
+    question:
+      'Are you a US citizen, green-card holder, or admitted as a refugee or asylee?',
+    options: [
+      ['yes', 'Yes'],
+      ['no', 'No'],
+      ['unknown', 'Prefer not to say'],
+    ],
+    help: 'Some postings are open only to US persons: ITAR, export-control and most clearance work.',
+  },
+  {
+    field: 'needs_sponsorship',
+    question: 'Will you need visa sponsorship, now or in future?',
+    options: [
+      ['yes', 'Yes, now or later'],
+      ['no', 'No'],
+      ['unknown', 'Prefer not to say'],
+    ],
+    help: "If you're on a work visa today, the answer is yes. F-1 on OPT or CPT: yes, you'll need it later. H-1B: yes, a transfer is sponsorship. Green card or citizen: no.",
+  },
+  {
+    field: 'holds_clearance',
+    question: 'Do you hold an active security clearance today?',
+    options: [
+      ['yes', 'Yes'],
+      ['no', 'No'],
+      ['unknown', 'Prefer not to say'],
+    ],
+    help: "Active today. Being eligible to get one doesn't count; postings that only need eligibility are already covered by question 1.",
+  },
 ]
+
+/**
+ * A stored "yes" or "no" is shown as answered. A stored "unknown" is shown as
+ * **unanswered**, not as "Prefer not to say": it is also what a profile that
+ * was never asked holds — the template starts there — and pre-selecting it
+ * would record a default as the reader's choice.
+ */
+function seed(stored: unknown): Answers {
+  const auth = (stored ?? {}) as Partial<Record<Field, unknown>>
+  const pick = (v: unknown): Answer | null =>
+    v === 'yes' || v === 'no' ? v : null
+  return {
+    us_person: pick(auth.us_person),
+    needs_sponsorship: pick(auth.needs_sponsorship),
+    holds_clearance: pick(auth.holds_clearance),
+  }
+}
 
 type Personal = {
   location: string
-  visa_status: string
-  holds_security_clearance: boolean
+  answers: Answers
 }
 
 /**
- * Step two: the two things a resume cannot state.
+ * Step two: the things a resume cannot state.
  *
  * An address line says where you live, not where you are allowed to work, and
  * a resume never says whether a clearance is active today — which is the
@@ -67,10 +114,19 @@ export function AboutYouStep({
   useEffect(() => {
     api
       .profile(profile)
-      .then((p) => setStored(p.personal as Personal))
+      .then((p) => {
+        const personal = p.personal as {
+          location?: string
+          work_authorization?: unknown
+        }
+        setStored({
+          location: personal.location ?? '',
+          answers: seed(personal.work_authorization),
+        })
+      })
       .catch((e: Error) => {
         setError(e.message)
-        setStored({ location: '', visa_status: '', holds_security_clearance: false })
+        setStored({ location: '', answers: seed(null) })
       })
   }, [profile])
 
@@ -86,6 +142,8 @@ export function AboutYouStep({
     )
   }
 
+  const answered = QUESTIONS.every((q) => stored.answers[q.field] !== null)
+
   async function save() {
     setSaving(true)
     setError(null)
@@ -93,10 +151,7 @@ export function AboutYouStep({
       await api.updateProfile(profile, {
         personal_info: {
           location: stored!.location,
-          visa_status: stored!.visa_status,
-          us_citizen: stored!.visa_status === 'US Citizen',
-          permanent_resident: stored!.visa_status === 'Green Card',
-          holds_security_clearance: stored!.holds_security_clearance,
+          work_authorization: stored!.answers,
         },
       })
       onContinue()
@@ -128,51 +183,42 @@ export function AboutYouStep({
         />
       </div>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="visa">Work authorisation</Label>
-        <Select
-          value={stored.visa_status || UNANSWERED}
-          onValueChange={(v) =>
-            setStored({ ...stored, visa_status: v === UNANSWERED ? '' : v })
-          }
-        >
-          <SelectTrigger id="visa" className="max-w-md">
-            <SelectValue placeholder="Select one" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={UNANSWERED} disabled>
-              Select one
-            </SelectItem>
-            {VISA_OPTIONS.map((option) => (
-              <SelectItem key={option} value={option}>
-                {option}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* Asked rather than assumed. A posting that requires an active
-          clearance screens out everyone else, so those are filtered out
-          rather than shown and wasted on (R56). */}
-      <div className="flex items-start gap-2">
-        <Checkbox
-          id="clearance"
-          checked={stored.holds_security_clearance}
-          onCheckedChange={(v) =>
-            setStored({ ...stored, holds_security_clearance: v === true })
-          }
-          className="mt-0.5"
-        />
-        <div className="space-y-1">
-          <Label htmlFor="clearance">
-            I currently hold an active security clearance
-          </Label>
-          <p className="text-sm text-muted-foreground">
-            Leave this unchecked unless a clearance is active today.
-          </p>
+      {QUESTIONS.map((q) => (
+        <div key={q.field} className="space-y-1.5">
+          <Label id={`work-${q.field}`}>{q.question}</Label>
+          <div
+            role="radiogroup"
+            aria-labelledby={`work-${q.field}`}
+            className="flex flex-wrap gap-2"
+          >
+            {q.options.map(([value, label]) => {
+              const chosen = stored.answers[q.field] === value
+              return (
+                <Button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={chosen}
+                  size="sm"
+                  variant={chosen ? 'default' : 'outline'}
+                  className={cn(!chosen && 'font-normal')}
+                  onClick={() =>
+                    setStored({
+                      ...stored,
+                      answers: { ...stored.answers, [q.field]: value },
+                    })
+                  }
+                >
+                  {label}
+                </Button>
+              )
+            })}
+          </div>
+          {/* Visible, not a tooltip: the sponsorship help is what turns
+              "not today" into the right answer. */}
+          <p className="text-sm text-muted-foreground">{q.help}</p>
         </div>
-      </div>
+      ))}
 
       <BackendPanel apiKey={apiKey} onKey={onKey} />
 
@@ -184,14 +230,13 @@ export function AboutYouStep({
         <Button variant="outline" onClick={onBack}>
           Back
         </Button>
-        {/* Both, not just location. Work authorisation decides whether
-            ITAR-restricted and clearance postings are shown at all, and the
-            Streamlit form defaulted the select to its first option — which
-            silently asserted US citizenship for anyone who did not touch it.
-            An unanswered question stays unanswered. */}
+        {/* Every question answered, "Prefer not to say" included. An
+            unanswered question stays unanswered: the Streamlit form once
+            defaulted its select to the first option, which silently asserted
+            US citizenship for anyone who did not touch it. */}
         <Button
           onClick={save}
-          disabled={!stored.location.trim() || !stored.visa_status || saving}
+          disabled={!stored.location.trim() || !answered || saving}
         >
           {saving ? 'Saving…' : 'Continue'}
         </Button>

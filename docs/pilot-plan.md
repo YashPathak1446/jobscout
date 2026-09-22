@@ -538,6 +538,43 @@ schema, in both profiles, surfaced by no UI, read by nothing — full-time /
 intern / contract is a real filter for the students in the pilot, but wiring the
 consumer is the price of adding it).
 
+#### What shipped, and where it departed from the above (R92)
+
+The model, the migration table and the three-valued verdict landed as
+written, with these departures, each for a reason recorded in R92 or its Q:
+
+- **Two gates, not one** (Q39). `_apply_body_gate` does not store
+  `gate_reason`; the board's `refresh_board_gate` does. Both now call
+  `job_filter.judge_body`. The plan's `demands_basis` is
+  `posting_facts.demands_facet`, and `_gate_source` hashes that file too.
+- **The verdict is a column**, `gate_verdict`, beside `gate_reason`, with a
+  one-time backfill from `gate_reason` when the column is added.
+- **Clearance `false` → unknown** and **`us_person=yes` satisfies a
+  no-sponsorship demand**, and only that entailment — both decided
+  2026-09-22.
+- **The visa dropdown is gone** from both screens. `visa_status` stays in
+  the schema, read by nothing. The wording, reviewed, lives in
+  `init_profile.WORK_AUTHORIZATION_QUESTIONS`; question 1 names refugees and
+  asylees, question 2's yes is "Yes, now or later" and its help opens "If
+  you're on a work visa today, the answer is yes." A stored `unknown` is
+  shown unanswered, never pre-selected as "Prefer not to say".
+- **The React half reads defensively**, because `web/src/lib/` was never
+  committed (Q41). Declare `gate_verdict`, `gate_reason` and `unconfirmed`
+  in `api.ts` once it is.
+
+Logged, not done: Q40 (the board judges discovery's text, not the scraped
+JD), Q42 (undecidable jobs can take top-K; leaning: rank below confirmed),
+Q43 (Streamlit preferences crash on unanswered years, found by A4's test).
+
+**Run on the author's machine before relying on A4:** `baseline.py verify
+--all`, the two `yash_pathak` corpus tests in `test_body_gate` and
+`test_experience_profile` (a company dropped only for a clearance demand is
+now undecidable — move the expectation), and `scripts/acceptance.py`, which
+could not complete in the container (no `pdflatex`). Also confirm the React
+board re-judges after About-you is saved: nothing in `Board.tsx` calls
+`POST /api/board/gate`, so if `api.ts` does not either, a badge will not
+clear until Streamlit or a run refreshes the store.
+
 ### A5. Accounts, session, per-route authorization (1½–2 days)
 
 Lands **after** A3 — until the data is partitioned an ownership check returns

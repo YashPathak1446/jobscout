@@ -8955,6 +8955,25 @@ built, the ordering belongs where `_split_unreadable` already partitions
 results, and the run summary should say how many slots went to undecidable
 jobs — a quota filled silently is the R62 shape.
 
+
+## Q43. Streamlit's preferences screen crashes when years is unanswered
+
+**Status:** Open, found 2026-09-22 by A4's About-you test: pressing Continue
+on Rohan's profile moved to step 3, which raised. Not fixed in A4.
+
+`screen_preferences` renders the years box with `value=None` when no years
+are stored — correctly, per R75 — and three lines later calls
+`_exclude_options(int(years))` for the "Skip postings mentioning" options
+(`app.py`, the `excludes = st.multiselect(` call). `int(None)` is a
+`TypeError`, so **the screen crashes for every profile whose years are
+unanswered**: Rohan, and every profile the wizard builds, since the template
+has no years. The save path three lines further on already guards it
+(`int(years) if years is not None else None`); the options list does not.
+
+R75's shape exactly — "any test that walks a range has not walked the
+absence" — on the one line of the screen that walks it twice. The React
+`PreferencesStep` has its own options logic and was not checked; count both.
+
 ---
 
 # Out of scope

@@ -7,11 +7,13 @@ becomes **uncontrolled**. It manages its own selection, `onValueChange` sets
 React state, the component flips back to controlled — and the displayed value
 never catches up with what the app thinks was chosen.
 
-The instance was the work-authorisation control on step two, which writes
-`personal_info.visa_status`. That field feeds `_is_us_person`, which decides
-whether ITAR-restricted postings are shown at all. A display that disagrees
-with state is usually an annoyance; on this one control it means telling
-somebody they are eligible for work they are legally barred from.
+The instance was the work-authorisation control on step two, which wrote
+`personal_info.visa_status` and, through it, the booleans that decided
+whether ITAR-restricted postings were shown at all. A display that disagrees
+with state is usually an annoyance; on that control it meant telling
+somebody they were eligible for work they are legally barred from. (A4
+replaced the select with three answer buttons, `work_authorization`; the
+rule below still holds for every other Select.)
 
 Source-level, in the same shape as `test_ui_contract.py`. A real browser test
 is the right answer eventually; this costs nothing and holds the specific
@@ -59,26 +61,34 @@ class TestNoControlDrifts(unittest.TestCase):
 
     def test_a_sentinel_is_used_where_empty_is_not_allowed(self):
         """
-        The positive half: the two places that need one have one. Radix
-        forbids a `SelectItem` with an empty value, so "unset" has to be
-        spelled out rather than left as `''` or `undefined`.
+        The positive half: the places where "unset" is a real state spell it
+        as a named sentinel. Radix forbids a `SelectItem` with an empty value,
+        so it cannot be left as `''` or `undefined`.
+
+        The board's filters have "any". About-you had one for its work-
+        authorisation select until A4 replaced the select with three answer
+        buttons, whose unset state is `null` in plain state; should a Select
+        come back to that screen, so must the sentinel.
         """
-        found = {}
+        found, selects = {}, set()
         for path in _sources():
             text = path.read_text(encoding="utf-8")
+            if "<Select" in text:
+                selects.add(path.name)
             for name in re.findall(r"const (\w+) = '__\w+__'", text):
                 found.setdefault(path.name, []).append(name)
-        self.assertIn("AboutYouStep.tsx", found,
-                      "the work-authorisation select lost its unset sentinel")
         self.assertIn("Board.tsx", found,
                       "the board filters lost their 'any' sentinel")
+        if "AboutYouStep.tsx" in selects:
+            self.assertIn("AboutYouStep.tsx", found,
+                          "About-you has a Select again and no unset sentinel")
 
     def test_work_authorisation_gates_continue(self):
         """
-        Not a rendering detail. The Streamlit form defaulted this select to
-        its first option, "US Citizen", so anyone who did not touch it
-        asserted citizenship by omission. An unanswered question has to stay
-        unanswered, and the button has to know that.
+        Not a rendering detail. The Streamlit form defaulted its select to
+        "US Citizen", so anyone who did not touch it asserted citizenship by
+        omission. Since A4 there are three questions; each unanswered one is
+        `null`, and Continue waits until none is.
         """
         step = (WEB / "components" / "steps" / "AboutYouStep.tsx")
         if not step.is_file():
@@ -86,11 +96,13 @@ class TestNoControlDrifts(unittest.TestCase):
         text = step.read_text(encoding="utf-8")
         gate = re.search(r"disabled=\{([^}]*saving[^}]*)\}", text)
         self.assertIsNotNone(gate, "Continue has no disabled condition")
-        self.assertIn("visa_status", gate.group(1),
+        self.assertIn("answered", gate.group(1),
                       "Continue does not wait for work authorisation, so "
-                      "skipping the question writes whatever the template "
+                      "skipping the questions writes whatever the template "
                       "happened to hold")
-
+        self.assertRegex(
+            text, r"const answered = QUESTIONS\.every\(\s*\(q\) => "
+                  r"stored\.answers\[q\.field\] !== null")
 
 if __name__ == "__main__":
     unittest.main()

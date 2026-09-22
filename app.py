@@ -53,17 +53,13 @@ from scripts.init_profile import (
     extract_resume,
     read_component_rules,
     read_personal,
+    WORK_AUTHORIZATION_QUESTIONS,
     read_preferences,
     save_extracted,
     save_resume,
     update_profile_fields,
     write_component_rules,
 )
-
-VISA_OPTIONS = [
-    "US Citizen", "Green Card", "F1 OPT", "F1 CPT", "H1B",
-    "Other / prefer not to say",
-]
 
 # Starting points, not a menu — the control keeps anything typed that is not
 # on the list. Nine tech titles was the shape of one new grad's search (R68);
@@ -577,27 +573,15 @@ def screen_about_you():
     try:
         stored = read_personal(None, st.session_state.profile_name)
     except Exception:
-        stored = {"location": "", "visa_status": "",
-                  "holds_security_clearance": False}
+        stored = {"location": "", "work_authorization": {}}
 
     location = st.text_input("Where are you based?", value=stored["location"],
                              placeholder="City, State")
-    visa = st.selectbox(
-        "Work authorisation", VISA_OPTIONS,
-        index=VISA_OPTIONS.index(stored["visa_status"])
-        if stored["visa_status"] in VISA_OPTIONS else 0,
-    )
 
-    # Asked rather than assumed, because it is the difference between two
-    # postings that read almost identically: one wants a clearance you can
-    # apply to get, the other wants one you already have (R56).
-    clearance = st.checkbox(
-        "I currently hold an active security clearance",
-        value=bool(stored.get("holds_security_clearance", False)),
-        help="Leave this unchecked unless a clearance is active today. "
-             "Postings that require one screen out everyone else, so they "
-             "are filtered out rather than shown and wasted on.",
-    )
+    answers = {}
+    for spec in WORK_AUTHORIZATION_QUESTIONS:
+        answers[spec["field"]] = _work_question(
+            spec, (stored.get("work_authorization") or {}).get(spec["field"]))
 
     key = _backend_panel()
 
@@ -606,19 +590,45 @@ def screen_about_you():
         _goto(0)
         st.rerun()
 
-    if forward.button("Continue", type="primary", disabled=not location):
+    # Every question answered, "Prefer not to say" included. An unanswered
+    # question stays unanswered rather than defaulting: the Streamlit select
+    # this replaced defaulted to its first option, "US Citizen", and so
+    # asserted citizenship for anyone who did not touch it.
+    answered = all(value is not None for value in answers.values())
+    if forward.button("Continue", type="primary",
+                      disabled=not (location and answered)):
         st.session_state.api_key = key
         update_profile_fields(None, st.session_state.profile_name, {
             "personal_info": {
                 "location": location,
-                "visa_status": visa,
-                "us_citizen": visa == "US Citizen",
-                "permanent_resident": visa == "Green Card",
-                "holds_security_clearance": clearance,
+                "work_authorization": answers,
             },
         })
         _goto(2)
         st.rerun()
+
+
+def _work_question(spec, stored):
+    """
+    One work-authorization question as a radio with no default (A4).
+
+    A stored "yes" or "no" is shown as answered. A stored "unknown" is shown
+    as **unanswered**, not as "Prefer not to say": it is also what a profile
+    that was never asked holds, and pre-selecting it would record the
+    template's default as the reader's choice. Someone who declined before
+    declines again, which costs one click.
+    """
+    values = [value for value, _ in spec["options"]]
+    labels = dict(spec["options"])
+    choice = st.radio(
+        spec["question"], values,
+        index=values.index(stored) if stored in ("yes", "no") else None,
+        format_func=labels.get, horizontal=True, key=f"work-{spec['field']}",
+    )
+    # Visible, not a tooltip: the sponsorship help is what turns "not today"
+    # into the right answer, and a hover icon is read by almost nobody.
+    st.caption(spec["help"])
+    return choice
 
 
 # ------------------------------------------------------------ screen: 3 ----
