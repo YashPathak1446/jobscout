@@ -8503,6 +8503,28 @@ only on the author's machine, so it reports MISSING before and after in this
 container. The path snapshot is what stands in for it here, and it is not a
 substitute there.
 
+## R91. `find_pdflatex` returns None on Linux with no LaTeX (Q38)
+
+**Decision:** (2026-09-22) Each fallback directory's `expanduser()` is
+wrapped, and a `RuntimeError` skips that directory. An unresolvable home
+means a directory that is not here, which is what the docstring already
+promised. **Chosen over** skipping `~` entries on POSIX: that fixes the one
+entry, while the catch also covers a Windows account with no resolvable
+home, the same crash on the author's platform. **Rejected:** deleting the
+entry. It is MiKTeX's real per-user install path on Windows.
+
+**Breaks if wrong:** one fallback directory is silently not searched. The
+cost is a `skipped` compile on a machine whose only pdflatex lives there. It
+is never a crash.
+
+`TestNoLatexIsNoneNotACrash` has two tests. The first forces the condition on
+every machine by setting `which` to None and making `~` refuse to expand,
+because neither the author's Windows box nor the TeX-bearing image ever
+reaches the loop. The second runs the real `expanduser` on POSIX. Both error
+without the fix. Q38 was undercounted: `test_latex_escaping` calls
+`find_pdflatex` at import, so seven tests errored, not six, and one of them
+was a whole module that never loaded.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -8730,8 +8752,8 @@ A content hash of the `.tex` stored beside the IDs would say it cheaply, and
 
 ## Q38. `find_pdflatex` raises on Linux when LaTeX is not on PATH
 
-**Status:** Open, found 2026-09-22 while taking A3's baseline in a Linux
-container. `_FALLBACK_DIRS` in `tools/generation/pdf_builder.py` carries
+**Status:** Resolved 2026-09-22 by R91. Found the same day while taking
+A3's baseline in a Linux container. `_FALLBACK_DIRS` in `tools/generation/pdf_builder.py` carries
 `r"~\AppData\Local\Programs\MiKTeX\miktex\bin\x64"`. On POSIX, `~` followed by
 a backslash is `~user` for a user named `\AppData\...`, so `expanduser()`
 raises `RuntimeError: Could not determine home directory` instead of the path

@@ -15,6 +15,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -109,6 +110,38 @@ def make_case(tmp: Path, kind: str):
         stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
 
     return tex, stub
+
+
+class TestNoLatexIsNoneNotACrash(unittest.TestCase):
+    """
+    Q38: on Linux without pdflatex on PATH, the Windows fallback entry
+    `~\\AppData\\...` made expanduser raise, so find_pdflatex crashed instead
+    of returning None — and /api/health 500'd through pdflatex_available().
+    Neither the author's Windows machine nor the TeX-bearing image reaches
+    the loop, so the first test forces the condition on every machine and
+    the second walks the real expanduser where the bug actually lives.
+    """
+
+    def test_an_unresolvable_home_is_a_missing_directory(self):
+        real_expanduser = Path.expanduser
+
+        def expanduser(path):
+            if str(path).startswith("~"):
+                raise RuntimeError("Could not determine home directory.")
+            return real_expanduser(path)
+
+        with mock.patch("tools.generation.pdf_builder.shutil.which",
+                        return_value=None), \
+             mock.patch.object(Path, "expanduser", expanduser), \
+             mock.patch.object(Path, "exists", return_value=False):
+            self.assertIsNone(find_pdflatex())
+
+    @unittest.skipIf(WINDOWS, "the `~\\` entry is a real path on Windows")
+    def test_the_real_fallback_list_does_not_raise_on_posix(self):
+        with mock.patch("tools.generation.pdf_builder.shutil.which",
+                        return_value=None):
+            found = find_pdflatex()
+        self.assertTrue(found is None or Path(found).exists())
 
 
 class TestCompilePdf(unittest.TestCase):

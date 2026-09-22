@@ -103,7 +103,14 @@ def find_pdflatex() -> Optional[str]:
         return found
 
     for directory in _FALLBACK_DIRS:
-        base = Path(directory).expanduser()
+        # On POSIX the Windows entry `~\AppData\...` reads as `~<user>` for a
+        # user named `\AppData\...`, and expanduser raises rather than
+        # returning a path that does not exist (Q38). An unresolvable home is
+        # a directory that is not here, not a reason to crash.
+        try:
+            base = Path(directory).expanduser()
+        except RuntimeError:
+            continue
         for name in ("pdflatex.exe", "pdflatex"):
             candidate = base / name
             if candidate.exists():
