@@ -176,7 +176,16 @@ async function send<T>(method: string, path: string, body: unknown): Promise<T> 
     body: JSON.stringify(body),
   })
   if (!response.ok) {
-    throw new Error(`${path} returned ${response.status}`)
+    // A string `detail` is the server saying why in words — a profile save
+    // refused because it would not load (Q44) — so it is the message. The
+    // list FastAPI sends for a malformed request is not, and neither is a
+    // body that is not JSON; those keep the status.
+    const payload = await response.json().catch(() => ({}))
+    throw new Error(
+      typeof payload.detail === 'string'
+        ? payload.detail
+        : `${path} returned ${response.status}`,
+    )
   }
   return response.json() as Promise<T>
 }

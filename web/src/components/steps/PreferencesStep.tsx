@@ -20,6 +20,14 @@ const ROLE_OPTIONS = [
 
 const EXCLUDE_ALWAYS = ['PhD required', 'security clearance required']
 
+/** `profile_schema.YEARS_EXPERIENCE_MAX`, which the server enforces on save
+ *  and on `/api/levels`. A test holds the two equal (Q44). */
+const YEARS_MAX = 60
+
+/** What `/api/levels` said for one value of years. `derived: null` is a
+ *  lookup that failed — the server refused that number. */
+type Lookup = { years: number | null; derived: string[] | null }
+
 type Preferences = {
   target_roles: string[]
   seniority: string[]
@@ -72,7 +80,9 @@ export function PreferencesStep({
 }) {
   const [prefs, setPrefs] = useState<Preferences | null>(null)
   const [levels, setLevels] = useState<string[]>([])
-  const [derived, setDerived] = useState<string[]>([])
+  // Keyed by the years it answers for, so a lookup for any other value —
+  // the one before, or one still in flight — is never shown as this one's.
+  const [lookup, setLookup] = useState<Lookup | null>(null)
   const [showOverride, setShowOverride] = useState(false)
   const [showElsewhere, setShowElsewhere] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -88,14 +98,32 @@ export function PreferencesStep({
   const years = prefs?.years_experience ?? null
 
   useEffect(() => {
+    // Typing 12 asks for 1 and then 12. Without this, the answer for 1 can
+    // land second and stand under a box that says 12.
+    let current = true
     api
       .levels(years)
       .then((l) => {
+        if (!current) return
         setLevels(l.all)
-        setDerived(l.derived)
+        setLookup({ years, derived: l.derived })
       })
-      .catch(() => undefined)
+      // A refused number (2.5, -1, 61) clears the levels rather than keeping
+      // the last answer's on screen beside a number they were not derived
+      // from (Q44). `levels` is not years-dependent and stays.
+      .catch(() => {
+        if (current) setLookup({ years, derived: null })
+      })
+    return () => {
+      current = false
+    }
   }, [years])
+
+  // Three states, not two: known, refused, and not back yet. The last used
+  // to render as "any level" for the beat before the first answer arrived.
+  const answered = lookup !== null && lookup.years === years
+  const derived = answered ? lookup.derived : null
+  const refused = answered && lookup.derived === null
 
   if (!prefs) {
     return (
@@ -111,7 +139,7 @@ export function PreferencesStep({
   // What is actually in force, not what would be derived — a caption saying
   // "looking at New Grad" while an override says otherwise is a caption that
   // lies.
-  const inForce = override.length ? override : derived
+  const inForce = override.length ? override : (derived ?? [])
 
   function toggle(list: string[], value: string): string[] {
     return list.includes(value)
@@ -195,7 +223,8 @@ export function PreferencesStep({
           id="years"
           type="number"
           min={0}
-          max={40}
+          max={YEARS_MAX}
+          step={1}
           value={prefs.years_experience ?? ''}
           placeholder="e.g. 6"
           onChange={(e) =>
@@ -217,6 +246,12 @@ export function PreferencesStep({
           <p className="text-muted-foreground">
             Answer the years above and the levels follow from it.
           </p>
+        ) : refused ? (
+          <p className="text-destructive">
+            {`Years has to be a whole number from 0 to ${YEARS_MAX}, so no levels follow from it yet.`}
+          </p>
+        ) : !override.length && derived === null ? (
+          <p className="text-muted-foreground">Working out levels…</p>
         ) : (
           <p>
             Looking at{' '}

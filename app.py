@@ -47,8 +47,10 @@ from agents.orchestrator import (
     start_run,
     seniority_levels,
     set_job_status,
+    YEARS_EXPERIENCE_MAX,
 )
 from scripts.init_profile import (
+    ProfileInvalid,
     create_profile,
     extract_resume,
     read_component_rules,
@@ -611,14 +613,31 @@ def screen_about_you():
     if forward.button("Continue", type="primary",
                       disabled=not (location and answered)):
         st.session_state.api_key = key
-        update_profile_fields(None, st.session_state.profile_name, {
+        if _save_profile({
             "personal_info": {
                 "location": location,
                 "work_authorization": answers,
             },
-        })
-        _goto(2)
-        st.rerun()
+        }):
+            _goto(2)
+            st.rerun()
+
+
+def _save_profile(updates) -> bool:
+    """
+    Save through the facade, and say so on screen if the save was refused.
+
+    `update_profile_fields` validates before it writes (Q44) and raises
+    rather than leave a profile that will not load. Refused, nothing was
+    written and the screen stays where it is with the reason, instead of
+    moving on as though it had saved.
+    """
+    try:
+        update_profile_fields(None, st.session_state.profile_name, updates)
+    except ProfileInvalid as exc:
+        st.error(f"Not saved: {exc}")
+        return False
+    return True
 
 
 def _work_question(spec, stored):
@@ -684,8 +703,21 @@ def screen_preferences():
     # the path being built, left standing on the path being replaced: the
     # twin-path bug with a note attached.
     stated = current.get("years_experience")
+    # A stored value the schema refuses — `2.5` from before the save
+    # validated, or a hand edit — cannot be shown as given (Q44).
+    # `number_input` raises on a value past `max_value`, and `int(2.5)` would
+    # show 2 and write 2 back: the screen quietly deciding what the user
+    # meant. So it is shown empty, and the screen says why.
+    if stated is not None and not (
+            isinstance(stated, int) and not isinstance(stated, bool)
+            and 0 <= stated <= YEARS_EXPERIENCE_MAX):
+        st.warning(
+            f"Your profile says {stated!r} years, which is not a whole number "
+            f"from 0 to {YEARS_EXPERIENCE_MAX}. Enter it again below.")
+        stated = None
     years = st.number_input(
-        "Years of professional experience", min_value=0, max_value=40, step=1,
+        "Years of professional experience", min_value=0,
+        max_value=YEARS_EXPERIENCE_MAX, step=1,
         value=int(stated) if stated is not None else None,
         placeholder="e.g. 6",
         help="Internships and coursework do not count. This decides which "
@@ -778,7 +810,7 @@ def screen_preferences():
     # same wall, no message either time.
     if forward.button("Save and continue", type="primary",
                      disabled=not roles):
-        update_profile_fields(None, st.session_state.profile_name, {
+        saved = _save_profile({
             "job_preferences": {
                 "target_roles": roles,
                 # None stays None. See the number input above.
@@ -799,8 +831,9 @@ def screen_preferences():
                 },
             },
         })
-        _goto(3)
-        st.rerun()
+        if saved:
+            _goto(3)
+            st.rerun()
 
 
 # ------------------------------------------------------------ screen: 4 ----

@@ -37,6 +37,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.paths import outputs_root, stored_path
 from tools.profile import load_profile
+# Re-exported for both views: the largest `years_experience` the schema takes,
+# which `/api/levels` and the Streamlit input bound themselves by (Q44).
+from tools.profile.profile_schema import YEARS_EXPERIENCE_MAX  # noqa: F401
 from tools.resume import ResumeParser
 from agents import DiscoveryAgent, EnrichmentAgent, AnalysisAgent, GenerationAgent
 

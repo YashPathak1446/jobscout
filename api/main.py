@@ -67,8 +67,10 @@ from agents.orchestrator import (
     start_run,
     run_status,
     user_outputs_root,
+    YEARS_EXPERIENCE_MAX,
 )
 from scripts.init_profile import (
+    ProfileInvalid,
     create_profile,
     extract_resume,
     read_component_rules,
@@ -178,7 +180,7 @@ def health() -> dict:
 
 
 @app.get("/api/levels")
-def levels(years: Optional[int] = Query(None, ge=0, le=60)) -> dict:
+def levels(years: Optional[int] = Query(None, ge=0, le=YEARS_EXPERIENCE_MAX)) -> dict:
     """
     Every seniority level, and the ones a number of years implies (R68).
 
@@ -483,6 +485,10 @@ def profile_update(name: str, request: ProfileUpdate) -> dict:
         path = update_profile_fields(None, name, request.updates)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ProfileInvalid as exc:
+        # Nothing was written. A string detail, not FastAPI's error list, so
+        # the screen can show it as it is (Q44).
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # Re-judge the board against what was just saved (A4). About-you's three
     # answers and Preferences' years, seniority and countries all feed the

@@ -8624,6 +8624,53 @@ half. The route is a 28th `None` call site for A5 to scope, and
 Mutation-checked: dropping either call fails its test (the verdict stays
 `undecidable` after the answer is saved; the run's re-judge is never called).
 
+## R94. A profile save is validated before it is written, and years has one bound (Q44)
+
+**Decided 2026-09-22.** Three changes, for Q44's three defects, on both UIs.
+
+**The save validates.** `update_profile_fields`, which both UIs save through,
+checks the merged profile against `UserProfile` before writing. A save that
+*introduces* a schema error raises `ProfileInvalid` and writes nothing: the API
+turns it into a 422 with the reason as a string, `api.ts` shows that string
+instead of "returned 422", and Streamlit's two save buttons go through
+`_save_profile`, which shows it with `st.error` and stays on the screen.
+
+*Chosen over refusing any save that leaves the profile invalid:* a profile
+already invalid elsewhere, such as the `2.5` an unvalidated save wrote before
+this, or a hand edit, would then refuse every save, including the one that
+fixes it. The form would become a second wall in front of the only screen
+that can repair the file. Errors are compared by field path, before and after
+the merge.
+*Chosen over client-side checks alone:* those cover one UI and leave the next
+field with the same hole.
+**Breaks if wrong:** a save that re-breaks a field that was *already* broken
+goes through. That leaves the file no worse than it was, and it still does
+not load. Also, every save now builds a `UserProfile`, which is cheap but new.
+
+**One bound: 60.** `profile_schema.YEARS_EXPERIENCE_MAX`, now `ge=0,
+le=60` on the field. `/api/levels` and the Streamlit input read it through the
+facade, and React keeps a copy that `test_years_bound` holds equal.
+*Chosen over 40:* refusing a true answer (a 45-year career) is worse than
+admitting a large one. Also, 40 on the inputs against 60 on the API was a
+crash: React could save 45, and `st.number_input(value=45, max_value=40)`
+raises. **Breaks if wrong / blast radius:** a profile on disk with years
+below 0 or above 60 **no longer loads**. None of the committed ones does
+(Priya 6, Rohan null); the author's own files were not checked from here.
+
+**Stale levels are cleared, not kept.** React's levels lookup is keyed by the
+years it answered for. A refused number shows "has to be a whole number from
+0 to 60", and a lookup still in flight shows "Working out levels…". Before,
+the first render showed "any level" before the first answer, and a late reply
+for `1` could stand under a box reading `12`; a cancelled effect now drops it.
+Streamlit derives levels in process from an integer input it bounds itself,
+so it has no lookup to fail. Its gap was a value *already stored* outside the
+bound: `70` crashed the input and `2.5` showed as `2` and was written back
+as `2` unasked. That value is now shown empty with a warning naming it.
+
+Mutation-checked, each failing `test_years_bound`: no validation (5 fail),
+validating absolutely rather than by introduced error (1), Streamlit max back
+to 40 (1), no stored-value guard (2), React swallowing the failed lookup (1).
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -9047,9 +9094,8 @@ absence" — on the one line of the screen that walks it twice. The React
 
 ## Q44. A years value the input allows, the API refuses — and the save writes it anyway
 
-**Status:** Open, found 2026-09-22 while checking Q43's blank-years question.
-Not changed: the fix is a decision about where validation lives, not a
-one-liner.
+**Status:** Resolved 2026-09-22 by R94. Found the same day while checking
+Q43's blank-years question.
 
 The years box is `type="number" min={0} max={40}`, and those attributes
 constrain the spinner, not typing. Measured against the real endpoints:

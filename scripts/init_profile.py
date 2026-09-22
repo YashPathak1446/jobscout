@@ -38,7 +38,12 @@ from tools import paths
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.profile.profile_schema import migrate_work_authorization  # noqa: E402
+from pydantic import ValidationError  # noqa: E402
+
+from tools.profile.profile_schema import (  # noqa: E402
+    UserProfile,
+    migrate_work_authorization,
+)
 from tools.profile.derivation import (  # noqa: E402
     derive_component_importance,
     derive_conditional_triggers,
@@ -462,6 +467,28 @@ def _merge(target: dict, updates: dict) -> dict:
     return target
 
 
+class ProfileInvalid(ValueError):
+    """
+    A save that would leave a profile the loader refuses (Q44).
+
+    `problems` is one readable line per field, for the screen that asked.
+    """
+
+    def __init__(self, problems):
+        self.problems = list(problems)
+        super().__init__("; ".join(self.problems))
+
+
+def _schema_problems(profile: dict) -> dict:
+    """Every schema error in `profile`, keyed by its dotted field path."""
+    try:
+        UserProfile(**profile)
+    except ValidationError as exc:
+        return {".".join(str(part) for part in error["loc"]): error["msg"]
+                for error in exc.errors()}
+    return {}
+
+
 def update_profile_fields(user_id, name: str, updates: dict) -> Path:
     """
     Merge answers into an existing profile and write it back.
@@ -473,10 +500,19 @@ def update_profile_fields(user_id, name: str, updates: dict) -> Path:
 
     Kept here rather than in the UI so that knowing a profile is JSON on disk,
     and where, stays out of the view layer (R25).
+
+    Validated before it is written (Q44): a save that introduces a schema
+    error raises `ProfileInvalid` and leaves the file as it was. Merging
+    without looking once wrote `years_experience: 2.5`, and the profile then
+    would not load — R30's outcome by a different route. Only errors the save
+    *introduces* refuse it. A profile already invalid somewhere else (a
+    legacy file, a hand edit) can still be saved, so the form stays a way to
+    fix it rather than a second wall in front of it.
     """
     path = _profile_file(user_id, name)
 
     profile = json.loads(path.read_text(encoding="utf-8"))
+    already = _schema_problems(profile)
     _merge(profile, updates or {})
 
     # A form that writes `work_authorization` leaves the legacy booleans in
@@ -486,6 +522,11 @@ def update_profile_fields(user_id, name: str, updates: dict) -> Path:
     if "work_authorization" in personal:
         profile["personal_info"] = migrate_work_authorization(
             profile["personal_info"])
+
+    introduced = {field: msg for field, msg in _schema_problems(profile).items()
+                  if field not in already}
+    if introduced:
+        raise ProfileInvalid(f"{field}: {msg}" for field, msg in introduced.items())
 
     path.write_text(json.dumps(profile, indent=2) + chr(10), encoding="utf-8")
     return path

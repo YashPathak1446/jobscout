@@ -143,12 +143,21 @@ class LocationPreferences(BaseModel):
     willing_to_relocate: bool = True
 
 
+# The one bound on `years_experience` (Q44). `/api/levels`, the Streamlit
+# input and the React input all read it, the last through a copy a test holds
+# equal to this. 60 rather than 40: refusing a true answer (a 45-year career)
+# is worse than admitting a large one, and the two inputs capped at 40 while
+# the API took 60 — so a React save of 45 crashed Streamlit's field.
+YEARS_EXPERIENCE_MAX = 60
+
+
 class JobPreferences(BaseModel):
     """Job search preferences."""
     target_roles: List[str]
     # How long the user has worked. The question a person can answer, from
-    # which the level vocabulary is derived (R68).
-    years_experience: Optional[int] = None
+    # which the level vocabulary is derived (R68). `None` is unanswered, not
+    # zero; a bound refused here is refused by the save, not by the next load.
+    years_experience: Optional[int] = Field(None, ge=0, le=YEARS_EXPERIENCE_MAX)
     # An explicit override. Empty means "derive from years" — nothing writes a
     # derived value back here, so an override survives every later edit.
     seniority: List[str] = Field(default_factory=list)
