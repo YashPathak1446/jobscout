@@ -101,15 +101,17 @@ class TestKeyIsThreadedNotGlobal(unittest.TestCase):
         # once; hence also the dimension guard in TextEmbeddingCache.
         from tools.cache.text_embedding_cache import TextEmbeddingCache
 
-        original_client, original_cache = genai.Client, scorer._EMBEDDING_CACHE
+        original_client, original_cache = genai.Client, scorer._embedding_cache
         genai.Client = FakeClient
-        scorer._EMBEDDING_CACHE = TextEmbeddingCache(cache_dir="", enabled=False)
+        scorer._embedding_cache = lambda user_id: TextEmbeddingCache(
+            cache_dir="", enabled=False)
         try:
             with _EnvKey("env-key-must-not-win"):
-                vec = scorer._get_embedding("text", api_key="explicit-key")
+                vec = scorer._get_embedding("text", api_key="explicit-key",
+                                            user_id=None)
         finally:
             genai.Client = original_client
-            scorer._EMBEDDING_CACHE = original_cache
+            scorer._embedding_cache = original_cache
 
         self.assertEqual(seen["key"], "explicit-key")
         self.assertEqual(vec, [0.1, 0.2])

@@ -56,8 +56,8 @@ NEEDS_HUMAN = {
 }
 
 
-def build_profile(resume_path: Path, name: str) -> dict:
-    parser = ResumeParser(str(resume_path), skip_embeddings=True)
+def build_profile(resume_path: Path, name: str, *, user_id) -> dict:
+    parser = ResumeParser(str(resume_path), skip_embeddings=True, user_id=user_id)
     resume = parser.parsed_resume
 
     profile = json.loads(TEMPLATE.read_text(encoding="utf-8"))
@@ -70,16 +70,20 @@ def build_profile(resume_path: Path, name: str) -> dict:
     profile["personal_info"].update(derived_info)
 
     rp = profile["resume_preferences"]
-    # Relative to the **data home**, which is what reads it resolves against
-    # (`orchestrator._refuse_an_empty_resume`, `rebuild_components` below). It
-    # was relative to the install directory, and in a checkout those are the same
-    # directory, so the mismatch only appeared in a container (R86).
+    # Relative to the **user's home**, which is what reads resolve it against
+    # (`paths.stored_path`, from the orchestrator and `_component_rules`
+    # below). It was relative to the install directory, and in a checkout
+    # those are the same directory, so the mismatch only appeared in a
+    # container (R86). Unscoped, the user's home *is* the data home.
     try:
-        rel = resume_path.resolve().relative_to(paths.data_home().resolve())
+        rel = resume_path.resolve().relative_to(
+            paths.user_home(user_id).resolve())
         rp["master_resume_path"] = str(rel).replace("\\", "/")
     except ValueError:
-        # Outside the data home entirely — a temp dir, another drive. Store it
-        # absolute; there is no relative spelling that would mean anything.
+        # Outside the user's home entirely — a temp dir, another drive. Store
+        # it absolute; there is no relative spelling that would mean anything.
+        # A scoped run refuses to read it (`paths.stored_path`), which is
+        # right: a scoped user's resume lives in their own home.
         rp["master_resume_path"] = str(resume_path)
 
     rp["component_importance"] = {
@@ -101,20 +105,51 @@ def build_profile(resume_path: Path, name: str) -> dict:
     return profile, derived_info, resume
 
 
-# The user's own resumes, so the data home rather than the install.
-RESUME_DIR = paths.user_path("data", "master_resumes", create_parent=True)
+def resume_dir(user_id) -> Path:
+    """
+    Where one user's uploaded and imported resumes live:
+    `data/master_resumes/` under their home.
 
-# Where a person's profiles live. Seven sites read or wrote this from
-# the repo root; installed, that is site-packages.
-PROFILES = paths.user_path("user_profiles", create_parent=True)
-# `create_parent` makes the data home, not this directory. On a fresh volume
-# `user_profiles/` therefore did not exist and the first profile write failed
-# with FileNotFoundError — never seen in a checkout, where `data_home()` is the
-# repo root and this directory is already in git (R86).
-PROFILES.mkdir(parents=True, exist_ok=True)
+    Was the import-time constant `RESUME_DIR`, which both UIs imported — so
+    it was one directory for everybody, decided before anybody had said who
+    they were (pilot plan A3). A function is the only shape that can be
+    somebody in particular.
+    """
+    return paths.user_path("data", "master_resumes", user_id=user_id)
 
 
-def save_resume(file_bytes: bytes, filename: str, backend: str = None) -> Path:
+def profiles_dir(user_id) -> Path:
+    """
+    Where one user's profiles are written — through the *loader's* resolver,
+    so the write here and the read in `load_profile` cannot come apart (the
+    R86 shape: two spellings, one directory, until a container).
+
+    Was `PROFILES`, an import-time constant. Seven sites read or wrote it from
+    the repo root; installed, that is site-packages.
+    """
+    from tools.profile.profile_loader import profiles_dir as _loader_dir
+    return _loader_dir(user_id)
+
+
+def _profile_file(user_id, name: str, must_exist: bool = True) -> Path:
+    """
+    One user's profile file, with its directory made on the way.
+
+    The `mkdir` was a module-level `PROFILES.mkdir()` until A3: on a fresh
+    volume `user_profiles/` did not exist and the first profile write failed
+    with FileNotFoundError — never seen in a checkout, where the directory is
+    already in git (R86). Per user it has to happen per call, because a new
+    user's home is created by their first write.
+    """
+    where = profiles_dir(user_id)
+    where.mkdir(parents=True, exist_ok=True)
+    path = where / f"{name}.json"
+    if must_exist and not path.exists():
+        raise FileNotFoundError(f"No profile named '{name}'.")
+    return path
+
+
+def save_resume(user_id, file_bytes: bytes, filename: str, backend: str = None) -> Path:
     """
     Put an uploaded resume where master resumes live, and return its `.tex`.
 
@@ -130,13 +165,13 @@ def save_resume(file_bytes: bytes, filename: str, backend: str = None) -> Path:
     resume — both are facts about this project, and keeping them here is what
     lets `app.py` stay a view layer (R25).
     """
-    extracted = extract_resume(file_bytes, filename, backend)
+    extracted = extract_resume(user_id, file_bytes, filename, backend)
     if extracted["kind"] == "latex":
         return extracted["path"]
     return save_extracted(extracted["schema"], extracted["source"])
 
 
-def extract_resume(file_bytes: bytes, filename: str, backend: str = None) -> dict:
+def extract_resume(user_id, file_bytes: bytes, filename: str, backend: str = None) -> dict:
     """
     Read an upload far enough to show it, without committing to anything.
 
@@ -166,8 +201,9 @@ def extract_resume(file_bytes: bytes, filename: str, backend: str = None) -> dic
     from tools.generation import llm_backends
     from tools.resume import resume_import, tex_renderer
 
-    RESUME_DIR.mkdir(parents=True, exist_ok=True)
-    source = RESUME_DIR / Path(filename).name
+    resumes = resume_dir(user_id)
+    resumes.mkdir(parents=True, exist_ok=True)
+    source = resumes / Path(filename).name
     source.write_bytes(file_bytes)
 
     if source.suffix.lower() == ".tex":
@@ -238,7 +274,7 @@ def save_extracted(schema: dict, source, destination=None) -> Path:
     return target
 
 
-def import_to_tex(source, destination=None, backend: str = None) -> Path:
+def import_to_tex(source, destination=None, backend: str = None, *, user_id) -> Path:
     """
     Convert a PDF or DOCX resume into a `.tex`, unconfirmed.
 
@@ -247,13 +283,13 @@ def import_to_tex(source, destination=None, backend: str = None) -> Path:
     by a person rather than discovered three stages later.
     """
     source = Path(source)
-    extracted = extract_resume(source.read_bytes(), source.name, backend)
+    extracted = extract_resume(user_id, source.read_bytes(), source.name, backend)
     if extracted["kind"] == "latex":
         return extracted["path"]
     return save_extracted(extracted["schema"], extracted["source"], destination)
 
 
-def _id_problems(name: str, resume_path=None, parser=None) -> list:
+def _id_problems(user_id, name: str, resume_path=None, parser=None) -> list:
     """
     Rules in the profile just written whose component ID names no component, or
     more than one.
@@ -289,14 +325,15 @@ def _id_problems(name: str, resume_path=None, parser=None) -> list:
         from tools.resume.resume_parser import ResumeParser
 
         if parser is None:
-            parser = ResumeParser(str(resume_path), skip_embeddings=True)
-        return find_id_problems(load_profile(name), parser)
+            parser = ResumeParser(str(resume_path), skip_embeddings=True,
+                                  user_id=user_id)
+        return find_id_problems(load_profile(name, user_id=user_id), parser)
     except Exception as exc:  # pragma: no cover - reporting must not fail
         return [f"component IDs could not be checked ({exc}) — the rules in "
                 f"this profile may name components that do not exist"]
 
 
-def create_profile(resume_path, name: str, force: bool = False) -> dict:
+def create_profile(user_id, resume_path, name: str, force: bool = False) -> dict:
     """
     Build, validate and write a profile in one call.
 
@@ -309,7 +346,7 @@ def create_profile(resume_path, name: str, force: bool = False) -> dict:
     not set, so the caller can offer to overwrite rather than silently clobber.
     """
     resume_path = Path(resume_path)
-    out_path = PROFILES / f"{name}.json"
+    out_path = _profile_file(user_id, name, must_exist=False)
 
     if out_path.exists() and not force:
         raise FileExistsError(f"A profile named '{name}' already exists.")
@@ -326,7 +363,7 @@ def create_profile(resume_path, name: str, force: bool = False) -> dict:
         )
         shutil.copy2(out_path, backup)
 
-    profile, derived_info, resume = build_profile(resume_path, name)
+    profile, derived_info, resume = build_profile(resume_path, name, user_id=user_id)
     out_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
 
     rp = profile["resume_preferences"]
@@ -334,7 +371,7 @@ def create_profile(resume_path, name: str, force: bool = False) -> dict:
         "profile_path": out_path,
         "backup_path": backup,
         "derived": derived_info,
-        "id_problems": _id_problems(name, resume_path),
+        "id_problems": _id_problems(user_id, name, resume_path),
         "needs_you": {
             section: [f for f in fields if f not in derived_info]
             for section, fields in NEEDS_HUMAN.items()
@@ -371,7 +408,7 @@ def _merge(target: dict, updates: dict) -> dict:
     return target
 
 
-def update_profile_fields(name: str, updates: dict) -> Path:
+def update_profile_fields(user_id, name: str, updates: dict) -> Path:
     """
     Merge answers into an existing profile and write it back.
 
@@ -383,9 +420,7 @@ def update_profile_fields(name: str, updates: dict) -> Path:
     Kept here rather than in the UI so that knowing a profile is JSON on disk,
     and where, stays out of the view layer (R25).
     """
-    path = PROFILES / f"{name}.json"
-    if not path.exists():
-        raise FileNotFoundError(f"No profile named '{name}'.")
+    path = _profile_file(user_id, name)
 
     profile = json.loads(path.read_text(encoding="utf-8"))
     _merge(profile, updates or {})
@@ -394,7 +429,7 @@ def update_profile_fields(name: str, updates: dict) -> Path:
     return path
 
 
-def read_preferences(name: str) -> dict:
+def read_preferences(user_id, name: str) -> dict:
     """
     The job-preference answers a form needs to show what is already set.
 
@@ -403,9 +438,7 @@ def read_preferences(name: str) -> dict:
     had tuned — the same destruction as above, one layer up. A form that
     cannot read cannot safely write.
     """
-    path = PROFILES / f"{name}.json"
-    if not path.exists():
-        raise FileNotFoundError(f"No profile named '{name}'.")
+    path = _profile_file(user_id, name)
 
     prefs = json.loads(path.read_text(encoding="utf-8")).get("job_preferences", {})
     locations = prefs.get("locations", {}) or {}
@@ -426,7 +459,7 @@ def read_preferences(name: str) -> dict:
     }
 
 
-def read_personal(name: str) -> dict:
+def read_personal(user_id, name: str) -> dict:
     """
     The answers the "about you" screen asks for, as already stored.
 
@@ -436,9 +469,7 @@ def read_personal(name: str) -> dict:
     re-entering them is the user's work, and losing them on a revisit wastes
     it twice.
     """
-    path = PROFILES / f"{name}.json"
-    if not path.exists():
-        raise FileNotFoundError(f"No profile named '{name}'.")
+    path = _profile_file(user_id, name)
 
     personal = json.loads(path.read_text(encoding="utf-8")).get("personal_info", {})
     return {
@@ -449,7 +480,7 @@ def read_personal(name: str) -> dict:
     }
 
 
-def read_component_rules(name: str) -> dict:
+def read_component_rules(user_id, name: str) -> dict:
     """
     The editor's view of every component, plus what is wrong with its rules.
 
@@ -463,11 +494,11 @@ def read_component_rules(name: str) -> dict:
     screen either way, and the check reuses that parser. Consumers index by
     section name, so the added key reaches nobody iterating.
     """
-    rules, parser = _component_rules(name)
-    return {**rules, "id_problems": _id_problems(name, parser=parser)}
+    rules, parser = _component_rules(user_id, name)
+    return {**rules, "id_problems": _id_problems(user_id, name, parser=parser)}
 
 
-def _component_rules(name: str):
+def _component_rules(user_id, name: str):
     """
     Every component with its importance tier and JD triggers, for an editor.
 
@@ -480,15 +511,17 @@ def _component_rules(name: str):
     Returns experiences and projects in resume order, each entry carrying the
     id, a human label, the effective tier and the current trigger list.
     """
-    path = PROFILES / f"{name}.json"
-    if not path.exists():
-        raise FileNotFoundError(f"No profile named '{name}'.")
+    path = _profile_file(user_id, name)
 
     profile = json.loads(path.read_text(encoding="utf-8"))
     rp = profile["resume_preferences"]
 
-    parser = ResumeParser(str(paths.data_home() / rp["master_resume_path"]),
-                          skip_embeddings=True)
+    # Through `paths.stored_path`, the resolver the orchestrator uses. This
+    # was `data_home() / stored` — a second resolution of one field, which
+    # agreed with the first only while there was one user.
+    parser = ResumeParser(
+        str(paths.stored_path(rp["master_resume_path"], user_id=user_id)),
+        skip_embeddings=True, user_id=user_id)
     resume = parser.parsed_resume
 
     from tools.profile.derivation import merge_importance
@@ -531,7 +564,7 @@ def _component_rules(name: str):
     return rules, parser
 
 
-def write_component_rules(name: str, importance: dict, triggers: dict,
+def write_component_rules(user_id, name: str, importance: dict, triggers: dict,
                           always: dict = None, never: dict = None) -> dict:
     """
     Save edited tiers and trigger lists back to the profile.
@@ -558,16 +591,14 @@ def write_component_rules(name: str, importance: dict, triggers: dict,
     build the screen, and the check reuses that parser rather than spending a
     second 67 ms.
     """
-    path = PROFILES / f"{name}.json"
-    if not path.exists():
-        raise FileNotFoundError(f"No profile named '{name}'.")
+    path = _profile_file(user_id, name)
 
     profile = json.loads(path.read_text(encoding="utf-8"))
     rp = profile["resume_preferences"]
 
     # Read the component list once. Resolving section membership per component
     # would re-parse the resume for every id on the screen.
-    known, parser = _component_rules(name)
+    known, parser = _component_rules(user_id, name)
 
     for section in ("experiences", "projects"):
         ids = {c["id"] for c in known[section]}
@@ -612,7 +643,8 @@ def write_component_rules(name: str, importance: dict, triggers: dict,
 
     # After the write, so what is reported is the state the user just saved
     # rather than the one they arrived with.
-    return {"profile_path": path, "id_problems": _id_problems(name, parser=parser)}
+    return {"profile_path": path,
+            "id_problems": _id_problems(user_id, name, parser=parser)}
 
 
 def main():
@@ -628,11 +660,12 @@ def main():
     if not TEMPLATE.exists():
         sys.exit(f"Template not found: {TEMPLATE}")
 
-    out_path = PROFILES / f"{args.name}.json"
+    # The CLI is the unscoped layout: a developer's checkout, one person.
+    out_path = _profile_file(None, args.name, must_exist=False)
     if out_path.exists() and not args.force:
         sys.exit(f"{out_path} already exists. Pass --force to overwrite.")
 
-    profile, derived_info, resume = build_profile(resume_path, args.name)
+    profile, derived_info, resume = build_profile(resume_path, args.name, user_id=None)
 
     out_path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
     print(f"\nWrote {out_path}\n")
@@ -670,7 +703,7 @@ def main():
         from tools.profile import load_profile
         from tools.profile.validation import find_id_problems
 
-        loaded = load_profile(args.name)
+        loaded = load_profile(args.name, user_id=None)
         print("Profile validates against the schema.")
 
         # Schema validity is not the same as usability: a rule keyed to a
@@ -678,7 +711,8 @@ def main():
         # rule keyed to an ID two components now share fires on whichever was
         # parsed first (Q34). The template used to ship five of the former.
         ghosts = find_id_problems(loaded, ResumeParser(str(resume_path),
-                                                       skip_embeddings=True))
+                                                       skip_embeddings=True,
+                                                       user_id=None))
         if ghosts:
             print()
             print(f"WARNING: {len(ghosts)} rule(s) do not name one real "

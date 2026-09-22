@@ -14,6 +14,7 @@ asking the user to do the arithmetic — which is the work a log is for.
 
 import sys
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -249,13 +250,12 @@ class TestTheFacadeDoesNotMisreadZero(unittest.TestCase):
         store.set_status("https://x.test/1", "applied")
         store.close()
 
-        real = job_store.DEFAULT_DB
-        job_store.DEFAULT_DB = path
         try:
-            self.assertEqual(len(orchestrator.ghosted_jobs(after_days=0)), 1)
-            self.assertEqual(orchestrator.ghosted_jobs(), [])
+            with mock.patch.object(job_store, "db_path", lambda user_id: path):
+                self.assertEqual(
+                    len(orchestrator.ghosted_jobs(None, after_days=0)), 1)
+                self.assertEqual(orchestrator.ghosted_jobs(None), [])
         finally:
-            job_store.DEFAULT_DB = real
             path.unlink(missing_ok=True)
 
 

@@ -183,11 +183,11 @@ class TestAnIdThatNamesTheWrongNumberOfComponentsIsReported(unittest.TestCase):
         if not ROHAN.is_file():
             raise unittest.SkipTest("needs the second fixture user")
         from tools.resume.resume_parser import ResumeParser
-        cls.parser = ResumeParser(str(ROHAN), skip_embeddings=True)
+        cls.parser = ResumeParser(str(ROHAN), skip_embeddings=True, user_id=None)
 
     def _profile(self):
         from tools.profile import load_profile
-        return load_profile("rohan_deshmukh")
+        return load_profile("rohan_deshmukh", user_id=None)
 
     def test_the_fixture_as_imported_has_no_problems(self):
         from tools.profile.validation import find_id_problems
@@ -245,7 +245,7 @@ class TestTheImportPathReportsIdProblems(unittest.TestCase):
 
         name = "_id_check_probe"
         try:
-            result = init_profile.create_profile(PRIYA, name, force=True)
+            result = init_profile.create_profile(None, PRIYA, name, force=True)
             self.assertIn("id_problems", result)
             self.assertEqual(result["id_problems"], [],
                              "a freshly imported profile keys every rule to a "
@@ -253,13 +253,13 @@ class TestTheImportPathReportsIdProblems(unittest.TestCase):
         finally:
             # Including the timestamped backup `create_profile` takes when it
             # overwrites, so a re-run does not leave one per run behind.
-            for leftover in init_profile.PROFILES.glob(f"{name}*.json"):
+            for leftover in init_profile.profiles_dir(None).glob(f"{name}*.json"):
                 leftover.unlink()
 
     def test_a_check_that_cannot_run_says_so_rather_than_returning_nothing(self):
         from scripts import init_profile
 
-        problems = init_profile._id_problems("no_such_profile_anywhere",
+        problems = init_profile._id_problems(None, "no_such_profile_anywhere",
                                              ROOT / "no_such_resume.tex")
         self.assertTrue(problems, "a check that could not run reported no "
                                   "problems, which reads as 'all rules fine'")
@@ -285,11 +285,11 @@ class TestTheEditorReportsWithoutRepairing(unittest.TestCase):
     def setUp(self):
         from scripts import init_profile
 
-        source = init_profile.PROFILES / "rohan_deshmukh.json"
+        source = init_profile.profiles_dir(None) / "rohan_deshmukh.json"
         if not source.is_file():
             self.skipTest("needs the second fixture user")
 
-        self.path = init_profile.PROFILES / f"{self.NAME}.json"
+        self.path = init_profile.profiles_dir(None) / f"{self.NAME}.json"
         raw = json.loads(source.read_text(encoding="utf-8"))
         raw["user_id"] = self.NAME
         rules = raw["resume_preferences"]["experiences"]["conditional_inclusion"]
@@ -303,12 +303,12 @@ class TestTheEditorReportsWithoutRepairing(unittest.TestCase):
 
     def tearDown(self):
         from scripts import init_profile
-        for leftover in init_profile.PROFILES.glob(f"{self.NAME}*.json"):
+        for leftover in init_profile.profiles_dir(None).glob(f"{self.NAME}*.json"):
             leftover.unlink()
 
     def _saved(self):
         from scripts import init_profile
-        return init_profile.write_component_rules(self.NAME, {}, {})
+        return init_profile.write_component_rules(None, self.NAME, {}, {})
 
     def test_saving_reports_both_kinds(self):
         problems = self._saved()["id_problems"]
@@ -334,14 +334,14 @@ class TestTheEditorReportsWithoutRepairing(unittest.TestCase):
         """
         from scripts import init_profile
 
-        rules = init_profile.read_component_rules(self.NAME)
+        rules = init_profile.read_component_rules(None, self.NAME)
         self.assertEqual(len(rules["id_problems"]), 2, rules["id_problems"])
 
     def test_the_editors_own_view_is_unchanged_otherwise(self):
         """The added key must not disturb what the screen already draws."""
         from scripts import init_profile
 
-        rules = init_profile.read_component_rules(self.NAME)
+        rules = init_profile.read_component_rules(None, self.NAME)
         self.assertEqual(len(rules["experiences"]), 3)
         self.assertEqual(len(rules["projects"]), 4)
 

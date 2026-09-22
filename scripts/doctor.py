@@ -229,7 +229,7 @@ def check_pdflatex(report):
 def check_profiles(report, wanted=None):
     from tools.profile import list_available_profiles, load_profile
 
-    names = [n for n in list_available_profiles() if n != "template"]
+    names = [n for n in list_available_profiles(user_id=None) if n != "template"]
     if not names:
         report.add(WARN, "Profiles", "none yet",
                    "run the app and upload a resume, or "
@@ -240,7 +240,7 @@ def check_profiles(report, wanted=None):
     broken = []
     for name in to_check:
         try:
-            load_profile(name)
+            load_profile(name, user_id=None)
         except Exception as exc:
             broken.append(f"{name}: {exc}")
 
@@ -256,14 +256,14 @@ def check_master_resume(report, wanted=None):
     from tools.profile import list_available_profiles, load_profile
 
     names = [wanted] if wanted else [
-        n for n in list_available_profiles() if n != "template"]
+        n for n in list_available_profiles(user_id=None) if n != "template"]
     if not names:
         return
 
     problems, checked = [], 0
     for name in names:
         try:
-            profile = load_profile(name)
+            profile = load_profile(name, user_id=None)
         except Exception:
             continue                      # already reported by check_profiles
 
@@ -276,7 +276,7 @@ def check_master_resume(report, wanted=None):
 
         try:
             from tools.resume import ResumeParser
-            parsed = ResumeParser(str(path), skip_embeddings=True).parsed_resume
+            parsed = ResumeParser(str(path), skip_embeddings=True, user_id=None).parsed_resume
             if not (parsed.experiences or parsed.projects):
                 problems.append(f"{name}: {path.name} parsed to nothing")
             else:
@@ -295,7 +295,9 @@ def check_job_store(report):
     from agents.orchestrator import board_stats
 
     try:
-        stats = board_stats()
+        # The checkout's own board: the doctor diagnoses this machine, which
+        # is the unscoped layout.
+        stats = board_stats(None)
     except Exception as exc:
         report.add(FAIL, "Job store", f"could not be opened: {exc}",
                    "delete data/jobs.db to start a fresh board")

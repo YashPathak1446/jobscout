@@ -11,6 +11,7 @@ Falls back to simple keyword overlap when --mock-embeddings is used.
 import os
 import logging
 import math
+import threading
 from dataclasses import dataclass, field
 
 from config import EMBEDDING_BACKEND, EMBEDDING_MODEL, LOCAL_EMBEDDING_MODEL
@@ -173,40 +174,61 @@ def active_backend() -> tuple:
     return _BACKEND
 
 
-_EMBEDDING_CACHE = None
+# One cache per (directory, dimensions), built on first use. **Not one per
+# process**, which is what this was until A3: a module-level singleton built by
+# whichever request came first, so under `--workers 1` every later user in the
+# process inherited the first user's directory. It had no error path at all —
+# wrong vectors for the right text still produce a plausible score.
+#
+# Keyed by the *resolved directory*, not by user id, because the directory is
+# what decides which vectors come back; a key is a claim about which
+# differences do not matter, and the only difference that does not matter
+# here is how a caller spelled the same directory. The dimensions are in the
+# key for the same reason: they decide which entries the cache accepts.
+#
+# Grows by one entry per user per process. Fine for a pilot of five; at 100+
+# it wants a bound.
+_EMBEDDING_CACHES = {}
+_EMBEDDING_CACHES_LOCK = threading.Lock()
 
 
-def _embedding_cache():
+def _embedding_cache(user_id):
     """
-    One cache per process, built on first use.
+    The embedding cache for `user_id`'s directory, built on first use.
 
     Lazy so that importing this module does not create a directory, which
     matters for tests and for anyone importing the scorer to read a
-    dataclass.
+    dataclass. Locked because two background runs can ask at once, and two
+    instances over one file would each overwrite the other's writes.
     """
-    global _EMBEDDING_CACHE
+    from config import EMBEDDING_CACHE_ENABLED, embedding_cache_dir
+    from tools.cache.text_embedding_cache import TextEmbeddingCache
 
-    if _EMBEDDING_CACHE is None:
-        from config import EMBEDDING_CACHE_DIR, EMBEDDING_CACHE_ENABLED
-        from tools.cache.text_embedding_cache import TextEmbeddingCache
+    directory = embedding_cache_dir(user_id).resolve()
+    _, _, dims = active_backend()
+    key = (directory, dims)
 
-        _, _, dims = active_backend()
-        _EMBEDDING_CACHE = TextEmbeddingCache(
-            cache_dir=EMBEDDING_CACHE_DIR,
-            enabled=EMBEDDING_CACHE_ENABLED,
-            # Sized to the *active* backend. Gemini is 768 and the local model
-            # 256, so a fixed number here would reject every entry from
-            # whichever backend it was not written for (R28's guard).
-            dimensions=dims or None,
-        )
-
-    return _EMBEDDING_CACHE
+    with _EMBEDDING_CACHES_LOCK:
+        cache = _EMBEDDING_CACHES.get(key)
+        if cache is None:
+            cache = TextEmbeddingCache(
+                cache_dir=str(directory),
+                enabled=EMBEDDING_CACHE_ENABLED,
+                # Sized to the *active* backend. Gemini is 768 and the local
+                # model 256, so a fixed number here would reject every entry
+                # from whichever backend it was not written for (R28's guard).
+                dimensions=dims or None,
+            )
+            _EMBEDDING_CACHES[key] = cache
+    return cache
 
 
 def _get_embedding(
     text: str,
     task_type: str = "RETRIEVAL_DOCUMENT",
     api_key: str = None,
+    *,
+    user_id,
 ) -> list[float]:
     """
     Get embedding vector from Gemini API, using config.EMBEDDING_MODEL.
@@ -216,13 +238,14 @@ def _get_embedding(
         task_type: RETRIEVAL_DOCUMENT for resume/JD content,
                    RETRIEVAL_QUERY for search queries.
         api_key: Explicit key; falls back to the environment when None.
+        user_id: Whose embedding cache to read and write (`None` = unscoped).
     """
     # The cache key is the string actually sent to the API, truncation
     # included. Keying on the untruncated text would give two inputs that
     # truncate identically separate entries for one identical API call.
     payload = text[:8000]
     backend, model_name, _ = active_backend()
-    cache = _embedding_cache()
+    cache = _embedding_cache(user_id)
 
     cached = cache.get(payload, model_name, task_type)
     if cached is not None:
@@ -260,7 +283,8 @@ def _get_embedding(
         return []
 
 
-def embed_resume_components(parsed_resume, api_key: str = None) -> dict[str, list[float]]:
+def embed_resume_components(parsed_resume, api_key: str = None, *,
+                            user_id) -> dict[str, list[float]]:
     """
     Embed all resume components (experiences + projects).
     Returns dict mapping component_id → embedding vector.
@@ -271,7 +295,7 @@ def embed_resume_components(parsed_resume, api_key: str = None) -> dict[str, lis
     # Embed each experience
     for exp in parsed_resume.experiences:
         text = f"{exp.title} {exp.company} {' '.join(exp.bullets)}"
-        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT", api_key=api_key)
+        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT", api_key=api_key, user_id=user_id)
         if vec:
             embeddings[exp.id] = vec
             logger.debug(f"Embedded experience: {exp.id}")
@@ -279,7 +303,7 @@ def embed_resume_components(parsed_resume, api_key: str = None) -> dict[str, lis
     # Embed each project
     for proj in parsed_resume.projects:
         text = f"{proj.name} {proj.tech} {' '.join(proj.bullets)}"
-        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT", api_key=api_key)
+        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT", api_key=api_key, user_id=user_id)
         if vec:
             embeddings[proj.id] = vec
             logger.debug(f"Embedded project: {proj.id}")
@@ -288,7 +312,8 @@ def embed_resume_components(parsed_resume, api_key: str = None) -> dict[str, lis
     # Embed skills section
     if parsed_resume.skills and parsed_resume.skills.categories:
         skills_text = " ".join(parsed_resume.skills.categories.values())
-        vec = _get_embedding(skills_text, "RETRIEVAL_DOCUMENT", api_key=api_key)
+        vec = _get_embedding(skills_text, "RETRIEVAL_DOCUMENT", api_key=api_key,
+                             user_id=user_id)
         if vec:
             embeddings["__skills__"] = vec
 
@@ -347,6 +372,8 @@ def score_job_with_embeddings(
     max_experiences: int = 3,
     max_projects: int = 4,
     api_key: str = None,
+    *,
+    user_id,
 ) -> EmbeddingScore | None:
     """
     Score a single JD against pre-computed resume embeddings.
@@ -362,7 +389,7 @@ def score_job_with_embeddings(
         EmbeddingScore with similarity scores, or None on failure.
     """
     # Embed the JD
-    jd_vec = _get_embedding(jd_text, "RETRIEVAL_QUERY", api_key=api_key)
+    jd_vec = _get_embedding(jd_text, "RETRIEVAL_QUERY", api_key=api_key, user_id=user_id)
     if not jd_vec:
         return None
 

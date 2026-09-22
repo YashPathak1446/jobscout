@@ -30,15 +30,24 @@ import json
 import sys
 from pathlib import Path
 
-from tools import paths
-
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-CACHE = paths.user_path("cache", "job_cache.json")
+
+def cache_file(user_id) -> Path:
+    """
+    The job cache this purge reads, resolved the way `JobCache` resolves it.
+
+    This was `CACHE = paths.user_path("cache", "job_cache.json")` at import —
+    a third spelling of the cache location, matching neither writer while the
+    writers were cwd-relative (Q31), and one directory for everybody. Through
+    `job_cache.cache_dir` it is the writer's own answer, for a named user.
+    """
+    from tools.cache.job_cache import cache_dir
+    return cache_dir(user_id) / "job_cache.json"
 
 
-def fabricated_urls(cache_path=CACHE) -> set:
+def fabricated_urls(cache_path) -> set:
     """URLs whose cached description came from the mock, not the employer."""
     if not cache_path.exists():
         return set()
@@ -50,7 +59,7 @@ def fabricated_urls(cache_path=CACHE) -> set:
     }
 
 
-def purge_cache(urls, cache_path=CACHE, dry_run=False) -> int:
+def purge_cache(urls, cache_path, dry_run=False) -> int:
     """Drop the fabricated entries. The URL stays in `seen_urls`."""
     if not urls or not cache_path.exists():
         return 0
@@ -95,16 +104,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     parser.add_argument("--dry-run", action="store_true",
                         help="report what would change and touch nothing")
+    parser.add_argument("--user", default=None,
+                        help="purge this hosted user's data; omit for the "
+                             "unscoped layout (a checkout)")
     args = parser.parse_args()
 
-    from tools.jobs.job_store import JobStore
+    from tools.jobs.job_store import JobStore, db_path
 
-    urls = fabricated_urls()
+    cache_path = cache_file(args.user)
+    urls = fabricated_urls(cache_path)
     if not urls:
         print("No fabricated descriptions found. Nothing to do.")
         return 0
 
-    store = JobStore()
+    store = JobStore(db_path(args.user))
     try:
         resumed = [url for url in urls
                    if (store.get(url) or {}) and (store.get(url) or {})["resume_tex"]]
@@ -112,7 +125,7 @@ def main() -> int:
     finally:
         store.close()
 
-    removed = purge_cache(urls, dry_run=args.dry_run)
+    removed = purge_cache(urls, cache_path, dry_run=args.dry_run)
 
     verb = "would remove" if args.dry_run else "removed"
     print(f"Fabricated descriptions found : {len(urls)}")

@@ -42,7 +42,9 @@ logger = logging.getLogger(__name__)
 class TextEmbeddingCache:
     """File-backed cache of embedding vectors, one file per (model, task, text)."""
 
-    def __init__(self, cache_dir: str = ".cache/embeddings", enabled: bool = True,
+    # `cache_dir` has no default, for `LLMCache`'s reason:
+    # `config.embedding_cache_dir(user_id)` is the answer.
+    def __init__(self, cache_dir: str, enabled: bool = True,
                  dimensions: Optional[int] = None):
         """
         Args:

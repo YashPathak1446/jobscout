@@ -112,7 +112,7 @@ class TestTheAuthorsScoresDoNotMove(unittest.TestCase):
         master = ROOT / "data" / "master_resumes" / "yash_pathak.tex"
         if not master.is_file():
             self.skipTest("needs the author's master resume")
-        parsed = ResumeParser(str(master), skip_embeddings=True).parsed_resume
+        parsed = ResumeParser(str(master), skip_embeddings=True, user_id=None).parsed_resume
         self.assertGreaterEqual(len(parsed.experiences), CAP_E)
         self.assertGreaterEqual(len(parsed.projects), CAP_P)
 

@@ -176,10 +176,14 @@ class TestTheWriterAndTheReaderAgreeOnWhereOutputsLive(unittest.TestCase):
         import api.main as main
         importlib.reload(main)
 
-        self.assertEqual(writer_side().resolve(),
-                         main.outputs_root().resolve(),
-                         "the writer and the reader disagree about where "
-                         "generated resumes live")
+        # Unscoped and scoped both: since A3 the reader is
+        # `user_outputs_root(user)`, and a fork that agrees for one user and
+        # not the other is the two-paths shape again.
+        for user in (None, "alice"):
+            self.assertEqual(writer_side(user_id=user).resolve(),
+                             main.user_outputs_root(user).resolve(),
+                             f"the writer and the reader disagree about where "
+                             f"generated resumes live (user {user!r})")
 
     def test_a_relative_default_is_anchored_not_left_to_the_cwd(self):
         """
@@ -189,13 +193,13 @@ class TestTheWriterAndTheReaderAgreeOnWhereOutputsLive(unittest.TestCase):
         started from, or a `cd` changes where resumes are written.
         """
         from tools.paths import outputs_root
-        self.assertTrue(outputs_root().is_absolute())
-        self.assertTrue(outputs_root("outputs").is_absolute())
+        self.assertTrue(outputs_root(user_id=None).is_absolute())
+        self.assertTrue(outputs_root("outputs", user_id=None).is_absolute())
 
     def test_an_explicit_absolute_path_is_honoured(self):
         from tools.paths import outputs_root
         explicit = Path(ROOT / "some" / "elsewhere").resolve()
-        self.assertEqual(outputs_root(str(explicit)), explicit)
+        self.assertEqual(outputs_root(str(explicit), user_id=None), explicit)
 
     def test_the_data_home_moves_the_outputs_with_it(self):
         """
@@ -208,7 +212,7 @@ class TestTheWriterAndTheReaderAgreeOnWhereOutputsLive(unittest.TestCase):
         import tools.paths as paths
         with mock.patch.dict(os.environ, {"JOBSCOUT_HOME": str(ROOT / "tmp-home")}):
             importlib.reload(paths)
-            self.assertEqual(paths.outputs_root(),
+            self.assertEqual(paths.outputs_root(user_id=None),
                              Path(ROOT / "tmp-home") / "outputs")
         importlib.reload(paths)
 
@@ -217,8 +221,8 @@ class TestTheWriterAndTheReaderAgreeOnWhereOutputsLive(unittest.TestCase):
         The same fork as this class's other tests, one directory over.
 
         `extract_resume` **writes** an uploaded resume through
-        `init_profile.RESUME_DIR`; `_resolve_upload` **reads** it back on the
-        wizard's confirm step. `api/main.py` recomputed that root as
+        `init_profile.resume_dir`; `_resolve_upload` **reads** it back on the
+        wizard's confirm step. `api/main.py` once recomputed that root as
         `Path.cwd() / "data" / "master_resumes"` — identical in a checkout,
         `/app/data/...` against `/data/data/...` in the container, where the
         upload 404s on a file the previous request just saved.
@@ -234,38 +238,31 @@ class TestTheWriterAndTheReaderAgreeOnWhereOutputsLive(unittest.TestCase):
         nothing — the first draft of this test did exactly that. Pointing
         `JOBSCOUT_HOME` somewhere else reproduces the container, where the two
         diverge, which is the only place the bug exists.
+
+        Since A3 the root is a function of the user rather than an import-time
+        constant, so there is nothing to reload — and the reader holding the
+        writer's *function* is the claim, not two values that happen to match.
         """
-        import tools.paths as paths
         import scripts.init_profile as init_profile
         import api.main as main
 
-        try:
-            with tempfile.TemporaryDirectory() as home:
-                with mock.patch.dict(os.environ, {"JOBSCOUT_HOME": home}):
-                    # Order matters: the two RESUME_DIRs are module-level
-                    # constants, so each has to be recomputed under the moved
-                    # home, and `api.main` re-imports the name from
-                    # `init_profile` when it is reloaded.
-                    importlib.reload(paths)
-                    importlib.reload(init_profile)
-                    importlib.reload(main)
+        self.assertIs(main.resume_dir, init_profile.resume_dir,
+                      "the module that reads an upload back resolves its "
+                      "directory some other way than the module that wrote it")
 
-                    self.assertEqual(
-                        main.RESUME_DIR, init_profile.RESUME_DIR,
-                        "the module that writes an upload and the module "
-                        "that reads it back disagree about where it went")
-
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.dict(os.environ, {"JOBSCOUT_HOME": home}):
+                for user, expected in (
+                        (None, Path(home) / "data" / "master_resumes"),
+                        ("alice", Path(home) / "users" / "alice" / "data"
+                         / "master_resumes")):
+                    self.assertEqual(main.resume_dir(user), expected)
                     self.assertNotEqual(
-                        main.RESUME_DIR, Path.cwd() / "data" / "master_resumes",
+                        main.resume_dir(user),
+                        Path.cwd() / "data" / "master_resumes",
                         "the reader is resolving uploads against the working "
                         "directory, which is an image layer in the container "
                         "and not where the writer put the file")
-        finally:
-            # Leave the process as it was found: these constants are read by
-            # every other test in the run.
-            importlib.reload(paths)
-            importlib.reload(init_profile)
-            importlib.reload(main)
 
 
 class TestTheShippingImageKeepsItsDataOffTheImageLayer(unittest.TestCase):

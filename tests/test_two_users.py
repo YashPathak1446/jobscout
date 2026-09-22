@@ -69,7 +69,6 @@ today's bug on its own, and reading it as though it were is how a suite ends
 up agreeing with itself.
 """
 
-import importlib
 import os
 import shutil
 import sys
@@ -86,8 +85,31 @@ try:
 except ImportError:  # pragma: no cover - fastapi is optional for the CLI
     TestClient = None
 
+# Each fixture user's id is their profile's name, so one constant names both
+# the person and the profile they import under. Both match the user-id pattern
+# `tools.paths` enforces; the mutation check below collapses the *person*, and
+# the profile collapses with them, which is what "the same user" means.
 USER_A = "priya_raghunathan"
 USER_B = "rohan_deshmukh"
+
+
+def _as_the_api_serves(user):
+    """
+    Whose data a request from `user` is served as, today.
+
+    `None` for every caller until A5/A6: there is no session, so `api/main.py`
+    passes the unscoped user at every call site (and
+    `test_hosted_mode_has_no_unscoped_call_site` counts them). A5 replaces
+    this body with the caller's identity; the assertions below do not change.
+
+    It exists because after A3 a run recorded under A's *own* id lives in A's
+    own `runs.db`, which the API never reads — so the API tests would pass
+    against an unscoped API simply by reading an empty third home. That is a
+    green that proves nothing about the route, and the mutation check exists
+    to catch exactly that. Recording A's run the way the API records it keeps
+    those tests red for the reason they name.
+    """
+    return None
 
 
 class _Listing:
@@ -107,50 +129,48 @@ class _OneInstance(unittest.TestCase):
     """
     One data home, two users in it -- the hosted instance as it stands today.
 
-    The stores that have to be relocated resolve their path **at import time**
-    (`job_store.py:41`, `run_registry.py:38`), so moving `JOBSCOUT_HOME` is not
-    enough on its own and each is reloaded under the moved home. Everything
-    else -- profiles, `outputs_root` -- calls `data_home()` per invocation and
-    follows the environment without help.
+    Each user's profile and master resume are placed where that user's data
+    lives, and once more in the unscoped home, which is where the API serves
+    every caller from until A5 (`_as_the_api_serves`). Before A3 the unscoped
+    home was the only one; the per-user copies are what the partition reads.
+
+    Nothing is reloaded. Until A3 the two stores resolved their path at import
+    time and this class had to reload both under the moved home; since A3
+    every path is a function of the user, resolved per call, and follows
+    `JOBSCOUT_HOME` without help.
     """
 
     def setUp(self):
+        from tools import paths
+
         self._dir = tempfile.TemporaryDirectory()
         self.home = Path(self._dir.name)
-        (self.home / "user_profiles").mkdir(parents=True)
-        (self.home / "data" / "master_resumes").mkdir(parents=True)
-
-        for name in (USER_A, USER_B):
-            shutil.copy(ROOT / "user_profiles" / f"{name}.json",
-                        self.home / "user_profiles" / f"{name}.json")
-            master = ROOT / "data" / "master_resumes" / f"{name}.tex"
-            if master.is_file():
-                shutil.copy(
-                    master,
-                    self.home / "data" / "master_resumes" / f"{name}.tex")
 
         self._env = mock.patch.dict(os.environ,
                                     {"JOBSCOUT_HOME": str(self.home)})
         self._env.start()
-        self._reload()
+
+        for name in (USER_A, USER_B):
+            for owner in (None, name):
+                where = paths.user_home(owner)
+                (where / "user_profiles").mkdir(parents=True, exist_ok=True)
+                (where / "data" / "master_resumes").mkdir(parents=True,
+                                                          exist_ok=True)
+                shutil.copy(ROOT / "user_profiles" / f"{name}.json",
+                            where / "user_profiles" / f"{name}.json")
+                master = ROOT / "data" / "master_resumes" / f"{name}.tex"
+                if master.is_file():
+                    shutil.copy(
+                        master,
+                        where / "data" / "master_resumes" / f"{name}.tex")
 
     def tearDown(self):
         self._env.stop()
-        # Back to the checkout's own home, or every test that runs after this
-        # one in the same process writes into a directory about to be deleted.
-        self._reload()
         self._dir.cleanup()
 
-    @staticmethod
-    def _reload():
-        import tools.jobs.job_store as job_store
-        import tools.jobs.run_registry as run_registry
-        importlib.reload(job_store)
-        importlib.reload(run_registry)
-
-    def _store(self):
-        from tools.jobs.job_store import JobStore
-        return JobStore()
+    def _store(self, user):
+        from tools.jobs.job_store import JobStore, db_path
+        return JobStore(db_path(user))
 
 
 class TestTheGateIsNotRejudgedForEveryUserInTurn(_OneInstance):
@@ -170,16 +190,19 @@ class TestTheGateIsNotRejudgedForEveryUserInTurn(_OneInstance):
 
     def setUp(self):
         super().setUp()
-        store = self._store()
-        try:
-            store.record([
-                _Listing("https://example.com/a", "Engineer I",
-                         "An entry-level role in Python."),
-                _Listing("https://example.com/b", "Engineer II",
-                         "A backend role in Python and Go."),
-            ])
-        finally:
-            store.close()
+        # Both people discovered the same two postings, as two people
+        # searching for similar roles will.
+        for user in (USER_A, USER_B):
+            store = self._store(user)
+            try:
+                store.record([
+                    _Listing("https://example.com/a", "Engineer I",
+                             "An entry-level role in Python."),
+                    _Listing("https://example.com/b", "Engineer II",
+                             "A backend role in Python and Go."),
+                ])
+            finally:
+                store.close()
 
     def test_the_two_profiles_are_judged_differently(self):
         """
@@ -189,24 +212,23 @@ class TestTheGateIsNotRejudgedForEveryUserInTurn(_OneInstance):
         from tools.jobs.job_filter import gate_fingerprint
         from tools.profile import load_profile
 
-        self.assertNotEqual(gate_fingerprint(load_profile(USER_A)),
-                            gate_fingerprint(load_profile(USER_B)),
+        self.assertNotEqual(gate_fingerprint(load_profile(USER_A, user_id=None)),
+                            gate_fingerprint(load_profile(USER_B, user_id=None)),
                             "the two fixture users hash the same, so the "
                             "storm test below cannot fire")
 
-    # Expected to flip at A3: it scopes `refresh_board_gate` to one
-    # user's store, so B's fingerprint never touches A's rows and the
-    # third call matches nothing.
-    @unittest.expectedFailure
+    # Flipped at A3: `refresh_board_gate` is scoped to one user's store,
+    # so B's fingerprint never touches A's rows and the third call matches
+    # nothing.
     def test_returning_to_the_first_user_rejudges_nothing(self):
         from agents.orchestrator import refresh_board_gate
 
-        self.assertEqual(refresh_board_gate(USER_A), 2,
+        self.assertEqual(refresh_board_gate(USER_A, USER_A), 2,
                          "the first pass should judge both rows")
-        refresh_board_gate(USER_B)
+        refresh_board_gate(USER_B, USER_B)
 
         self.assertEqual(
-            refresh_board_gate(USER_A), 0,
+            refresh_board_gate(USER_A, USER_A), 0,
             "a second user rendering their board invalidated the first "
             "user's verdicts; every render is now a write over the whole "
             "table")
@@ -227,8 +249,8 @@ class TestOneUsersScoresDoNotMoveAnothersBands(_OneInstance):
     to 16 and `high` jumps from A's ceiling to B's.
     """
 
-    def _score(self, prefix, score):
-        store = self._store()
+    def _score(self, user, prefix, score):
+        store = self._store(user)
         try:
             listings = [_Listing(f"https://example.com/{prefix}{i}")
                         for i in range(8)]
@@ -238,21 +260,20 @@ class TestOneUsersScoresDoNotMoveAnothersBands(_OneInstance):
         finally:
             store.close()
 
-    # Expected to flip at A3: it gives each user their own `jobs.db`, so
-    # the quartiles are cut over one person's scores again — which
-    # `score_bands`' own docstring already claims they are.
-    @unittest.expectedFailure
+    # Flipped at A3: each user has their own `jobs.db`, so the quartiles
+    # are cut over one person's scores again — which `score_bands`' own
+    # docstring already claimed they were.
     def test_the_first_users_bands_are_unchanged_by_the_second(self):
         from agents.orchestrator import score_bands
 
-        self._score("a", 40.0)
-        before = score_bands()
+        self._score(USER_A, "a", 40.0)
+        before = score_bands(USER_A)
         self.assertTrue(before, "8 scored jobs should be enough to band")
 
-        self._score("b", 90.0)
+        self._score(USER_B, "b", 90.0)
 
         self.assertEqual(
-            before, score_bands(),
+            before, score_bands(USER_A),
             "a second user's scores re-cut the first user's quartiles, so "
             "every match on A's board is relabelled by work A did not do")
 
@@ -283,16 +304,15 @@ class TestTwoRunsOnOneDayAreTwoRuns(_OneInstance):
     the count wrong and the overwrite below possible.
     """
 
-    def _run(self, profile_name):
+    def _run(self, user):
         from agents.orchestrator import JobScoutOrchestrator
-        orchestrator = JobScoutOrchestrator(profile_name=profile_name,
+        orchestrator = JobScoutOrchestrator(profile_name=user, user_id=user,
                                             backend="none", generate_pdf=False)
         orchestrator._save_state()
         return orchestrator.output_path
 
-    # Expected to flip at A3: it scopes `outputs_root` per user, so the
-    # date no longer has to be unique across everybody.
-    @unittest.expectedFailure
+    # Flipped at A3: `outputs_root` is scoped per user, so the date no
+    # longer has to be unique across everybody.
     def test_each_run_gets_its_own_directory(self):
         from agents.orchestrator import previous_runs
 
@@ -304,12 +324,11 @@ class TestTwoRunsOnOneDayAreTwoRuns(_OneInstance):
             "two people who ran on the same day share one output directory, "
             "so each writes over the other's resumes and state")
         self.assertEqual(
-            len(previous_runs()), 1,
+            len(previous_runs(USER_A)), 1,
             "a partitioned listing shows its own user exactly one run")
 
-    # Expected to flip at A3, same seam: once the roots differ there is
-    # no shared `state.json` for the second run to land on.
-    @unittest.expectedFailure
+    # Flipped at A3, same seam: the roots differ, so there is no shared
+    # `state.json` for the second run to land on.
     def test_the_first_users_state_survives_the_second_run(self):
         from agents.orchestrator import load_run
 
@@ -317,7 +336,7 @@ class TestTwoRunsOnOneDayAreTwoRuns(_OneInstance):
         self._run(USER_B)
 
         self.assertEqual(
-            load_run(str(path))["profile"], USER_A,
+            load_run(USER_A, str(path))["profile"], USER_A,
             "the second run overwrote the first user's state.json -- their "
             "record of what was found and generated is gone")
 
@@ -360,9 +379,9 @@ class TestOneUsersRunsDoNotCrossTheWireToAnother(_OneInstance):
     # cookie exists.
     @unittest.expectedFailure
     def test_the_active_list_names_no_run_the_caller_did_not_start(self):
-        from tools.jobs.run_registry import RunRegistry
+        from tools.jobs.run_registry import RunRegistry, db_path
 
-        registry = RunRegistry()
+        registry = RunRegistry(db_path(_as_the_api_serves(USER_A)))
         try:
             registry.create(USER_A)
         finally:
@@ -380,8 +399,9 @@ class TestOneUsersRunsDoNotCrossTheWireToAnother(_OneInstance):
     def test_the_past_list_names_no_directory_another_user_wrote(self):
         from agents.orchestrator import JobScoutOrchestrator
 
-        theirs = JobScoutOrchestrator(profile_name=USER_A, backend="none",
-                                      generate_pdf=False)
+        theirs = JobScoutOrchestrator(profile_name=USER_A,
+                                      user_id=_as_the_api_serves(USER_A),
+                                      backend="none", generate_pdf=False)
         theirs._save_state()
 
         listed = {Path(run["path"]).resolve()

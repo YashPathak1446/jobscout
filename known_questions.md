@@ -8388,9 +8388,128 @@ roots in a checkout, where `cwd` *is* the data home, so it passed against the
 broken code. It moves `JOBSCOUT_HOME` now. A test that checks one path against
 itself is the thing this codebase keeps re-learning.
 
+## R90. The scope seam: every store answers "whose?" (pilot plan A3)
+
+**Decision:** (2026-09-22) `tools.paths.user_home(user_id)` with **no
+default**. `None` is the unscoped layout, meaning the checkout, the CLI and one
+person's laptop, and it returns `data_home()` itself rather than a computation
+that happens to agree with it. A string is `data_home()/users/<id>/`, holding
+the same tree the unscoped layout holds at the root. Leaving the argument out
+is a `TypeError`. Every facade function that touches user data takes `user_id`
+first, and so does every `init_profile` function the UIs call. Every store,
+cache and resolver below them takes it as a required keyword. The worker thread
+`start_run` spawns gets the id through its closure, because a `ContextVar`
+does not follow a `threading.Thread`.
+
+**Chosen over the plan's signature in one place, `user_path`.** The plan wrote
+`user_path(user_id, *parts)`. Before this, the signature was
+`user_path(*parts)`, so a positional first argument would have turned every
+unmigrated `user_path("data", "jobs.db")` into a user called `data`: valid
+under the id pattern, with no error anywhere. Keyword-only makes each of those
+calls a `TypeError`. The id pattern (`[a-z0-9_-]{1,64}`) is the second guard:
+no dots means no `..`, and a URL or a byte string passed in the wrong slot fails
+at the seam.
+
+**Counted, not predicted (the R80 rule), and the count ran high again.** The
+plan named 18 facade functions and four caches. The code also had:
+
+- **the profile and resume writers.** `init_profile.RESUME_DIR` and `PROFILES`
+  were import-time constants that both UIs imported, and about ten functions
+  wrote through them. Scoping `available_profiles` alone would have had the
+  wizard save to the top level while the dropdown read the user's directory,
+  which is `profile_loader`'s own documented R86 bug rebuilt. Added to A3 by
+  decision; the writer now resolves through the loader's function.
+- **a second resolution of `master_resume_path`.** The orchestrator used
+  `data_home() / stored` and `_component_rules` computed the same thing
+  separately. Both now go through `paths.stored_path`, which refuses an
+  absolute path outside the user's home when scoped. Otherwise a profile field
+  would be a way to read somebody else's resume.
+- **the learned ATS company list** (`data/ats_companies.json`). This is per
+  user by decision. Sharing it would help everyone's discovery, but the list is
+  learned from each person's searches, so B's board would move with what A
+  looked for.
+- **three more cwd-relative defaults the plan's four did not include:**
+  `LLMCache(cache_dir=".cache/llm")`, `TextEmbeddingCache(cache_dir=".cache/embeddings")`
+  and `generate_resumes(output_dir="outputs")`. Every production caller
+  already passed a directory, so the defaults were only reachable, not wrong.
+  They are gone anyway, because a reachable default is how the next caller goes
+  wrong. The closing test found the first two; nobody had read them.
+- **the plan's closing-test pattern** (`*_DIR|*_DB|CACHE*`) would have missed
+  `PROFILES` and `LEARNED_FILE`, two constants that already existed. The rule
+  that shipped fails on any module-level call to a resolver, and on a location
+  literal bound to a name *or to a parameter default*. It also runs itself
+  against six known-bad sources first, so the mutation proof is part of the
+  suite rather than a claim.
+
+**The singleton.** `embedding_scorer._EMBEDDING_CACHE` was one per process. It
+is now a dict keyed by `(resolved directory, dimensions)` behind a lock. The
+key is the directory, not the user id, because the directory decides which
+vectors come back; a key is a claim about which differences do not matter. The
+test counts embedding API calls, because that is the only place the failure
+shows: a second user asking for the same text must be a miss in *their*
+cache. Collapsing the key back to one per process fails it (1 call, not 2).
+**Breaks if wrong:** the dict grows by one entry per user per process, which is
+fine for five people and wants a bound at 100+.
+
+**The unscoped fork did not move, and that is measured.**
+`scripts/path_snapshot.py` asks every store where it lives, the way the program
+asks, and compares against `baselines/paths.unscoped.json`. That record was
+taken from the pre-A3 code before anything changed. The script is committed so
+A5 and later stages re-run the same comparison instead of writing their own.
+Results after A3:
+from the repo root, identical. From a foreign working directory, identical too,
+which is the change: before A3 the four caches resolved to `/tmp/cache` and
+`/tmp/.cache/*` from there. That was Q31, reproduced by the instrument before
+it was fixed. The `--mock` Priya run writes byte-identical `.tex`, and the four
+state files are identical apart from timestamps. `users/` is never created by
+an unscoped run.
+
+**Mutation check (exit criterion 2),** run by setting `USER_B = USER_A` in
+`test_two_users.py` and changing nothing else:
+
+| A2 test | mutated | real |
+|---|---|---|
+| A2.2 bands | red | green |
+| A2.3a one directory per run | red | green |
+| A2.1 storm, A2.3b state | green | green (discriminating since A2) |
+| A2.4 API pair | expected failure | expected failure, until A5/A6 |
+
+**The A2.4 pair needed its setup changed to stay honest.** After A3, a run
+recorded under A's own id lives in A's own `runs.db`, which the API never
+reads, because the API serves every caller as `None`. The tests would then
+have passed against an unscoped API just by reading an empty third home: green
+under the mutation and green without it, which proves nothing. They now record
+A's run the way the API records it, through `_as_the_api_serves(user)`, which
+is `None` until A5 replaces its body with the caller's identity.
+
+**The gap A5 closes is counted, not remembered.** `api/main.py` passes `None`
+at 26 call sites. `test_hosted_mode_has_no_unscoped_call_site` is an expected
+failure that counts them statically. It also counts them at runtime: with
+`JOBSCOUT_MODE=hosted` it drives eight routes and records the user each facade
+call receives. A companion test asserts that every probed route reached a facade
+call, so a broken harness cannot pass for a real gap.
+
+**Two tests would have kept passing for the wrong reason, and neither was
+reported by the suite.** `_id_problems("no_such_profile_anywhere", path)` bound
+the profile name as the user id, which is valid under the pattern, and the
+function catches every exception to report "could not check". `test_doctor`'s
+`explode(name)` stub would have raised a `TypeError` on the new keyword, which
+the doctor also counts as a broken profile. Both were found by reading each
+changed call rather than trusting a green run. **A signature change is exactly
+where a test that expects an exception starts passing on the wrong one.**
+
+**Not verified here:** `baseline.py verify --all`. The frozen baselines exist
+only on the author's machine, so it reports MISSING before and after in this
+container. The path snapshot is what stands in for it here, and it is not a
+substitute there.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
-**Status:** Open, found 2026-09-08 while reading the container's write paths.
+**Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
+through `tools.paths`, and the fourth spelling, `purge_fabricated`'s, now goes
+through `job_cache.cache_dir`. `scripts/path_snapshot.py verify` resolves them
+from a foreign working directory to keep this from coming back. Found
+2026-09-08 while reading the container's write paths.
 `cache/job_cache.json`, `cache/resume_embeddings.json`, `.cache/llm/` and
 `.cache/embeddings/` all resolve against the working directory, so on Fly they
 land in `/app` — an image layer replaced every deploy — while `fly.toml:19-22`
@@ -8608,6 +8727,24 @@ and the profile did not notice", and one answer — re-derive or refuse when the
 master a profile points at is not the master its IDs came from — closes both.
 A content hash of the `.tex` stored beside the IDs would say it cheaply, and
 `EmbeddingCache` already hashes that exact file for its own key.
+
+## Q38. `find_pdflatex` raises on Linux when LaTeX is not on PATH
+
+**Status:** Open, found 2026-09-22 while taking A3's baseline in a Linux
+container. `_FALLBACK_DIRS` in `tools/generation/pdf_builder.py` carries
+`r"~\AppData\Local\Programs\MiKTeX\miktex\bin\x64"`. On POSIX, `~` followed by
+a backslash is `~user` for a user named `\AppData\...`, so `expanduser()`
+raises `RuntimeError: Could not determine home directory` instead of the path
+failing to exist. `find_pdflatex` is documented to return `None` on a machine
+with no LaTeX; on Linux without `pdflatex` on PATH it raises instead. Six tests
+error for this reason, and `/api/health` 500s through `pdflatex_available()`.
+
+It has not been seen because the author's machine is Windows, where the entry
+is a real path, and the Docker image installs TeX, so `shutil.which` returns
+before the loop. It is the "LaTeX installed vs. not" fork in the shape
+CLAUDE.md names: one machine always takes the same side. The fix is small
+(skip `~` entries on POSIX, or catch the `RuntimeError` per directory) and
+outside A3, so it is logged rather than folded in.
 
 ---
 

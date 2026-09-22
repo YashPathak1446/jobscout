@@ -135,10 +135,10 @@ class TestABrokenProfileIsAFailure(unittest.TestCase):
         real_list = profile_module.list_available_profiles
         real_load = profile_module.load_profile
 
-        def explode(name):
+        def explode(name, **kw):
             raise ValueError("countries: field required")
 
-        profile_module.list_available_profiles = lambda: ["broken"]
+        profile_module.list_available_profiles = lambda **kw: ["broken"]
         profile_module.load_profile = explode
         try:
             report = doctor.Report()
@@ -155,7 +155,7 @@ class TestABrokenProfileIsAFailure(unittest.TestCase):
         import tools.profile as profile_module
 
         real = profile_module.list_available_profiles
-        profile_module.list_available_profiles = lambda: []
+        profile_module.list_available_profiles = lambda **kw: []
         try:
             report = doctor.Report()
             doctor.check_profiles(report)
@@ -234,7 +234,7 @@ class TestBackupsAreNotProfiles(unittest.TestCase):
                          "template.json"):
                 (folder / name).write_text(json.dumps({}), encoding="utf-8")
 
-            self.assertEqual(list_available_profiles(str(folder)), ["jane"])
+            self.assertEqual(list_available_profiles(str(folder), user_id=None), ["jane"])
 
 
 if __name__ == "__main__":

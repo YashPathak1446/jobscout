@@ -35,7 +35,7 @@ except ImportError:
 # Add project root to path (parent of agents/)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from tools.paths import outputs_root, data_home
+from tools.paths import outputs_root, stored_path
 from tools.profile import load_profile
 from tools.resume import ResumeParser
 from agents import DiscoveryAgent, EnrichmentAgent, AnalysisAgent, GenerationAgent
@@ -70,7 +70,30 @@ def _console_print(*args, **kwargs) -> None:
         print(*cleaned, **kwargs)
 
 
-def previous_runs(output_dir: str = "outputs", limit: int = 10) -> list:
+def user_outputs_root(user_id) -> Path:
+    """
+    Where this user's generated resumes go (pilot plan A3).
+
+    The facade's answer to "whose outputs directory", exported so `/api/file`
+    can contain a download inside the *caller's* root rather than inside
+    everybody's. `None` is the unscoped layout, which is `outputs/` at the
+    checkout root, exactly as before.
+    """
+    return outputs_root(user_id=user_id)
+
+
+def master_resume_path(user_id, stored: str) -> str:
+    """
+    Resolve a profile's `master_resume_path` for the user it belongs to.
+
+    A facade over `tools.paths.stored_path`, which `init_profile`'s editor
+    reads through too — the second of two resolutions of this one field,
+    and two resolutions of one field is how R86 happened.
+    """
+    return str(stored_path(stored, user_id=user_id))
+
+
+def previous_runs(user_id, output_dir: str = "outputs", limit: int = 10) -> list:
     """
     Past runs, newest first, as {date, path, jobs, resumes}.
 
@@ -85,7 +108,7 @@ def previous_runs(output_dir: str = "outputs", limit: int = 10) -> list:
     """
     import json as _json
 
-    base = outputs_root(output_dir)
+    base = outputs_root(output_dir, user_id=user_id)
     if not base.is_dir():
         return []
 
@@ -111,10 +134,22 @@ def previous_runs(output_dir: str = "outputs", limit: int = 10) -> list:
     return runs
 
 
-def load_run(path: str) -> dict:
-    """The saved state of one past run, in the shape `run()` returns."""
+def load_run(user_id, path: str) -> dict:
+    """
+    The saved state of one past run, in the shape `run()` returns.
+
+    `path` comes from `previous_runs` — but it arrives as a string, so it is
+    contained inside this user's outputs before it is opened. Otherwise the
+    listing is scoped and the read is not, which is the pair A3 exists to
+    stop splitting.
+    """
     import json as _json
-    return _json.loads((Path(path) / "state.json").read_text(encoding="utf-8"))
+
+    root = user_outputs_root(user_id).resolve()
+    run = Path(path).resolve()
+    if root not in run.parents:
+        raise ValueError(f"not one of this user's runs: {path!r}")
+    return _json.loads((run / "state.json").read_text(encoding="utf-8"))
 
 
 def pdflatex_available() -> bool:
@@ -129,10 +164,10 @@ def pdflatex_available() -> bool:
     return find_pdflatex() is not None
 
 
-def available_profiles() -> list:
-    """Names of profiles that exist. Facade, for the same reason as above."""
+def available_profiles(user_id) -> list:
+    """Names of this user's profiles. Facade, for the same reason as above."""
     from tools.profile import list_available_profiles
-    return list_available_profiles()
+    return list_available_profiles(user_id=user_id)
 
 
 # ------------------------------------------------------------------------
@@ -144,13 +179,23 @@ def available_profiles() -> list:
 # view layer never learns that any of it is SQLite (R25).
 # ------------------------------------------------------------------------
 
+def _board(user_id):
+    """
+    This user's board. Every facade below opens it through here, so there is
+    one place that says whose — and `JobStore` no longer has a default to
+    fall back to if a facade forgot.
+    """
+    from tools.jobs.job_store import JobStore, db_path
+    return JobStore(db_path(user_id))
+
+
 def job_statuses() -> tuple:
     """What a user is allowed to say about a job."""
     from tools.jobs.job_store import STATUSES
     return STATUSES
 
 
-def board_jobs(status=None, min_score=None, has_resume=None, company=None,
+def board_jobs(user_id, status=None, min_score=None, has_resume=None, company=None,
                source=None, search=None, sort="best", limit=50, offset=0,
                include_ineligible=False) -> list:
     """
@@ -170,9 +215,7 @@ def board_jobs(status=None, min_score=None, has_resume=None, company=None,
     screen says how many there are, because a filter that removes things
     without saying so is the shape this project keeps regretting.
     """
-    from tools.jobs.job_store import JobStore
-
-    store = JobStore()
+    store = _board(user_id)
     try:
         return store.query(status=status, min_score=min_score,
                            has_resume=has_resume, company=company,
@@ -183,12 +226,10 @@ def board_jobs(status=None, min_score=None, has_resume=None, company=None,
         store.close()
 
 
-def board_total(status=None, min_score=None, has_resume=None, company=None,
+def board_total(user_id, status=None, min_score=None, has_resume=None, company=None,
                 source=None, search=None, include_ineligible=False) -> int:
     """How many jobs match, ignoring the page window."""
-    from tools.jobs.job_store import JobStore
-
-    store = JobStore()
+    store = _board(user_id)
     try:
         return store.count(status=status, min_score=min_score,
                            has_resume=has_resume, company=company,
@@ -198,7 +239,7 @@ def board_total(status=None, min_score=None, has_resume=None, company=None,
         store.close()
 
 
-def refresh_board_gate(profile_name: str) -> int:
+def refresh_board_gate(user_id, profile_name: str) -> int:
     """
     Bring every stored verdict up to date with the current gates (R62).
 
@@ -210,17 +251,16 @@ def refresh_board_gate(profile_name: str) -> int:
     refuse to render, so a failure here is logged and the stale verdicts stand.
     """
     from tools.jobs.job_filter import gate_fingerprint, gate_reason
-    from tools.jobs.job_store import JobStore
 
     try:
-        profile = load_profile(profile_name)
+        profile = load_profile(profile_name, user_id=user_id)
     except Exception as exc:
         logger.warning(f"Board gate not refreshed: {exc}")
         return 0
 
     store = None
     try:
-        store = JobStore()
+        store = _board(user_id)
         return store.refresh_gate(
             gate_fingerprint(profile),
             lambda row: gate_reason(row, profile),
@@ -233,23 +273,21 @@ def refresh_board_gate(profile_name: str) -> int:
             store.close()
 
 
-def board_filters() -> dict:
+def board_filters(user_id) -> dict:
     """
     The companies and sources worth offering, with counts, commonest first.
 
     Read from the store so a board that has just learned a new ATS offers it
     without anyone editing a list in the view layer.
     """
-    from tools.jobs.job_store import JobStore
-
-    store = JobStore()
+    store = _board(user_id)
     try:
         return store.facets()
     finally:
         store.close()
 
 
-def ghosted_jobs(after_days=None) -> list:
+def ghosted_jobs(user_id, after_days=None) -> list:
     """
     Applied to, and silent since — computed, never clicked.
 
@@ -258,9 +296,9 @@ def ghosted_jobs(after_days=None) -> list:
     arrived, and would need the user to notice the anniversary themselves,
     which is the work a log is supposed to do for them.
     """
-    from tools.jobs.job_store import GHOSTED_AFTER_DAYS, JobStore
+    from tools.jobs.job_store import GHOSTED_AFTER_DAYS
 
-    store = JobStore()
+    store = _board(user_id)
     try:
         # `if after_days is None`, not `or` — a threshold of 0 days is a
         # legitimate ask ("everything I have applied to and not heard about")
@@ -271,18 +309,16 @@ def ghosted_jobs(after_days=None) -> list:
         store.close()
 
 
-def job_history(url: str) -> list:
+def job_history(user_id, url: str) -> list:
     """Every status one job has held, oldest first."""
-    from tools.jobs.job_store import JobStore
-
-    store = JobStore()
+    store = _board(user_id)
     try:
         return store.history(url)
     finally:
         store.close()
 
 
-def board_job(url: str):
+def board_job(user_id, url: str):
     """
     One stored job in full, posting text included, or None.
 
@@ -293,16 +329,14 @@ def board_job(url: str):
     one job a reader actually opened. Streamlit never needed this because it
     renders in-process; a second view is what made the difference visible.
     """
-    from tools.jobs.job_store import JobStore
-
-    store = JobStore()
+    store = _board(user_id)
     try:
         return store.get(url)
     finally:
         store.close()
 
 
-def job_selection(url: str):
+def job_selection(user_id, url: str):
     """
     Why one job's resume contains what it contains, or None (R57).
 
@@ -311,10 +345,9 @@ def job_selection(url: str):
     `tools/` — `test_ui_contract` fails the build if it does. The view gets
     text and numbers and decides only how they look.
     """
-    from tools.jobs.job_store import JobStore
     from tools.resume.selection_report import describe
 
-    store = JobStore()
+    store = _board(user_id)
     try:
         report = store.selection(url)
     finally:
@@ -328,7 +361,13 @@ def job_selection(url: str):
     return report
 
 
-def start_run(profile_name, api_key="", max_jobs=20, max_resumes=3,
+def _registry(user_id):
+    """This user's run registry. See `_board`: one place that says whose."""
+    from tools.jobs.run_registry import RunRegistry, db_path
+    return RunRegistry(db_path(user_id))
+
+
+def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
               generate_pdf=True, output_dir="outputs", backend=None) -> str:
     """
     Begin a run in the background and return its id immediately (R33).
@@ -344,18 +383,22 @@ def start_run(profile_name, api_key="", max_jobs=20, max_resumes=3,
     to ask, and R26's checkpoint resolves through a callback that would block
     the worker forever waiting for a browser that may have closed. Reviewing
     before generation stays a foreground feature.
+
+    `user_id` reaches the worker **as a closure variable**, not through a
+    `ContextVar`: context variables do not follow a `threading.Thread`, so the
+    worker would resolve to whoever the default was and write a resume into a
+    stranger's outputs with no error anywhere (pilot plan A3).
     """
     import threading
 
-    from tools.jobs.run_registry import RunRegistry
-
-    registry = RunRegistry()
+    registry = _registry(user_id)
     run_id = registry.create(profile_name)
 
     def worker():
         try:
             orchestrator = JobScoutOrchestrator(
                 profile_name=profile_name,
+                user_id=user_id,
                 api_key=api_key or None,
                 output_dir=output_dir,
                 max_resumes=max_resumes,
@@ -405,45 +448,44 @@ def start_run(profile_name, api_key="", max_jobs=20, max_resumes=3,
     return run_id
 
 
-def run_status(run_id: str):
-    """Where a background run has got to, or None if there is no such run."""
-    from tools.jobs.run_registry import RunRegistry
+def run_status(user_id, run_id: str):
+    """
+    Where a background run has got to, or None if there is no such run.
 
-    registry = RunRegistry()
+    None too for somebody else's run: the id is looked up in this user's
+    registry, where another person's run does not exist.
+    """
+    registry = _registry(user_id)
     try:
         return registry.get(run_id)
     finally:
         registry.close()
 
 
-def active_runs() -> list:
+def active_runs(user_id) -> list:
     """
     Runs still going, read from disk.
 
     What a reloaded page asks: it has no memory of starting anything, so the
     answer cannot come from session state.
     """
-    from tools.jobs.run_registry import RunRegistry
-
-    registry = RunRegistry()
+    registry = _registry(user_id)
     try:
         return registry.active()
     finally:
         registry.close()
 
 
-def recent_runs(limit: int = 10) -> list:
+def recent_runs(user_id, limit: int = 10) -> list:
     """The last few runs, newest first, whatever became of them."""
-    from tools.jobs.run_registry import RunRegistry
-
-    registry = RunRegistry()
+    registry = _registry(user_id)
     try:
         return registry.recent(limit)
     finally:
         registry.close()
 
 
-def score_bands() -> dict:
+def score_bands(user_id) -> dict:
     """
     Where your scored jobs' quartiles fall, for labelling a match.
 
@@ -452,9 +494,7 @@ def score_bands() -> dict:
     as "about 53" whatever it is. This lets a screen say where one job sits
     among yours without changing the number the pipeline gates on.
     """
-    from tools.jobs.job_store import JobStore
-
-    store = JobStore()
+    store = _board(user_id)
     try:
         return store.score_bands()
     finally:
@@ -467,22 +507,18 @@ def board_sorts() -> list:
     return list(JobStore.SORTS)
 
 
-def board_stats() -> dict:
+def board_stats(user_id) -> dict:
     """Totals for the board's header. Returns zeros if no run has happened."""
-    from tools.jobs.job_store import JobStore
-
-    store = JobStore()
+    store = _board(user_id)
     try:
         return store.stats()
     finally:
         store.close()
 
 
-def set_job_status(url: str, status: str) -> None:
+def set_job_status(user_id, url: str, status: str) -> None:
     """Record what the user decided about one job. Raises on a bad status."""
-    from tools.jobs.job_store import JobStore
-
-    store = JobStore()
+    store = _board(user_id)
     try:
         store.set_status(url, status)
     finally:
@@ -607,6 +643,8 @@ class JobScoutOrchestrator:
         self,
         profile_name: str,
         output_dir: str = "outputs",
+        *,
+        user_id,
         checkpoint: bool = False,
         mock_mode: bool = False,
         mock_generation: bool = False,
@@ -623,6 +661,11 @@ class JobScoutOrchestrator:
 
         Args:
             profile_name: Name of profile to load
+            user_id: Whose data this run reads and writes — profile, master
+                resume, board, caches, outputs. `None` is the unscoped layout
+                the CLI uses. Keyword-only and required: an orchestrator that
+                forgot to say whose would otherwise write somebody's resume
+                into whichever home was the default.
             output_dir: Base output directory
             checkpoint: If True, pause for human review between stages
             mock_mode: If True, use mock data for entire pipeline
@@ -650,6 +693,7 @@ class JobScoutOrchestrator:
                 cache at all.
         """
         self.profile_name = profile_name
+        self.user_id = user_id
         self.api_key = api_key
         self.backend = backend
         self.use_cache = use_cache
@@ -665,14 +709,14 @@ class JobScoutOrchestrator:
         
         # Load profile
         logger.info(f"📋 Loading profile: {profile_name}")
-        self.profile = load_profile(profile_name)
+        self.profile = load_profile(profile_name, user_id=user_id)
         logger.info(f"✅ Loaded profile: {self.profile.personal_info.name}")
         
         # Setup output directory
         self.timestamp = datetime.now().strftime("%Y-%m-%d")
         # Anchored at the data home, not the working directory: in a container
         # those differ, and the difference is every generated PDF.
-        self.output_path = outputs_root(output_dir) / self.timestamp
+        self.output_path = outputs_root(output_dir, user_id=user_id) / self.timestamp
         self.output_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"📁 Output directory: {self.output_path}")
         
@@ -686,19 +730,10 @@ class JobScoutOrchestrator:
             'generation_results': [],
         }
         
-        # Resume path. A relative `master_resume_path` anchors at the data
-        # home, not at the code: `data/master_resumes/` is the user's own file
-        # and lives wherever their data lives, while
-        # `Path(__file__).parent.parent` is the install directory.
-        #
-        # In a checkout those are the same directory, which is the only reason
-        # this survived being written the wrong way (R86). In a container it is
-        # `/app/data/` against `/data/data/` — and `/app/data/` is
-        # dockerignored, so it never exists and every run dies on a profile
-        # that was imported perfectly.
-        resume_path = self.profile.resume_preferences.master_resume_path
-        if not Path(resume_path).is_absolute():
-            resume_path = str(data_home() / resume_path)
+        # Resume path, anchored at this user's home — see `master_resume_path`
+        # for why the anchor is the data and never the code (R86).
+        resume_path = master_resume_path(
+            user_id, self.profile.resume_preferences.master_resume_path)
         self.resume_path = resume_path
 
         logger.info(f"📄 Resume: {resume_path}")
@@ -890,7 +925,8 @@ class JobScoutOrchestrator:
         
         self._emit("discovery", 0, 0, "searching job sources")
 
-        agent = DiscoveryAgent(self.profile, mock_mode=self.mock_mode)
+        agent = DiscoveryAgent(self.profile, mock_mode=self.mock_mode,
+                               user_id=self.user_id)
         jobs = agent.discover_jobs(max_jobs=max_jobs)
 
         self._emit("discovery", len(jobs), len(jobs), f"found {len(jobs)} jobs")
@@ -919,7 +955,7 @@ class JobScoutOrchestrator:
         # implemented, this will use Greenhouse/Lever/Ashby scrapers.
         self._emit("enrichment", 0, len(jobs), "fetching job descriptions")
 
-        agent = EnrichmentAgent(mock_mode=self.mock_mode)
+        agent = EnrichmentAgent(mock_mode=self.mock_mode, user_id=self.user_id)
         enriched = agent.enrich_jobs(jobs)
 
         self._emit("enrichment", len(enriched), len(jobs), f"enriched {len(enriched)} jobs")
@@ -1046,6 +1082,7 @@ class JobScoutOrchestrator:
             str(self.resume_path),
             mock_embeddings=self.mock_embeddings,
             api_key=self.api_key,
+            user_id=self.user_id,
         )
         results = agent.analyze_jobs(
             jobs,
@@ -1167,7 +1204,7 @@ class JobScoutOrchestrator:
         # Generation Agent gets its own ResumeParser with skip_embeddings
         # since it only needs parsed resume data, not scoring.
         gen_parser = ResumeParser(str(self.resume_path), skip_embeddings=True,
-                                  api_key=self.api_key)
+                                  api_key=self.api_key, user_id=self.user_id)
 
         # A profile rule keyed to a component that no longer exists is ignored
         # silently at scoring time — it looks exactly like a rule that simply
@@ -1326,9 +1363,9 @@ class JobScoutOrchestrator:
 
     def _update_store(self, work, what: str) -> None:
         try:
-            from tools.jobs.job_store import JobStore
+            from tools.jobs.job_store import JobStore, db_path
 
-            store = JobStore()
+            store = JobStore(db_path(self.user_id))
             try:
                 work(store)
             finally:
@@ -1647,6 +1684,9 @@ Examples:
     # Run orchestrator
     orchestrator = JobScoutOrchestrator(
         profile_name=args.profile,
+        # The CLI is the unscoped layout, always: a developer's checkout, the
+        # frozen baselines, `--input` replays. There is no user to name.
+        user_id=None,
         output_dir=args.output,
         checkpoint=args.checkpoint,
         mock_mode=args.mock,

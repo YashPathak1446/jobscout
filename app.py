@@ -154,7 +154,7 @@ def screen_resume():
     # A returning user has already done this. Making them re-upload a resume
     # to reach the run screen would be the kind of friction that stops people
     # using a tool they otherwise like.
-    existing = available_profiles()
+    existing = available_profiles(None)
     if existing:
         with st.container(border=True):
             st.markdown("**Already set up?**")
@@ -194,7 +194,7 @@ def screen_resume():
                  disabled=not (uploaded and name) or (clash and not confirmed)):
         with st.spinner("Reading your resume..."):
             try:
-                extracted = extract_resume(uploaded.getvalue(), uploaded.name)
+                extracted = extract_resume(None, uploaded.getvalue(), uploaded.name)
             except Exception as exc:                       # surfaced, not swallowed
                 st.error(f"Could not read that resume: {exc}")
                 return
@@ -236,7 +236,7 @@ def screen_resume():
 def _build(resume_path, name, force):
     """Build and store a profile, reporting failure on screen. True if it worked."""
     try:
-        summary = create_profile(resume_path, name, force=force)
+        summary = create_profile(None, resume_path, name, force=force)
     except FileExistsError:
         st.error(f"A profile named '{name}' already exists.")
         return False
@@ -575,7 +575,7 @@ def screen_about_you():
     # Seeded, not blank: saving a blank form over stored answers is the same
     # silent revert the preferences screen had.
     try:
-        stored = read_personal(st.session_state.profile_name)
+        stored = read_personal(None, st.session_state.profile_name)
     except Exception:
         stored = {"location": "", "visa_status": "",
                   "holds_security_clearance": False}
@@ -608,7 +608,7 @@ def screen_about_you():
 
     if forward.button("Continue", type="primary", disabled=not location):
         st.session_state.api_key = key
-        update_profile_fields(st.session_state.profile_name, {
+        update_profile_fields(None, st.session_state.profile_name, {
             "personal_info": {
                 "location": location,
                 "visa_status": visa,
@@ -636,7 +636,7 @@ def screen_preferences():
     # every answer they had tuned, which is the same silent destruction the
     # nested-merge bug caused one layer down.
     try:
-        current = read_preferences(st.session_state.profile_name)
+        current = read_preferences(None, st.session_state.profile_name)
     except Exception:
         current = {"target_roles": ["Software Engineer"], "seniority": ["new grad"],
                    "exclude_keywords": [], "cities": [], "remote_ok": True}
@@ -755,7 +755,7 @@ def screen_preferences():
     # same wall, no message either time.
     if forward.button("Save and continue", type="primary",
                      disabled=not roles):
-        update_profile_fields(st.session_state.profile_name, {
+        update_profile_fields(None, st.session_state.profile_name, {
             "job_preferences": {
                 "target_roles": roles,
                 # None stays None. See the number input above.
@@ -793,7 +793,7 @@ def screen_tuning():
     )
 
     try:
-        rules = read_component_rules(st.session_state.profile_name)
+        rules = read_component_rules(None, st.session_state.profile_name)
     except Exception as exc:
         st.error(f"Could not read this profile: {exc}")
         return
@@ -855,7 +855,7 @@ def screen_tuning():
         st.rerun()
 
     if forward.button("Save and continue", type="primary"):
-        write_component_rules(st.session_state.profile_name, edits_tier,
+        write_component_rules(None, st.session_state.profile_name, edits_tier,
                               edits_triggers, edits_always, edits_never)
         # Advancing is never blocked on this. A rule that cannot fire is worth
         # telling somebody about; it is not worth trapping them on a screen
@@ -915,6 +915,7 @@ def screen_run():
             _execute(max_jobs, max_resumes, has_latex, review)
         else:
             st.session_state.run_id = start_run(
+                None,
                 profile_name=st.session_state.profile_name,
                 api_key=st.session_state.api_key,
                 max_jobs=max_jobs, max_resumes=max_resumes,
@@ -934,7 +935,7 @@ def _adopt_running():
     the work is still going, and without this the screen would offer to start
     a second one.
     """
-    for run in active_runs():
+    for run in active_runs(None):
         if run["profile"] == st.session_state.profile_name:
             st.session_state.run_id = run["id"]
             return run["id"]
@@ -949,7 +950,7 @@ def _render_running(run_id, has_latex):
     process only reads it — which is the same shape SSE would consume, so the
     eventual FastAPI version reads the same rows.
     """
-    status = run_status(run_id)
+    status = run_status(None, run_id)
     if not status:
         st.session_state.run_id = None
         st.rerun()
@@ -1009,6 +1010,7 @@ def _render_running(run_id, has_latex):
 def _execute(max_jobs, max_resumes, has_latex, review):
     orchestrator = JobScoutOrchestrator(
         profile_name=st.session_state.profile_name,
+        user_id=None,
         api_key=st.session_state.api_key,
         max_resumes=max_resumes,
         generate_pdf=has_latex,
@@ -1076,6 +1078,7 @@ def _resume_generation(has_latex):
     pending = st.session_state.pending
     orchestrator = JobScoutOrchestrator(
         profile_name=st.session_state.profile_name,
+        user_id=None,
         api_key=st.session_state.api_key,
         max_resumes=pending["max_resumes"],
         generate_pdf=has_latex,
@@ -1277,9 +1280,9 @@ def screen_board(has_latex):
     # a gate shipped today never saw a job scored yesterday. This re-judges
     # anything stale before the screen reads it, and does nothing at all once
     # everything is current (R62).
-    refresh_board_gate(st.session_state.profile_name)
+    refresh_board_gate(None, st.session_state.profile_name)
 
-    stats = board_stats()
+    stats = board_stats(None)
     if not stats["total"]:
         st.info(
             "No jobs yet. Run a search and everything it finds is kept here — "
@@ -1295,12 +1298,12 @@ def screen_board(has_latex):
 
     counts = stats["by_status"]
     statuses = job_statuses()
-    facets = board_filters()
+    facets = board_filters(None)
 
     # Derived, not clicked. Ghosting is what happens to a job while nobody
     # does anything, so the board works it out rather than asking the user to
     # notice an anniversary and press a button.
-    ghosted = ghosted_jobs()
+    ghosted = ghosted_jobs(None)
     if ghosted:
         st.warning(
             f"**{len(ghosted)} application(s) have gone quiet** — applied to "
@@ -1329,7 +1332,7 @@ def screen_board(has_latex):
         # these rows were scored. Removing them without a word would be the
         # silent-truncation shape this project keeps finding, so the count is
         # always visible and the toggle always available.
-        ineligible = board_total(include_ineligible=True) - board_total()
+        ineligible = board_total(None, include_ineligible=True) - board_total(None)
         show_ineligible = False
         if ineligible:
             show_ineligible = st.checkbox(
@@ -1366,7 +1369,7 @@ def screen_board(has_latex):
         "include_ineligible": show_ineligible,
     }
 
-    matching = board_total(**criteria)
+    matching = board_total(None, **criteria)
     if not matching:
         st.caption("Nothing matches those filters.")
         return
@@ -1381,13 +1384,13 @@ def screen_board(has_latex):
         page = st.number_input(f"Page (1–{pages})", min_value=1, max_value=pages,
                                value=1, step=1)
 
-    rows = board_jobs(sort=sort, limit=page_size,
+    rows = board_jobs(None, sort=sort, limit=page_size,
                       offset=(int(page) - 1) * page_size, **criteria)
 
     first = (int(page) - 1) * page_size + 1
     st.caption(f"Showing {first}–{first + len(rows) - 1} of {matching} job(s)")
 
-    bands = score_bands()
+    bands = score_bands(None)
     for row in rows:
         _board_row(row, statuses, has_latex, bands)
 
@@ -1490,7 +1493,7 @@ def _board_row(row, statuses, has_latex, bands=None):
             key=f"status-{url}", label_visibility="collapsed",
         )
         if picked != current:
-            set_job_status(url, picked)
+            set_job_status(None, url, picked)
             st.rerun()
 
         buttons = st.columns(3)
@@ -1506,7 +1509,7 @@ def _board_row(row, statuses, has_latex, bands=None):
         # automatic `new`, and an expander on all of them would be noise.
         if (row.get("status") or "new") != "new":
             with st.expander("History"):
-                for entry in job_history(url):
+                for entry in job_history(None, url):
                     when = _since(entry["changed_at"]).replace("found ", "")
                     st.caption(f"{STATUS_LABELS.get(entry['status'], entry['status'])}"
                                f" — {when or entry['changed_at'][:10]}")
@@ -1527,7 +1530,7 @@ def _why_panel(url):
     of re-running with the terminal open. See R57.
     """
     with st.expander("Why this resume"):
-        report = job_selection(url)
+        report = job_selection(None, url)
         if not report:
             st.caption("No explanation was recorded for this one.")
             return
@@ -1582,7 +1585,7 @@ def _sidebar(step):
     # Resumes outlive the session that made them; session_state does not.
     # Without this, closing the tab loses every download link to files still
     # sitting in outputs/.
-    runs = previous_runs()
+    runs = previous_runs(None)
     if runs:
         with st.sidebar.expander("Previous runs"):
             for run in runs:
@@ -1590,7 +1593,7 @@ def _sidebar(step):
                     continue
                 if st.button(f"{run['date']} — {run['resumes']} resume(s)",
                              key=f"run-{run['date']}"):
-                    st.session_state.results = load_run(run["path"])
+                    st.session_state.results = load_run(None, run["path"])
                     st.session_state.pending = None
                     _goto(4)
                     st.rerun()

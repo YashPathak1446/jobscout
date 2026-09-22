@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from tools.search import JobListing
 from tools.scraping import mock_scrape_jd
 from tools.scraping.jd_scraper import scrape_jd
-from tools.cache.job_cache import JobCache
+from tools.cache.job_cache import JobCache, cache_dir as job_cache_dir
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -40,14 +40,17 @@ class EnrichmentAgent:
     5. Handles failures gracefully (some URLs will fail)
     """
     
-    def __init__(self, mock_mode: bool = False):
+    def __init__(self, mock_mode: bool = False, *, user_id):
         """
         Initialize Enrichment Agent.
         
         Args:
             mock_mode: If True, use mock scraper (no HTTP requests)
+            user_id: Whose JD cache this run reads and writes (`None` =
+                unscoped).
         """
         self.mock_mode = mock_mode
+        self.user_id = user_id
         self.success_count = 0
         self.failure_count = 0
         
@@ -75,7 +78,7 @@ class EnrichmentAgent:
         # Load job cache for JD scrape result caching
         job_cache = None
         if not self.mock_mode:
-            job_cache = JobCache()
+            job_cache = JobCache(job_cache_dir(self.user_id))
 
         enriched_jobs = []
         
@@ -241,7 +244,7 @@ def _default_profile() -> str:
     """
     try:
         from tools.profile import list_available_profiles
-        names = [n for n in list_available_profiles() if n != "template"]
+        names = [n for n in list_available_profiles(user_id=None) if n != "template"]
     except Exception:
         return ""
     return names[0] if len(names) == 1 else ""
@@ -299,17 +302,17 @@ def main():
     else:
         # Run discovery first
         print(f"📋 Loading profile: {args.profile}")
-        profile = load_profile(args.profile)
+        profile = load_profile(args.profile, user_id=None)
         print(f"✅ Profile loaded: {profile.personal_info.name}\n")
         
         print("🔍 Running Discovery Agent to find jobs...")
-        discovery = DiscoveryAgent(profile, mock_mode=args.mock_discovery)
+        discovery = DiscoveryAgent(profile, mock_mode=args.mock_discovery, user_id=None)
         jobs = discovery.discover_jobs(max_jobs=args.max_jobs)
         print(f"✅ Found {len(jobs)} jobs\n")
     
     # Enrich jobs
     print("📝 Running Enrichment Agent...")
-    agent = EnrichmentAgent(mock_mode=args.mock)
+    agent = EnrichmentAgent(mock_mode=args.mock, user_id=None)
     enriched_jobs = agent.enrich_jobs(jobs)
     
     # Save to file

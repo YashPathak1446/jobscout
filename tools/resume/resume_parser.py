@@ -45,7 +45,8 @@ class ResumeParser:
     """
     
     def __init__(self, resume_path: str, skip_embeddings: bool = False,
-                 mock_embeddings: bool = False, api_key: str = None):
+                 mock_embeddings: bool = False, api_key: str = None, *,
+                 user_id):
         """
         Initialize parser with a LaTeX resume.
         
@@ -57,9 +58,13 @@ class ResumeParser:
                              analysis/scoring without calling the Gemini Embeddings API.
             api_key: Explicit Gemini key. None falls back to the environment,
                      which is what the CLI wants; a UI passes the user's own.
+            user_id: Whose embedding caches to use; `None` is the unscoped
+                     layout. Required even with `skip_embeddings`, so that no
+                     construction can reach a cache without having said whose.
         """
         self.resume_path = Path(resume_path)
         self.api_key = api_key
+        self.user_id = user_id
         
         if not self.resume_path.exists():
             raise FileNotFoundError(f"Resume not found: {resume_path}")
@@ -130,12 +135,12 @@ class ResumeParser:
         # ---------------------------------------------------------------
         # Check cache first — if the master resume hasn't changed,
         # reuse the cached embeddings instead of making 25 API calls.
-        from ..cache.embedding_cache import EmbeddingCache
+        from ..cache.embedding_cache import EmbeddingCache, cache_dir
         from config import EMBEDDING_MODEL
 
         # Model is passed in so a switch invalidates the cache instead of
         # silently mixing two vector spaces (R11).
-        cache = EmbeddingCache(model=EMBEDDING_MODEL)
+        cache = EmbeddingCache(cache_dir(self.user_id), model=EMBEDDING_MODEL)
         cached = cache.get(self.resume_path)
 
         if cached and cached.get('embeddings'):
@@ -161,7 +166,7 @@ class ResumeParser:
         logger.info("🔢 Computing embeddings for resume components...")
         
         self.component_embeddings: Dict[str, List[float]] = embed_resume_components(
-            self.parsed_resume, api_key=self.api_key
+            self.parsed_resume, api_key=self.api_key, user_id=self.user_id
         )
         
         # Fall back to mock if real embeddings failed
@@ -261,6 +266,7 @@ class ResumeParser:
                 max_experiences=5,
                 max_projects=5,
                 api_key=self.api_key,
+                user_id=self.user_id,
             )
         
         # Update the job metadata
@@ -666,7 +672,7 @@ if __name__ == "__main__":
     print(f"Testing ResumeParser with: {resume_path}\n")
     
     # Parse resume
-    parser = ResumeParser(resume_path)
+    parser = ResumeParser(resume_path, user_id=None)  # a CLI demo: unscoped
     
     print(f"{'='*80}")
     print(f"Resume: {parser.parsed_resume.name}")

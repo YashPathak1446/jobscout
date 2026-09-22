@@ -76,8 +76,8 @@ FIXTURES = {
         # with the code. Getting this wrong was invisible in a checkout, where
         # `data_home()` *is* ROOT, and fatal in a container, where it is /data
         # against /app and /app/data is deliberately never built (R86).
-        "resume": paths.data_home() / "data" / "master_resumes"
-                  / "priya_raghunathan.pdf",
+        "resume": paths.user_path("data", "master_resumes",
+                                  "priya_raghunathan.pdf", user_id=None),
         "profile": "priya_raghunathan",
         "why": "six years, Boston, imported from a PDF this repo did not make",
     },
@@ -274,7 +274,9 @@ def import_resume(spec, rung):
     home = Path(tempfile.gettempdir()) / "jobscout-acceptance"
     home.mkdir(parents=True, exist_ok=True)
     destination = home / f"{spec['profile']}.tex"
-    extracted = init_profile.extract_resume(source.read_bytes(), source.name,
+    # Unscoped throughout: the acceptance run is the checkout's definition of
+    # working, and its fixtures are the checkout's.
+    extracted = init_profile.extract_resume(None, source.read_bytes(), source.name,
                                             backend=rung)
     if extracted["kind"] == "latex":
         shutil.copy(source, destination)
@@ -302,6 +304,7 @@ def run_pipeline(profile_name, corpus, rung, output_dir):
 
     orchestrator = JobScoutOrchestrator(
         profile_name=profile_name,
+        user_id=None,
         output_dir=str(output_dir),
         input_file=str(corpus),
         generate_pdf=True,
@@ -421,8 +424,8 @@ def one(name, spec, rung, keep, comparable=True):
             # fixture — are used as they are and never overwritten.
             owned = spec["profile"].startswith("acceptance_")
             if owned:
-                init_profile.create_profile(tex, spec["profile"], force=True)
-            check(spec["profile"] in list_available_profiles(),
+                init_profile.create_profile(None, tex, spec["profile"], force=True)
+            check(spec["profile"] in list_available_profiles(user_id=None),
                   f"profile '{spec['profile']}' does not exist and this "
                   f"script does not own it")
             state = run_pipeline(spec["profile"], CORPUS, rung,

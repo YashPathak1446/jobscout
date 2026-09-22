@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 
 from tools.search import ats_search  # noqa: E402
 from tools.search.ats_search import (  # noqa: E402
-    COMPANIES_FILE,
+    SEED_FILE,
     _strip_html,
     harvest_slugs,
     load_companies,
@@ -80,7 +80,7 @@ class TestSlugHarvest(unittest.TestCase):
 
     def test_learns_a_greenhouse_slug(self):
         added = harvest_slugs(["https://boards.greenhouse.io/figma/jobs/123"],
-                              path=self.file)
+                              path=self.file, user_id=None)
         self.assertEqual(added, {"greenhouse": ["figma"]})
         self.assertIn("figma", self._read()["greenhouse"])
 
@@ -88,7 +88,7 @@ class TestSlugHarvest(unittest.TestCase):
         harvest_slugs([
             "https://jobs.lever.co/spotify/abc-def",
             "https://jobs.ashbyhq.com/ramp/xyz",
-        ], path=self.file)
+        ], path=self.file, user_id=None)
         data = self._read()
         self.assertIn("spotify", data["lever"])
         self.assertIn("ramp", data["ashby"])
@@ -97,20 +97,20 @@ class TestSlugHarvest(unittest.TestCase):
         harvest_slugs([
             "https://apply.workable.com/blueground/j/ABC123/",
             "https://jobs.smartrecruiters.com/Experian/744000012345",
-        ], path=self.file)
+        ], path=self.file, user_id=None)
         data = self._read()
         self.assertIn("blueground", data["workable"])
         self.assertIn("experian", data["smartrecruiters"])
 
     def test_a_slug_already_known_is_not_duplicated(self):
         added = harvest_slugs(["https://boards.greenhouse.io/stripe/jobs/1"],
-                              path=self.file)
+                              path=self.file, user_id=None)
         self.assertEqual(added, {})
         self.assertEqual(self._read()["greenhouse"].count("stripe"), 1)
 
     def test_unrelated_urls_are_ignored(self):
         added = harvest_slugs(["https://jobright.ai/jobs/info/abc", "", None],
-                              path=self.file)
+                              path=self.file, user_id=None)
         self.assertEqual(added, {})
 
     def test_a_missing_file_is_not_an_error_it_is_the_first_run(self):
@@ -131,7 +131,7 @@ class TestSlugHarvest(unittest.TestCase):
         it and create the file" rather than "give up quietly".
         """
         missing = self.file.parent / "nope.json"
-        added = harvest_slugs(["https://jobs.lever.co/x/1"], path=missing)
+        added = harvest_slugs(["https://jobs.lever.co/x/1"], path=missing, user_id=None)
 
         self.assertEqual(added, {"lever": ["x"]})
         self.assertTrue(missing.exists(), "the first discovery created nothing")
@@ -149,15 +149,15 @@ class TestLoadCompanies(unittest.TestCase):
             "workday": ["someone"],
         }), encoding="utf-8")
 
-        loaded = load_companies(path=file)
+        loaded = load_companies(path=file, user_id=None)
         self.assertEqual(set(loaded), {"greenhouse"})
 
     def test_an_unreadable_file_yields_nothing_rather_than_raising(self):
-        self.assertEqual(load_companies(path=Path("/definitely/not/here.json")), {})
+        self.assertEqual(load_companies(path=Path("/definitely/not/here.json"), user_id=None), {})
 
     def test_the_shipped_seed_list_is_loadable_and_populated(self):
-        loaded = load_companies()
-        self.assertTrue(loaded, f"{COMPANIES_FILE} should carry company slugs")
+        loaded = load_companies(user_id=None)
+        self.assertTrue(loaded, f"{SEED_FILE} should carry company slugs")
         self.assertTrue(any(loaded.values()))
 
 

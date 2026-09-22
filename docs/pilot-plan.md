@@ -127,7 +127,7 @@ renders no user-submitted HTML. Re-evaluate at public signup.
 
 ## Stage A — the pilot (~11–14 focused days, plus A9b)
 
-A0 and A1 are done (2026-09-22). A9b was split out of A0 and adds 1–1½ days.
+A0–A3 are done (2026-09-22; A2 on 2026-09-21). A9b was split out of A0 and adds 1–1½ days.
 
 ### A0. Fly egress probe — before anything else (½ day) — **DONE 2026-09-22**
 
@@ -302,7 +302,7 @@ asserted the right thing for six weeks against masters that happened not to
 have a repeat. Fixed in its own commit first, because A2 could not otherwise
 be committed green.
 
-### A3. The scope seam and the threading — one commit (3–4 days)
+### A3. The scope seam and the threading — one commit (3–4 days) — **DONE 2026-09-22**
 
 `tools/paths.py` gains `user_home(user_id)` / `user_path(user_id, *parts)` with
 **no default user**. An omitted id is a `TypeError`, never an ambient fallback —
@@ -376,6 +376,50 @@ not leave the constant reachable from a hosted path.
    --mock` still passes unscoped, and `baseline.py verify --all` is unmoved —
    the checkout fork must not move, which is the hard constraint this stage
    was designed around.
+
+#### What shipped, and where it departed from the above (R90)
+
+All three exit criteria hold, measured rather than asserted:
+
+1. The four A3 decorators in `test_two_users.py` are gone and their tests
+   pass. The A2.4 pair stays an expected failure for A5/A6.
+2. Mutation check, `USER_B = USER_A`: A2.2 and A2.3a go **red**, and are green
+   without it. A2.1 and A2.3b are green both ways, which they already were as
+   of A2.
+3. The `--mock` Priya run writes byte-identical `.tex`, and its state files
+   differ only in timestamps. **`baseline.py verify --all` could not be run
+   here**: the baselines exist only on the author's machine, and it reports
+   MISSING before and after. **Run it there before relying on this item.**
+
+**A committed instrument for the hard constraint.** `scripts/path_snapshot.py
+verify` asks every store where it lives and compares the answer with
+`baselines/paths.unscoped.json`, which was taken from the pre-A3 code. It
+checks from the repo root, from a foreign cwd (which reproduced Q31 before
+the fix and holds it closed after), and it checks that a scoped user resolves
+nothing outside their home. **A5 and every later stage that touches a path
+re-run this rather than writing their own.**
+
+Departures, each for a reason stated in R90:
+
+- `user_path(*parts, user_id)`, **keyword-only**, not `user_path(user_id,
+  *parts)`. The positional form would have quietly turned every old
+  `user_path("data", ...)` call into a user called `data`.
+- **Added to the pairs table:** `load_profile` + `available_profiles` + the
+  `init_profile` writers (`resume_dir`, `profiles_dir` and about ten
+  functions), and `master_resume_path`, now resolved once by
+  `paths.stored_path`.
+- **The learned ATS list is per user** (decided 2026-09-22).
+- **Three more cwd-relative defaults:** `LLMCache`, `TextEmbeddingCache` and
+  `generate_resumes`. None was on the list of four; the closing test found
+  the first two.
+- **The closing test's rule is wider than the pattern above**, which would
+  have missed `PROFILES` and `LEARNED_FILE`. It lives in
+  `tests/test_scope_seam.py`, with the known-bad sources it proves itself
+  against.
+- `test_hosted_mode_has_no_unscoped_call_site`, an expected failure that
+  **A5 is responsible for flipping.** It counts the 26 `None` call sites in
+  `api/main.py` statically, and at runtime under `JOBSCOUT_MODE=hosted`.
+  `_as_the_api_serves` in `test_two_users.py` is the one line A5 changes there.
 
 ### A4. Work authorization (1–1½ days)
 
@@ -506,6 +550,20 @@ Lands **after** A3 — until the data is partitioned an ownership check returns
   `createProfile` (`:207`). A cookie covers all five.
 - No router. `web/src/App.tsx` grows a third state
   (`'signin' | 'setup' | 'board'`) on the `useState` it already has.
+
+**Left for A5 by A3, and each one fails the build until it is done:**
+
+- `tests/test_scope_seam.py::test_hosted_mode_has_no_unscoped_call_site` is
+  an expected failure. Flip it by giving every one of `api/main.py`'s 26
+  `None` call sites the session's caller. Local mode keeps `None` through the
+  identity dependency, not as a literal. The runtime half's probe requests
+  will need a session cookie.
+- `tests/test_two_users.py::_as_the_api_serves` returns `None`. Its body
+  becomes the caller's identity, and the A2.4 pair's decorators come off.
+  Recheck that pair under the `USER_B = USER_A` mutation then, not before.
+- `python scripts/path_snapshot.py verify` must still say `unmoved`.
+  `data/accounts.db` is global by design, so it is not a user store and does
+  not belong in the snapshot's table. Say so there when it lands.
 
 ### A6. The delete path (½ day)
 

@@ -56,6 +56,8 @@ outputs/
 /baselines/*
 !/baselines/README.md
 !/baselines/*.manifest.json
+# Where every store resolves (scripts/path_snapshot.py): relative paths, no content.
+!/baselines/paths.*.json
 
 # Cache (run-generated, not source)
 # Leading slash matters: a bare "cache/" matches at ANY depth, which silently

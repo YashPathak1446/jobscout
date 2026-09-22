@@ -189,11 +189,11 @@ class TestAgainstTheRealCorpus(unittest.TestCase):
         if not master.exists():
             self.skipTest("needs a real master resume")
 
-        from tools.jobs.job_store import JobStore
+        from tools.jobs.job_store import JobStore, db_path
         from tools.resume.resume_parser import ResumeParser
 
-        self.parsed = ResumeParser(str(master)).parsed_resume
-        store = JobStore()
+        self.parsed = ResumeParser(str(master), user_id=None).parsed_resume
+        store = JobStore(db_path(None))
         try:
             self.rows = [r for r in store.query(limit=500) if r["score"] is not None]
         finally:
@@ -225,7 +225,7 @@ class TestAgainstTheRealCorpus(unittest.TestCase):
         if not (ROOT / "user_profiles" / "yash_pathak.json").exists():
             self.skipTest("needs a real profile")
 
-        roles = [r.lower() for r in load_profile("yash_pathak").job_preferences.target_roles]
+        roles = [r.lower() for r in load_profile("yash_pathak", user_id=None).job_preferences.target_roles]
         matched = sum(1 for row in self.rows
                       if any(role in (row["title"] or "").lower() for role in roles))
         self.assertEqual(matched, len(self.rows),

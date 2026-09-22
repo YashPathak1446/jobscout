@@ -153,7 +153,7 @@ class TestTheFilterNowExcludesIt(unittest.TestCase):
         if not (ROOT / "user_profiles" / "yash_pathak.json").exists():
             self.skipTest("needs a real profile")
         from tools.profile import load_profile
-        self.profile = load_profile("yash_pathak")
+        self.profile = load_profile("yash_pathak", user_id=None)
 
     def _decide(self, location):
         from tools.jobs.job_filter import evaluate

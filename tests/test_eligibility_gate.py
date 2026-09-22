@@ -282,7 +282,7 @@ class TestAgainstTheRealRun(unittest.TestCase):
         from tools.profile import load_profile
         if not (ROOT / "user_profiles" / "yash_pathak.json").exists():
             self.skipTest("needs a real profile")
-        self.profile = load_profile("yash_pathak")
+        self.profile = load_profile("yash_pathak", user_id=None)
 
     def _first(self, company, needle):
         for job in self.jobs:

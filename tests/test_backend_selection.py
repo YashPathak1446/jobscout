@@ -282,11 +282,11 @@ class TestThePinReachesTheImporter(unittest.TestCase):
         """`extract_resume`, writing to a temp dir instead of the repo's."""
         from scripts import init_profile
 
-        # RESUME_DIR is module-level and resolves to the repo's own
-        # data/master_resumes in a checkout, so setting JOBSCOUT_HOME after
-        # import does nothing. Patch the attribute.
+        # `resume_dir(user_id)` resolves at call time since A3 — it was the
+        # import-time constant RESUME_DIR, which JOBSCOUT_HOME could not reach
+        # and this had to patch — so pointing the data home is enough.
         with tempfile.TemporaryDirectory() as home:
-            with mock.patch.object(init_profile, "RESUME_DIR", Path(home)):
+            with mock.patch.dict(os.environ, {"JOBSCOUT_HOME": home}):
                 yield init_profile
 
     def test_a_pinned_rung_reaches_the_extractor(self):
@@ -301,6 +301,7 @@ class TestThePinReachesTheImporter(unittest.TestCase):
         with self._importer() as init_profile, no_env():
             with mock.patch.object(llm_backends, "complete_json", recorder):
                 result = init_profile.extract_resume(
+                    None,
                     self.RESUME.encode("utf-8"), "pinned.txt", backend="ollama")
 
         self.assertEqual(seen.get("backend"), "ollama",
@@ -340,6 +341,7 @@ class TestThePinReachesTheImporter(unittest.TestCase):
         with self._importer() as init_profile, no_env():
             with mock.patch.object(llm_backends, "detect", watcher):
                 result = init_profile.extract_resume(
+                    None,
                     self.RESUME.encode("utf-8"), "floor.txt", backend="none")
 
         self.assertEqual(len(detected), 0,
@@ -355,6 +357,7 @@ class TestThePinReachesTheImporter(unittest.TestCase):
         """
         with self._importer() as init_profile:
             result = init_profile.extract_resume(
+                None,
                 rb"\documentclass{article}\begin{document}x\end{document}",
                 "already.tex")
 
@@ -373,7 +376,7 @@ class TestThePinReachesTheImporter(unittest.TestCase):
         fixture = ROOT / "tests" / "fixtures" / "resume_glued_runs_six_roles.txt"
         seen = {}
 
-        def recorder(file_bytes, filename, backend=None):
+        def recorder(user_id, file_bytes, filename, backend=None):
             seen["backend"] = backend
             return {"kind": "latex", "path": fixture, "rung": None}
 
@@ -487,7 +490,7 @@ class TestTheChoiceReachesTheRun(unittest.TestCase):
 
         seen = {}
 
-        def fake_start_run(profile, **kwargs):
+        def fake_start_run(user_id, profile, **kwargs):
             seen.update(kwargs)
             return "run-1"
 
@@ -507,7 +510,7 @@ class TestTheChoiceReachesTheRun(unittest.TestCase):
 
         seen = {}
         with patch.object(main, "start_run",
-                          lambda profile, **kw: seen.update(kw) or "run-1"):
+                          lambda user_id, profile, **kw: seen.update(kw) or "run-1"):
             main.run_start(main.RunRequest(profile="p"))
         self.assertIsNone(seen.get("backend"))
 

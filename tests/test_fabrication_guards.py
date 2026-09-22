@@ -149,9 +149,9 @@ class TestFactualFieldsAreRestored(unittest.TestCase):
         if not source.exists():
             self.skipTest("needs a real profile; skipped on a clean clone")
 
-        profile = load_profile("yash_pathak")
+        profile = load_profile("yash_pathak", user_id=None)
         parser = ResumeParser(profile.resume_preferences.master_resume_path,
-                              skip_embeddings=True)
+                              skip_embeddings=True, user_id=None)
         self.agent = GenerationAgent(profile, parser, generate_pdf=False)
         self.real = parser.get_experience_by_id("exp_sorenson_communications")
         if self.real is None:

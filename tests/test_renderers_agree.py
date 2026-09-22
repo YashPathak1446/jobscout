@@ -75,8 +75,8 @@ class TestBothRenderersMeanTheSameThing(unittest.TestCase):
             self.skipTest("needs a master resume")
 
         agent = GenerationAgent.__new__(GenerationAgent)
-        agent.resume_parser = ResumeParser(str(master), skip_embeddings=True)
-        agent.profile = load_profile("yash_pathak", str(ROOT / "user_profiles"))
+        agent.resume_parser = ResumeParser(str(master), skip_embeddings=True, user_id=None)
+        agent.profile = load_profile("yash_pathak", str(ROOT / "user_profiles"), user_id=None)
 
         tailored = {"experiences": experiences, "projects": []}
         with tempfile.TemporaryDirectory() as tmp:

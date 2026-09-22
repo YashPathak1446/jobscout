@@ -66,19 +66,28 @@ from agents.orchestrator import (
     set_job_status,
     start_run,
     run_status,
-    outputs_root,
+    user_outputs_root,
 )
 from scripts.init_profile import (
-    RESUME_DIR,
     create_profile,
     extract_resume,
     read_component_rules,
     read_personal,
     read_preferences,
+    resume_dir,
     save_extracted,
     update_profile_fields,
     write_component_rules,
 )
+
+# **Every `None` passed as a user below is the gap A5 closes.** Since A3 every
+# facade call names whose data it touches, and `None` is the unscoped layout:
+# one directory for every caller. That is correct on localhost, where there is
+# one person, and it is what a hosted instance still does until the session
+# cookie (A5/A6) gives each request a caller to name. Stated at each call site
+# rather than hidden in a default so the gap stays countable —
+# `test_hosted_mode_has_no_unscoped_call_site` counts it, and is an expected
+# failure until A5 brings the count to zero.
 
 app = FastAPI(title="JobScout", version="1.0.0")
 
@@ -160,7 +169,7 @@ def healthz() -> dict:
 def health() -> dict:
     """What this machine can do, which the UI has to say out loud (R43)."""
     return {
-        "profiles": available_profiles(),
+        "profiles": available_profiles(None),
         "backend": backend_status(),
         "pdflatex": pdflatex_available(),
         "statuses": list(job_statuses()),
@@ -233,7 +242,7 @@ def board(
     """
     criteria = dict(status=status, min_score=min_score, has_resume=has_resume,
                     company=company, source=source, search=search)
-    total = board_total(include_ineligible=include_ineligible, **criteria)
+    total = board_total(None, include_ineligible=include_ineligible, **criteria)
 
     # How many the gate is holding back under these same filters. R62 excludes
     # them by default and says the screen must state the number — "a filter
@@ -242,11 +251,11 @@ def board(
     # would have to issue a second query to work it out, and a number nobody
     # can be bothered to fetch is a number that stops being shown.
     hidden = 0 if include_ineligible else (
-        board_total(include_ineligible=True, **criteria) - total)
+        board_total(None, include_ineligible=True, **criteria) - total)
 
     return {
         "jobs": [_without_jd(row)
-                 for row in board_jobs(sort=sort, limit=limit, offset=offset,
+                 for row in board_jobs(None, sort=sort, limit=limit, offset=offset,
                                        include_ineligible=include_ineligible,
                                        **criteria)],
         "total": total,
@@ -273,24 +282,24 @@ def _without_jd(row: dict) -> dict:
 
 @app.get("/api/board/stats")
 def stats() -> dict:
-    return board_stats()
+    return board_stats(None)
 
 
 @app.get("/api/board/filters")
 def filters() -> dict:
     """Companies and sources with counts, read from the store, not a list here."""
-    return board_filters()
+    return board_filters(None)
 
 
 @app.get("/api/board/bands")
 def bands() -> dict:
     """Quartiles, so a screen can say where a job sits among yours (R67)."""
-    return score_bands()
+    return score_bands(None)
 
 
 @app.get("/api/board/ghosted")
 def ghosted(after_days: Optional[int] = None) -> list:
-    return ghosted_jobs(after_days=after_days)
+    return ghosted_jobs(None, after_days=after_days)
 
 
 class GateRequest(BaseModel):
@@ -300,7 +309,7 @@ class GateRequest(BaseModel):
 @app.post("/api/board/gate")
 def gate(request: GateRequest) -> dict:
     """Re-judge the stored rows against a profile. Returns how many moved."""
-    return {"rejudged": refresh_board_gate(request.profile)}
+    return {"rejudged": refresh_board_gate(None, request.profile)}
 
 
 # -------------------------------------------------------------- job ----
@@ -315,13 +324,13 @@ def job(url: str) -> dict:
     reached. The UI has to render that difference rather than showing an
     empty panel, because unknown is not the same as nothing to say.
     """
-    row = board_job(url)
+    row = board_job(None, url)
     if row is None:
         raise HTTPException(status_code=404, detail="No such job")
     return {
         "job": row,
-        "selection": job_selection(url),
-        "history": job_history(url),
+        "selection": job_selection(None, url),
+        "history": job_history(None, url),
     }
 
 
@@ -336,7 +345,7 @@ def update_status(request: StatusRequest) -> dict:
         raise HTTPException(
             status_code=422,
             detail=f"{request.status!r} is not one of {list(job_statuses())}")
-    set_job_status(request.url, request.status)
+    set_job_status(None, request.url, request.status)
     return {"url": request.url, "status": request.status}
 
 
@@ -348,7 +357,7 @@ def update_status(request: StatusRequest) -> dict:
 # client choosing which file the server opens. Names are resolved against this
 # directory instead, so the worst a caller can name is a file in it.
 #
-# `RESUME_DIR` is imported from `scripts.init_profile` — the module that
+# `resume_dir` is imported from `scripts.init_profile` — the module that
 # *writes* the upload — rather than recomputed here. It was
 # `Path.cwd() / "data" / "master_resumes"`, which is the same directory in a
 # checkout and `/app/data/master_resumes` in the container, while the writer
@@ -358,9 +367,12 @@ def update_status(request: StatusRequest) -> dict:
 # calls `create_profile` directly and never walks `POST /api/profile`.
 
 
-def _resolve_upload(filename: str) -> Path:
-    candidate = (RESUME_DIR / Path(filename).name).resolve()
-    if candidate.parent != RESUME_DIR.resolve() or not candidate.is_file():
+def _resolve_upload(user_id, filename: str) -> Path:
+    # Per user since A3: the worst a caller can name is a file in *their own*
+    # upload directory.
+    uploads = resume_dir(user_id).resolve()
+    candidate = (uploads / Path(filename).name).resolve()
+    if candidate.parent != uploads or not candidate.is_file():
         raise HTTPException(status_code=404, detail="No such uploaded resume")
     return candidate
 
@@ -376,7 +388,7 @@ async def resume_extract(file: UploadFile = File(...)) -> dict:
     own format — there is nothing a model guessed at.
     """
     try:
-        extracted = extract_resume(await file.read(), file.filename or "resume")
+        extracted = extract_resume(None, await file.read(), file.filename or "resume")
     except ValueError as exc:
         # A scanned image, or a PDF with no readable experience in it. The
         # message says which; it is written for the person, not the log.
@@ -416,11 +428,11 @@ def profile_create(request: ProfileRequest) -> dict:
     rebuild that discarded hand-tuned rules (R30). The 409 exists so the UI
     can ask rather than clobber.
     """
-    source = _resolve_upload(request.filename)
+    source = _resolve_upload(None, request.filename)
     resume_path = (save_extracted(request.schema_, source)
                    if request.schema_ else source)
     try:
-        return create_profile(resume_path, request.name, force=request.force)
+        return create_profile(None, resume_path, request.name, force=request.force)
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:  # surfaced, not swallowed
@@ -436,9 +448,9 @@ def profile_read(name: str) -> dict:
     """Everything the wizard's forms need, in the shape they need it."""
     try:
         return {
-            "personal": read_personal(name),
-            "preferences": read_preferences(name),
-            "components": read_component_rules(name),
+            "personal": read_personal(None, name),
+            "preferences": read_preferences(None, name),
+            "components": read_component_rules(None, name),
         }
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -460,7 +472,7 @@ def profile_update(name: str, request: ProfileUpdate) -> dict:
     not load. A form must not destroy what it never showed (R30).
     """
     try:
-        path = update_profile_fields(name, request.updates)
+        path = update_profile_fields(None, name, request.updates)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"saved": Path(path).name}
@@ -488,7 +500,7 @@ def components_write(name: str, request: ComponentRules) -> dict:
     no longer has (R17); it now says that it kept one.
     """
     try:
-        saved = write_component_rules(name, request.importance, request.triggers,
+        saved = write_component_rules(None, name, request.importance, request.triggers,
                                       request.always, request.never)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -522,6 +534,7 @@ def run_start(request: RunRequest) -> dict:
     ends — which is the whole point: a reloaded page can find the run again.
     """
     run_id = start_run(
+        None,
         request.profile,
         api_key=request.api_key,
         max_jobs=request.max_jobs,
@@ -541,7 +554,7 @@ def run_progress(run_id: str) -> dict:
     progress yet" are different answers, and a UI given the second for the
     first would spin forever on a run that never started.
     """
-    status = run_status(run_id)
+    status = run_status(None, run_id)
     if status is None:
         raise HTTPException(status_code=404, detail="No such run")
     return status
@@ -555,13 +568,13 @@ def runs_active() -> dict:
     A reloaded page has no memory of starting anything, so the answer cannot
     come from anything the browser holds.
     """
-    return {"active": active_runs()}
+    return {"active": active_runs(None)}
 
 
 @app.get("/api/runs")
 def runs(limit: int = Query(10, ge=1, le=50)) -> list:
     """Past runs, because resumes outlive the session that made them."""
-    return previous_runs(limit=limit)
+    return previous_runs(None, limit=limit)
 
 
 @app.get("/api/file")
@@ -574,7 +587,7 @@ def file(path: str):
     directory before anything is opened. A local single-user app is still an
     app with an open port on it.
     """
-    # `outputs_root()` rather than `Path.cwd() / "outputs"`, and the two are
+    # `user_outputs_root()` rather than `Path.cwd() / "outputs"`, and the two are
     # only the same thing on a laptop. In a container the working directory is
     # an image layer and the outputs live on the volume, so resolving against
     # cwd would have containment-checked downloads against a directory the
@@ -584,7 +597,12 @@ def file(path: str):
     # writer and a reader computing the same root separately is how this
     # codebase loses a week. One function, two callers, and a test that they
     # agree.
-    root = outputs_root().resolve()
+    #
+    # **Contained in the caller's root, not everybody's** (A3). The partition
+    # and this guard are one change: partition first and a guard over the
+    # shared root still permits cross-user download; tighten first and every
+    # download 404s. `None` until A5 has a caller to name.
+    root = user_outputs_root(None).resolve()
     target = (root.parent / path).resolve()
     if root not in target.parents or not target.is_file():
         raise HTTPException(status_code=404, detail="No such generated file")

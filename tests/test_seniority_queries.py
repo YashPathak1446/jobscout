@@ -123,7 +123,7 @@ class TestTheRealProfileIsUnaffected(unittest.TestCase):
 
         from tools.profile import load_profile
 
-        profile = load_profile("yash_pathak")
+        profile = load_profile("yash_pathak", user_id=None)
         self.assertEqual(primary_seniority_term(profile), "new grad")
         self.assertTrue(wants_early_career(profile))
 

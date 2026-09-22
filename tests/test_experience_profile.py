@@ -191,7 +191,7 @@ class TestTheAuthorsProfileIsUnchanged(unittest.TestCase):
 
         from tools.profile import load_profile
 
-        profile = load_profile("yash_pathak")
+        profile = load_profile("yash_pathak", user_id=None)
         self.assertEqual(effective_seniority(profile),
                          ["new grad", "entry level", "junior"])
         self.assertEqual(_tolerated_years(profile), 3)
@@ -210,7 +210,7 @@ class TestTheAuthorsProfileIsUnchanged(unittest.TestCase):
         from tools.jobs.job_filter import body_disqualifiers
         from tools.profile import load_profile
 
-        profile = load_profile("yash_pathak")
+        profile = load_profile("yash_pathak", user_id=None)
         dropped = {job["company"] for job in json.loads(corpus.read_text(encoding="utf-8"))
                    if body_disqualifiers(job.get("full_jd", ""), profile)}
         self.assertEqual(dropped, {"Samsara", "Databricks", "Scale AI", "Okta"})

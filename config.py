@@ -111,7 +111,23 @@ LOCAL_EMBEDDING_MODEL = "minishlab/potion-base-8M"
 # Prompt-hash response cache. The real fix for dev-session quota burn:
 # re-running the same jobs costs zero API requests.
 LLM_CACHE_ENABLED = True
-LLM_CACHE_DIR = ".cache/llm"
+
+
+def llm_cache_dir(user_id):
+    """
+    Where one user's LLM replies are cached: `.cache/llm` under their home.
+
+    This was the constant `LLM_CACHE_DIR = ".cache/llm"` until A3, and a
+    relative constant resolves against the *working directory* — right on a
+    laptop started from the repo, and in a container `/app`, an image layer
+    replaced every deploy, while `fly.toml` said the caches were on the volume
+    (Q31). Anchored at `user_home` it is the same directory from the repo root
+    and the right one everywhere else, and per user it cannot hand one
+    person's rewritten bullets to another's run.
+    """
+    from tools.paths import user_path
+    return user_path(".cache", "llm", user_id=user_id)
+
 
 # Embedding vector cache. embedding_cache.py covers the resume's own
 # components; this covers everything else that gets embedded, which in
@@ -119,7 +135,16 @@ LLM_CACHE_DIR = ".cache/llm"
 # ~20 embedding calls every time, so the instrument this project measures
 # every scoring change with was also the thing exhausting its quota.
 EMBEDDING_CACHE_ENABLED = True
-EMBEDDING_CACHE_DIR = ".cache/embeddings"
+
+
+def embedding_cache_dir(user_id):
+    """
+    Where one user's embedding vectors are cached: `.cache/embeddings` under
+    their home. Was `EMBEDDING_CACHE_DIR`, cwd-relative, for the reason
+    `llm_cache_dir` gives (Q31).
+    """
+    from tools.paths import user_path
+    return user_path(".cache", "embeddings", user_id=user_id)
 
 
 # --- Error classification ---------------------------------------------------

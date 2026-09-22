@@ -296,8 +296,8 @@ class TestAgainstTheRealRun(unittest.TestCase):
         self.results = json.loads(self.analysis.read_text(encoding="utf-8"))
         self.master_text = master.read_text(encoding="utf-8")
         self.agent = GenerationAgent.__new__(GenerationAgent)
-        self.agent.resume_parser = ResumeParser(str(master))
-        self.agent.profile = load_profile("yash_pathak")
+        self.agent.resume_parser = ResumeParser(str(master), user_id=None)
+        self.agent.profile = load_profile("yash_pathak", user_id=None)
 
     def test_no_resume_advertises_a_library_whose_only_project_is_absent(self):
         orphans = ("openai gym", "minerl", "stable-baselines3")

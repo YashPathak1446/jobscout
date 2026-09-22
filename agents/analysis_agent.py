@@ -38,7 +38,8 @@ class AnalysisAgent:
     """
     
     def __init__(self, profile: UserProfile, resume_path: str,
-                 mock_embeddings: bool = False, api_key: str = None):
+                 mock_embeddings: bool = False, api_key: str = None, *,
+                 user_id):
         """
         Initialize Analysis Agent.
         
@@ -47,6 +48,7 @@ class AnalysisAgent:
             resume_path: Path to master resume (.tex file)
             mock_embeddings: If True, use deterministic local mock embeddings instead of Gemini embeddings.
             api_key: Explicit Gemini key. None falls back to the environment.
+            user_id: Whose embedding caches scoring reads (`None` = unscoped).
         """
         self.profile = profile
         self.resume_path = Path(resume_path)
@@ -61,6 +63,7 @@ class AnalysisAgent:
             str(self.resume_path),
             mock_embeddings=mock_embeddings,
             api_key=api_key,
+            user_id=user_id,
         )
         
         logger.info(f"✅ Ready to analyze jobs")
@@ -367,7 +370,7 @@ def _default_profile() -> str:
     """
     try:
         from tools.profile import list_available_profiles
-        names = [n for n in list_available_profiles() if n != "template"]
+        names = [n for n in list_available_profiles(user_id=None) if n != "template"]
     except Exception:
         return ""
     return names[0] if len(names) == 1 else ""
@@ -419,7 +422,7 @@ def main():
     
     # Load profile
     print(f"📋 Loading profile: {args.profile}")
-    profile = load_profile(args.profile)
+    profile = load_profile(args.profile, user_id=None)
     print(f"✅ Profile loaded: {profile.personal_info.name}\n")
     
     # Determine resume path
@@ -443,18 +446,18 @@ def main():
     else:
         # Run discovery + enrichment first
         print("🔍 Running Discovery Agent...")
-        discovery = DiscoveryAgent(profile, mock_mode=args.mock)
+        discovery = DiscoveryAgent(profile, mock_mode=args.mock, user_id=None)
         jobs = discovery.discover_jobs(max_jobs=args.max_jobs)
         print(f"✅ Found {len(jobs)} jobs\n")
         
         print("📝 Running Enrichment Agent...")
-        enrichment = EnrichmentAgent(mock_mode=args.mock)
+        enrichment = EnrichmentAgent(mock_mode=args.mock, user_id=None)
         enriched_jobs = enrichment.enrich_jobs(jobs)
         print(f"✅ Enriched {len(enriched_jobs)} jobs\n")
     
     # Analyze jobs
     print("📊 Running Analysis Agent...")
-    agent = AnalysisAgent(profile, str(resume_path), mock_embeddings=args.mock_embeddings)
+    agent = AnalysisAgent(profile, str(resume_path), mock_embeddings=args.mock_embeddings, user_id=None)
     results = agent.analyze_jobs(enriched_jobs[:args.max_jobs])
     
     # Save results

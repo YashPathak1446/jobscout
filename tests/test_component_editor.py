@@ -33,7 +33,7 @@ class TestComponentEditor(unittest.TestCase):
         TEMP.unlink(missing_ok=True)
 
     def _rules(self):
-        return read_component_rules("_editor_test")
+        return read_component_rules(None, "_editor_test")
 
     def _first_project(self):
         return self._rules()["projects"][0]["id"]
@@ -49,13 +49,13 @@ class TestComponentEditor(unittest.TestCase):
 
     def test_writes_a_trigger_list(self):
         target = self._first_project()
-        write_component_rules("_editor_test", {}, {target: ["android", "mobile app"]})
+        write_component_rules(None, "_editor_test", {}, {target: ["android", "mobile app"]})
         after = {c["id"]: c for c in self._rules()["projects"]}[target]
         self.assertEqual(after["triggers"], ["android", "mobile app"])
 
     def test_normalises_case_and_whitespace_and_deduplicates(self):
         target = self._first_project()
-        write_component_rules(
+        write_component_rules(None,
             "_editor_test", {},
             {target: ["Android", "  ANDROID  ", "mobile app", "", "   "]},
         )
@@ -66,8 +66,8 @@ class TestComponentEditor(unittest.TestCase):
         # An empty rule cannot fire and looks identical to one that never
         # matched — the silence R17 set out to remove.
         target = self._first_project()
-        write_component_rules("_editor_test", {}, {target: ["android"]})
-        write_component_rules("_editor_test", {}, {target: []})
+        write_component_rules(None, "_editor_test", {}, {target: ["android"]})
+        write_component_rules(None, "_editor_test", {}, {target: []})
 
         raw = json.loads(TEMP.read_text(encoding="utf-8"))
         rules = raw["resume_preferences"]["projects"]["conditional_inclusion"]
@@ -75,7 +75,7 @@ class TestComponentEditor(unittest.TestCase):
 
     def test_writes_an_importance_tier(self):
         target = self._first_project()
-        write_component_rules("_editor_test", {target: "low"}, {})
+        write_component_rules(None, "_editor_test", {target: "low"}, {})
         after = {c["id"]: c for c in self._rules()["projects"]}[target]
         self.assertEqual(after["tier"], "low")
 
@@ -87,7 +87,7 @@ class TestComponentEditor(unittest.TestCase):
         target, original = next(iter(rules.items()))
         note = original.get("description")
 
-        write_component_rules("_editor_test", {}, {target: ["something"]})
+        write_component_rules(None, "_editor_test", {}, {target: ["something"]})
         after = json.loads(TEMP.read_text(encoding="utf-8"))
         self.assertEqual(
             after["resume_preferences"]["projects"]["conditional_inclusion"][target]["description"],
@@ -96,7 +96,7 @@ class TestComponentEditor(unittest.TestCase):
 
     def test_unknown_component_ids_are_ignored(self):
         before = TEMP.read_text(encoding="utf-8")
-        write_component_rules("_editor_test", {"proj_nope": "high"}, {"proj_nope": ["x"]})
+        write_component_rules(None, "_editor_test", {"proj_nope": "high"}, {"proj_nope": ["x"]})
         after = json.loads(TEMP.read_text(encoding="utf-8"))
         self.assertNotIn("proj_nope",
                          after["resume_preferences"]["projects"]["conditional_inclusion"])
@@ -107,7 +107,7 @@ class TestComponentEditor(unittest.TestCase):
     def test_editing_one_component_leaves_the_rest_of_the_profile_alone(self):
         """The screen edits two maps; it must not rewrite the profile."""
         before = json.loads(TEMP.read_text(encoding="utf-8"))
-        write_component_rules("_editor_test", {}, {self._first_project(): ["android"]})
+        write_component_rules(None, "_editor_test", {}, {self._first_project(): ["android"]})
         after = json.loads(TEMP.read_text(encoding="utf-8"))
 
         for key in ("personal_info", "job_preferences", "agent_preferences"):
@@ -119,9 +119,9 @@ class TestComponentEditor(unittest.TestCase):
 
     def test_a_missing_profile_raises_rather_than_creating_one(self):
         with self.assertRaises(FileNotFoundError):
-            read_component_rules("_no_such_profile_")
+            read_component_rules(None, "_no_such_profile_")
         with self.assertRaises(FileNotFoundError):
-            write_component_rules("_no_such_profile_", {}, {})
+            write_component_rules(None, "_no_such_profile_", {}, {})
 
 
 if __name__ == "__main__":
@@ -146,7 +146,7 @@ class TestAlwaysAndNeverInclude(unittest.TestCase):
         TEMP.unlink(missing_ok=True)
 
     def _first_project_id(self):
-        return read_component_rules("_editor_test")["projects"][0]["id"]
+        return read_component_rules(None, "_editor_test")["projects"][0]["id"]
 
     def _stored(self, section, field):
         data = json.loads(TEMP.read_text(encoding="utf-8"))
@@ -154,25 +154,25 @@ class TestAlwaysAndNeverInclude(unittest.TestCase):
 
     def test_marking_always_include_persists(self):
         component = self._first_project_id()
-        write_component_rules("_editor_test", {}, {}, {component: True}, {})
+        write_component_rules(None, "_editor_test", {}, {}, {component: True}, {})
         self.assertIn(component, self._stored("projects", "always_include"))
 
     def test_unmarking_removes_it_again(self):
         component = self._first_project_id()
-        write_component_rules("_editor_test", {}, {}, {component: True}, {})
-        write_component_rules("_editor_test", {}, {}, {component: False}, {})
+        write_component_rules(None, "_editor_test", {}, {}, {component: True}, {})
+        write_component_rules(None, "_editor_test", {}, {}, {component: False}, {})
         self.assertNotIn(component, self._stored("projects", "always_include"))
 
     def test_never_include_persists_separately(self):
         component = self._first_project_id()
-        write_component_rules("_editor_test", {}, {}, {}, {component: True})
+        write_component_rules(None, "_editor_test", {}, {}, {}, {component: True})
         self.assertIn(component, self._stored("projects", "never_include"))
 
     def test_the_reader_reports_what_the_writer_stored(self):
         """A form that cannot read what it wrote reverts it on the next save."""
         component = self._first_project_id()
-        write_component_rules("_editor_test", {}, {}, {component: True}, {})
-        entry = next(c for c in read_component_rules("_editor_test")["projects"]
+        write_component_rules(None, "_editor_test", {}, {}, {component: True}, {})
+        entry = next(c for c in read_component_rules(None, "_editor_test")["projects"]
                      if c["id"] == component)
         self.assertTrue(entry["always"])
         self.assertFalse(entry["never"])
@@ -183,8 +183,8 @@ class TestAlwaysAndNeverInclude(unittest.TestCase):
         as "the user unticked everything".
         """
         component = self._first_project_id()
-        write_component_rules("_editor_test", {}, {}, {component: True}, {})
-        write_component_rules("_editor_test", {}, {})
+        write_component_rules(None, "_editor_test", {}, {}, {component: True}, {})
+        write_component_rules(None, "_editor_test", {}, {})
         self.assertIn(component, self._stored("projects", "always_include"))
 
     def test_a_rule_for_an_unknown_component_is_left_alone(self):
@@ -193,13 +193,13 @@ class TestAlwaysAndNeverInclude(unittest.TestCase):
         data["resume_preferences"]["projects"]["always_include"] = ["proj_ghost"]
         TEMP.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
-        write_component_rules("_editor_test", {}, {},
+        write_component_rules(None, "_editor_test", {}, {},
                               {self._first_project_id(): True}, {})
         self.assertIn("proj_ghost", self._stored("projects", "always_include"))
 
     def test_the_profile_still_loads_afterwards(self):
         from tools.profile import load_profile
 
-        write_component_rules("_editor_test", {}, {},
+        write_component_rules(None, "_editor_test", {}, {},
                               {self._first_project_id(): True}, {})
-        self.assertTrue(load_profile("_editor_test"))
+        self.assertTrue(load_profile("_editor_test", user_id=None))

@@ -30,12 +30,15 @@ from tools.search import (
     search_github_newgrad,
     search_ats,
     harvest_slugs,
+    load_companies,
     search_serper,
     search_adzuna,
     search_mock,
     build_serper_query,
 )
+from tools.cache import job_cache as _job_cache
 from tools.cache.job_cache import JobCache
+from tools.jobs import job_store as _job_store
 from tools.jobs.job_store import JobStore
 
 logger = logging.getLogger(__name__)
@@ -54,16 +57,20 @@ class DiscoveryAgent:
     5. Returns 20-50 relevant jobs
     """
     
-    def __init__(self, profile: UserProfile, mock_mode: bool = False):
+    def __init__(self, profile: UserProfile, mock_mode: bool = False, *, user_id):
         """
         Initialize Discovery Agent.
         
         Args:
             profile: User profile with job preferences
             mock_mode: If True, use mock search only (no API calls)
+            user_id: Whose board, cache and learned company list this run
+                reads and writes. `None` is the unscoped layout. Required,
+                because discovery writes to all three.
         """
         self.profile = profile
         self.mock_mode = mock_mode
+        self.user_id = user_id
         self.all_jobs: List[JobListing] = []
         self.seen_urls: set = set()
         
@@ -91,7 +98,7 @@ class DiscoveryAgent:
             return self._search_mock(max_jobs)
         
         # Load job cache for cross-run deduplication
-        job_cache = JobCache()
+        job_cache = JobCache(_job_cache.cache_dir(self.user_id))
         cache_stats = job_cache.stats()
         logger.info(
             f"📦 Job cache: {cache_stats['seen_urls']} previously seen URLs"
@@ -134,7 +141,7 @@ class DiscoveryAgent:
         # make this decision and it forgets after seven days, which was fine
         # when a run log was the only output and wrong now that five ATS
         # boards reach ~17,000 roles and a board is meant to accumulate.
-        store = JobStore()
+        store = JobStore(_job_store.db_path(self.user_id))
         recorded = store.record(filtered_jobs, run_date=datetime.now().strftime("%Y-%m-%d"))
         logger.info(f"   Job store: {recorded['added']} new, "
                     f"{recorded['updated']} already known")
@@ -155,7 +162,8 @@ class DiscoveryAgent:
         # reveals that company's slug, and from then on its entire board
         # is reachable without a key. Cheap, and it compounds every run.
         try:
-            harvest_slugs([job.apply_url for job in self.all_jobs])
+            harvest_slugs([job.apply_url for job in self.all_jobs],
+                          user_id=self.user_id)
         except Exception as e:
             logger.debug(f"Slug harvest skipped: {e}")
 
@@ -186,6 +194,7 @@ class DiscoveryAgent:
         try:
             jobs = search_ats(
                 max_results=200,
+                companies=load_companies(user_id=self.user_id),
                 roles=self.profile.job_preferences.target_roles,
             )
             added = self._deduplicate_and_add(jobs)
@@ -426,7 +435,7 @@ def _default_profile() -> str:
     """
     try:
         from tools.profile import list_available_profiles
-        names = [n for n in list_available_profiles() if n != "template"]
+        names = [n for n in list_available_profiles(user_id=None) if n != "template"]
     except Exception:
         return ""
     return names[0] if len(names) == 1 else ""
@@ -463,7 +472,7 @@ def main():
     
     # Load profile
     print(f"📋 Loading profile: {args.profile}")
-    profile = load_profile(args.profile)
+    profile = load_profile(args.profile, user_id=None)
     print(f"✅ Profile loaded: {profile.personal_info.name}")
     print(f"🎯 Target roles: {', '.join(profile.job_preferences.target_roles[:3])}...")
     print()
@@ -480,7 +489,7 @@ def main():
         print()
     
     # Create agent and discover jobs
-    agent = DiscoveryAgent(profile, mock_mode=args.mock)
+    agent = DiscoveryAgent(profile, mock_mode=args.mock, user_id=None)
     jobs = agent.discover_jobs(max_jobs=args.max_jobs)
     
     # Display results

@@ -51,7 +51,9 @@ logger = logging.getLogger(__name__)
 class LLMCache:
     """File-backed cache of parsed LLM JSON responses, keyed by prompt hash."""
 
-    def __init__(self, cache_dir: str = ".cache/llm", enabled: bool = True,
+    # `cache_dir` has no default: the one it had was cwd-relative (Q31) and one
+    # directory for every user. `config.llm_cache_dir(user_id)` is the answer.
+    def __init__(self, cache_dir: str, enabled: bool = True,
                  backend: str = "", model: str = ""):
         self.enabled = enabled
         self.backend = backend or "default"

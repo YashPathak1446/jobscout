@@ -12,11 +12,13 @@ as the thing it replaced, so every test here throws away its handle on the run
 and asks the registry cold.
 """
 
+import os
 import sys
 import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -152,16 +154,19 @@ class TestTheFacadesEndToEnd(unittest.TestCase):
     """The functions the UI actually calls."""
 
     def setUp(self):
-        import tools.jobs.run_registry as module
-        self.path = ROOT / "data" / "_runs_facade_test.db"
-        self.path.unlink(missing_ok=True)
-        self._real = module.DEFAULT_DB
-        module.DEFAULT_DB = self.path
+        # A data home of its own rather than a patched `DEFAULT_DB`: the
+        # constant is gone (A3), and pointing `JOBSCOUT_HOME` somewhere sends
+        # the facades through the same resolution a real run takes.
+        import tempfile
+        from tools.jobs.run_registry import db_path
+        self._home = tempfile.TemporaryDirectory()
+        self._env = mock.patch.dict(os.environ, {"JOBSCOUT_HOME": self._home.name})
+        self._env.start()
+        self.path = db_path(None)
 
     def tearDown(self):
-        import tools.jobs.run_registry as module
-        module.DEFAULT_DB = self._real
-        self.path.unlink(missing_ok=True)
+        self._env.stop()
+        self._home.cleanup()
 
     def test_a_started_run_is_visible_to_the_facades(self):
         from agents.orchestrator import active_runs, recent_runs, run_status
@@ -170,13 +175,13 @@ class TestTheFacadesEndToEnd(unittest.TestCase):
             run_id = registry.create("jane")
             registry.progress(run_id, "discovery", 1, 10)
 
-        self.assertEqual(run_status(run_id)["stage"], "discovery")
-        self.assertEqual(len(active_runs()), 1)
-        self.assertEqual(len(recent_runs()), 1)
+        self.assertEqual(run_status(None, run_id)["stage"], "discovery")
+        self.assertEqual(len(active_runs(None)), 1)
+        self.assertEqual(len(recent_runs(None)), 1)
 
     def test_run_status_of_nothing_is_none(self):
         from agents.orchestrator import run_status
-        self.assertIsNone(run_status("nope"))
+        self.assertIsNone(run_status(None, "nope"))
 
 
 if __name__ == "__main__":

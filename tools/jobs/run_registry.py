@@ -34,8 +34,18 @@ from tools import paths
 
 logger = logging.getLogger(__name__)
 
-# See job_store: the user's data home, not the install location.
-DEFAULT_DB = paths.user_path("data", "runs.db", create_parent=True)
+
+def db_path(user_id) -> Path:
+    """
+    Where one user's runs are recorded: `data/runs.db` under their home.
+
+    See `job_store.db_path`: the user's data home, not the install location,
+    and a function rather than an import-time constant so it can be somebody
+    in particular. Per user, `recent()` and `active()` stop handing one
+    person's `output_dir` and `error` text to another, and a run id from
+    somebody else's registry is simply not found.
+    """
+    return paths.user_path("data", "runs.db", user_id=user_id)
 
 # `failed` means the pipeline raised. A run that completes having generated
 # nothing is still `finished` — that is a result, not an error.
@@ -68,8 +78,9 @@ def _now() -> str:
 class RunRegistry:
     """Every run, and how far it has got."""
 
-    def __init__(self, path=None):
-        self.path = Path(path) if path else DEFAULT_DB
+    def __init__(self, path):
+        # Required, as for JobStore: no default registry to fall back to.
+        self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # Written from a worker thread and read from the request thread, so
         # the connection has to be usable across both. Serialised by the lock

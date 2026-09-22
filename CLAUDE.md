@@ -196,6 +196,16 @@ the platform user-data directory. Nothing may compute
 that could not render a resume and would have written profiles into
 site-packages.
 
+**And every user-data path names its user (R90).** `paths.user_home(user_id)`
+has no default: `None` is the unscoped layout (the checkout, the CLI, and
+`data_home()` itself), and a string is `data_home()/users/<id>/`. Every facade
+function that touches user data takes `user_id` first, and every store takes
+it as a required keyword. A store resolves its path through a `*(user_id)`
+function per call, never through an import-time constant.
+`tests/test_scope_seam.py` fails on the next one that does.
+`python scripts/path_snapshot.py verify` checks that the unscoped layout has
+not moved. Run it whenever you touch where anything lives.
+
 **Profiles are the input contract.** `user_profiles/<name>.json`, schema in
 `tools/profile/profile_schema.py`, bootstrapped from a real resume by
 `scripts/init_profile.py` — which is also the importer both UIs call. Keyword

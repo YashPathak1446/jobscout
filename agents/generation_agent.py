@@ -35,9 +35,9 @@ from tools.cache.rate_limiter import retry_with_backoff, RateLimitError
 from tools.cache.llm_cache import LLMCache
 from config import (
     GENERATION_MODELS,
-    LLM_CACHE_DIR,
     LLM_CACHE_ENABLED,
     classify_api_error,
+    llm_cache_dir,
     resolve_api_key,
 )
 
@@ -142,8 +142,12 @@ class GenerationAgent:
         # key: a cached Ollama reply must never be served to a run asking
         # Gemini, which is how a llama3.1 answer was once read as a Gemini
         # regression (R45).
+        #
+        # Whose cache comes from the parser, which already had to say whose
+        # resume it is (A3). A second `user_id` argument here would be a
+        # second answer to one question, free to disagree with the first.
         self.llm_cache = LLMCache(
-            cache_dir=LLM_CACHE_DIR,
+            cache_dir=llm_cache_dir(resume_parser.user_id),
             enabled=LLM_CACHE_ENABLED and use_cache,
             backend=self.llm_backend,
             # The model too, for the rungs where two models are two different
@@ -202,7 +206,7 @@ class GenerationAgent:
         from tools.resume.tex_renderer import escape
         return escape(text)
 
-    def generate_resumes(self, analysis_results: List[Dict], output_dir: str = "outputs",
+    def generate_resumes(self, analysis_results: List[Dict], output_dir: str,
                          on_progress=None) -> List[Dict]:
         """
         Generate tailored resumes for analyzed jobs.
@@ -2417,7 +2421,7 @@ def _default_profile() -> str:
     """
     try:
         from tools.profile import list_available_profiles
-        names = [n for n in list_available_profiles() if n != "template"]
+        names = [n for n in list_available_profiles(user_id=None) if n != "template"]
     except Exception:
         return ""
     return names[0] if len(names) == 1 else ""
@@ -2483,7 +2487,7 @@ def main():
     
     # Load profile
     print(f"📋 Loading profile: {args.profile}")
-    profile = load_profile(args.profile)
+    profile = load_profile(args.profile, user_id=None)
     print(f"✅ Profile loaded: {profile.personal_info.name}\n")
     
     # Determine resume path
@@ -2499,7 +2503,7 @@ def main():
     # Load resume parser
     print("📊 Loading resume parser...")
     # If using --input, skip embedding computation (saves 25 API calls)
-    resume_parser = ResumeParser(str(resume_path), skip_embeddings=True)
+    resume_parser = ResumeParser(str(resume_path), skip_embeddings=True, user_id=None)
     print()
     
     # Get analysis results
@@ -2510,17 +2514,17 @@ def main():
         from agents.analysis_agent import AnalysisAgent
 
         print("🔍 Running Discovery Agent...")
-        discovery = DiscoveryAgent(profile, mock_mode=args.mock)
+        discovery = DiscoveryAgent(profile, mock_mode=args.mock, user_id=None)
         jobs = discovery.discover_jobs(max_jobs=args.max_jobs)
         print(f"✅ Found {len(jobs)} jobs\n")
 
         print("📝 Running Enrichment Agent...")
-        enrichment = EnrichmentAgent(mock_mode=args.mock)
+        enrichment = EnrichmentAgent(mock_mode=args.mock, user_id=None)
         enriched_jobs = enrichment.enrich_jobs(jobs)
         print(f"✅ Enriched {len(enriched_jobs)} jobs\n")
 
         print("📊 Running Analysis Agent...")
-        analysis = AnalysisAgent(profile, str(resume_path))
+        analysis = AnalysisAgent(profile, str(resume_path), user_id=None)
         analysis_results = analysis.analyze_jobs(enriched_jobs[:args.max_jobs])
         print(f"✅ Analyzed {len(analysis_results)} jobs\n")
 
@@ -2547,9 +2551,12 @@ def main():
     generator = GenerationAgent(profile, resume_parser,
                             mock_mode=mock_gen, use_cache=not args.no_cache,
                             generate_pdf=not args.no_pdf)
+    # Anchored like every other run's outputs: `Path("outputs")` on its own
+    # is the working directory's, which was this default until A3 (Q31).
+    from tools.paths import outputs_root
     results = generator.generate_resumes(
         analysis_results[:args.max_jobs],
-        output_dir=args.output
+        output_dir=str(outputs_root(args.output, user_id=None))
     )
     
     print()

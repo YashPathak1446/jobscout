@@ -1,0 +1,14 @@
+{
+  "jobs_db": "data/jobs.db",
+  "runs_db": "data/runs.db",
+  "profiles_dir": "user_profiles",
+  "resumes_dir": "data/master_resumes",
+  "outputs_root": "outputs",
+  "job_cache_dir": "cache",
+  "resume_embedding_cache_dir": "cache",
+  "llm_cache_dir": ".cache/llm",
+  "text_embedding_cache_dir": ".cache/embeddings",
+  "learned_ats_file": "data/ats_companies.json",
+  "master_resume": "data/master_resumes/priya_raghunathan.tex",
+  "home": "."
+}

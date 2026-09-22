@@ -35,10 +35,24 @@ from tools import paths
 
 logger = logging.getLogger(__name__)
 
-# Under the user's data home, not next to the code. Anchored on __file__
-# this wrote into site-packages once installed — a database of somebody's
-# job search inside their Python installation, deleted on upgrade.
-DEFAULT_DB = paths.user_path("data", "jobs.db", create_parent=True)
+
+def db_path(user_id) -> Path:
+    """
+    Where one user's board lives: `data/jobs.db` under their home.
+
+    Under the user's data home, not next to the code. Anchored on __file__
+    this wrote into site-packages once installed — a database of somebody's
+    job search inside their Python installation, deleted on upgrade.
+
+    A function, not the `DEFAULT_DB` constant it replaced (pilot plan A3). A
+    constant is computed at import, before anybody has said whose board it
+    is, so it can only ever be one person's; and a constructor that fell back
+    to it was a path by which a hosted request could open the unscoped board
+    without naming a user. One board per person is also what makes
+    `url TEXT PRIMARY KEY` right again: a posting is a singleton within one
+    person's board, which is what the schema always meant.
+    """
+    return paths.user_path("data", "jobs.db", user_id=user_id)
 
 # What a user can say about a job. `new` is the only one the pipeline sets;
 # the rest are theirs.
@@ -100,8 +114,10 @@ def _now() -> str:
 class JobStore:
     """Every job ever seen, keyed by apply URL."""
 
-    def __init__(self, path=None):
-        self.path = Path(path) if path else DEFAULT_DB
+    def __init__(self, path):
+        # Required: there is no default board to fall back to (A3). Callers
+        # say whose with `JobStore(db_path(user_id))`.
+        self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(self.path))
         self._db.row_factory = sqlite3.Row

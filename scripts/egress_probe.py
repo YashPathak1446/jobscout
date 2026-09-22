@@ -241,7 +241,7 @@ def select_slugs(companies: dict, sample: Optional[int], seed: int) -> dict:
 
 def run_probe(sample=None, seed=0, boards=None, delay=0.3, label=None) -> dict:
     """Probe every selected slug and return the full record."""
-    selected = select_slugs(load_companies(), sample, seed)
+    selected = select_slugs(load_companies(user_id=None), sample, seed)
     if boards:
         selected = {b: s for b, s in selected.items() if b in boards}
 

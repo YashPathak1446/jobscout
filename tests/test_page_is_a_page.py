@@ -86,7 +86,7 @@ THREE_LINES = TWO_LINES + (" The rollout ran shard by shard behind a dual-write 
 def agent(experiences=(), projects=()):
     made = GenerationAgent.__new__(GenerationAgent)
     made.resume_parser = Parser(experiences, projects)
-    made.profile = load_profile("yash_pathak", str(ROOT / "user_profiles"))
+    made.profile = load_profile("yash_pathak", str(ROOT / "user_profiles"), user_id=None)
     return made
 
 

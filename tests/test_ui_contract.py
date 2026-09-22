@@ -30,15 +30,18 @@ PROJECT_PACKAGES = {"agents", "tools", "scripts", "config"}
 #   board_job      `/api/job/{id}` needs a single-row read. `app.py` renders
 #                  the board and its expanders from one `board_jobs()` page,
 #                  so it never fetches a row on its own.
-#   outputs_root   `/api/file` has to prove a requested path is inside the
-#                  outputs tree before serving it (api/main.py:579-582).
-#                  Streamlit hands `st.download_button` bytes it already
-#                  holds, so no containment check exists to anchor.
+#   user_outputs_root
+#                  `/api/file` has to prove a requested path is inside the
+#                  *caller's* outputs tree before serving it. Streamlit hands
+#                  `st.download_button` bytes it already holds, so no
+#                  containment check exists to anchor. It was `outputs_root`
+#                  until A3 scoped it — the stale-entry check below is what
+#                  said so.
 #
 # Anything else appearing here fails the build. Re-exported through
 # `agents.orchestrator` rather than imported from `tools.paths` because
 # ALLOWED_PROJECT_MODULES above leaves no alternative.
-HTTP_ONLY = {"board_job", "outputs_root"}
+HTTP_ONLY = {"board_job", "user_outputs_root"}
 
 
 def _facade_imports(tree):

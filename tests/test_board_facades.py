@@ -20,6 +20,7 @@ import json
 import shutil
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
@@ -74,11 +75,11 @@ class TestProfileMergeKeepsWhatTheFormNeverShowed(unittest.TestCase):
         # template stopped presuming one person's geography. A test for "the
         # merge keeps what the form never showed" has to put the thing there
         # itself.
-        update_profile_fields("_board_test", {
+        update_profile_fields(None, "_board_test", {
             "job_preferences": {"locations": {"states_priority": ["Oregon"]}},
         })
 
-        update_profile_fields("_board_test", {
+        update_profile_fields(None, "_board_test", {
             "job_preferences": {"locations": {"cities": ["Irvine"], "remote_ok": False}},
         })
         locations = self._profile()["job_preferences"]["locations"]
@@ -94,27 +95,27 @@ class TestProfileMergeKeepsWhatTheFormNeverShowed(unittest.TestCase):
         """The failure this fixes: a wizard step leaving an unloadable profile."""
         from tools.profile import load_profile
 
-        update_profile_fields("_board_test", {
+        update_profile_fields(None, "_board_test", {
             "job_preferences": {
                 "target_roles": ["Backend Engineer"],
                 "seniority": ["mid"],
                 "locations": {"cities": ["Austin"], "remote_ok": True},
             },
         })
-        profile = load_profile("_board_test")
+        profile = load_profile("_board_test", user_id=None)
         self.assertEqual(profile.job_preferences.seniority, ["mid"])
         self.assertEqual(profile.job_preferences.locations.countries, ["United States"])
 
     def test_a_list_still_replaces_rather_than_merges(self):
         """Lists replace. Merging two lists would be a guess about intent."""
-        update_profile_fields("_board_test", {
+        update_profile_fields(None, "_board_test", {
             "job_preferences": {"target_roles": ["ML Engineer"]},
         })
         self.assertEqual(
             self._profile()["job_preferences"]["target_roles"], ["ML Engineer"])
 
     def test_read_preferences_returns_what_the_form_needs(self):
-        prefs = read_preferences("_board_test")
+        prefs = read_preferences(None, "_board_test")
         self.assertEqual(
             set(prefs),
             {"target_roles", "seniority", "exclude_keywords", "cities",
@@ -130,10 +131,10 @@ class TestProfileMergeKeepsWhatTheFormNeverShowed(unittest.TestCase):
 
     def test_read_preferences_round_trips_a_save(self):
         """A form that cannot read what it wrote will revert it on the next save."""
-        update_profile_fields("_board_test", {
+        update_profile_fields(None, "_board_test", {
             "job_preferences": {"seniority": ["senior", "staff"]},
         })
-        self.assertEqual(read_preferences("_board_test")["seniority"],
+        self.assertEqual(read_preferences(None, "_board_test")["seniority"],
                          ["senior", "staff"])
 
 
@@ -151,45 +152,46 @@ class TestBoardFacades(unittest.TestCase):
         store.attach_resume("https://x.test/1", tex_path="a.tex", pdf_path="a.pdf")
         store.close()
 
-        # The facades open the default store; point that at the test one so
-        # running the suite never touches the user's real board.
+        # The facades open the unscoped user's store; point that at the test
+        # one so running the suite never touches the user's real board. It was
+        # `DEFAULT_DB` that got patched until A3 removed the constant.
         import tools.jobs.job_store as job_store
-        self._real_default = job_store.DEFAULT_DB
-        job_store.DEFAULT_DB = self.db
+        self._where = mock.patch.object(job_store, "db_path",
+                                        lambda user_id: self.db)
+        self._where.start()
 
     def tearDown(self):
-        import tools.jobs.job_store as job_store
-        job_store.DEFAULT_DB = self._real_default
+        self._where.stop()
         self.db.unlink(missing_ok=True)
 
     def test_board_jobs_returns_rows_the_screen_can_render(self):
-        rows = board_jobs()
+        rows = board_jobs(None)
         self.assertEqual(len(rows), 2)
         for field in ("url", "title", "company", "score", "status", "resume_tex"):
             self.assertIn(field, rows[0], f"the board renders {field}")
 
     def test_scored_jobs_come_before_unscored(self):
         """An unscored job is unknown, not bad; it must not sort as a zero."""
-        rows = board_jobs()
+        rows = board_jobs(None)
         self.assertEqual(rows[0]["url"], "https://x.test/1")
         self.assertIsNone(rows[-1]["score"])
 
     def test_filters_reach_the_store(self):
-        self.assertEqual(len(board_jobs(min_score=50)), 1)
-        self.assertEqual(len(board_jobs(has_resume=True)), 1)
-        self.assertEqual(len(board_jobs(status="new")), 2)
-        self.assertEqual(len(board_jobs(status=["applied"])), 0)
+        self.assertEqual(len(board_jobs(None, min_score=50)), 1)
+        self.assertEqual(len(board_jobs(None, has_resume=True)), 1)
+        self.assertEqual(len(board_jobs(None, status="new")), 2)
+        self.assertEqual(len(board_jobs(None, status=["applied"])), 0)
 
     def test_setting_a_status_persists(self):
-        set_job_status("https://x.test/1", "applied")
-        self.assertEqual(board_jobs(status="applied")[0]["url"], "https://x.test/1")
+        set_job_status(None, "https://x.test/1", "applied")
+        self.assertEqual(board_jobs(None, status="applied")[0]["url"], "https://x.test/1")
 
     def test_a_status_the_ui_cannot_produce_is_refused(self):
         with self.assertRaises(ValueError):
-            set_job_status("https://x.test/1", "interviewing")
+            set_job_status(None, "https://x.test/1", "interviewing")
 
     def test_stats_carry_the_headline_numbers(self):
-        stats = board_stats()
+        stats = board_stats(None)
         self.assertEqual(stats["total"], 2)
         self.assertEqual(stats["scored"], 1)
         self.assertEqual(stats["with_resume"], 1)
@@ -198,8 +200,8 @@ class TestBoardFacades(unittest.TestCase):
     def test_every_status_the_facade_offers_is_one_the_store_accepts(self):
         """The board renders a picker from this list; each must be settable."""
         for status in job_statuses():
-            set_job_status("https://x.test/2", status)
-        self.assertEqual(board_jobs(status=job_statuses()[-1])[0]["url"],
+            set_job_status(None, "https://x.test/2", status)
+        self.assertEqual(board_jobs(None, status=job_statuses()[-1])[0]["url"],
                          "https://x.test/2")
 
 
@@ -214,17 +216,17 @@ class TestPersonalRoundTrip(unittest.TestCase):
     def test_read_personal_round_trips_a_save(self):
         from scripts.init_profile import read_personal
 
-        update_profile_fields("_board_test", {
+        update_profile_fields(None, "_board_test", {
             "personal_info": {"location": "Austin, TX", "visa_status": "F1 OPT"},
         })
-        stored = read_personal("_board_test")
+        stored = read_personal(None, "_board_test")
         self.assertEqual(stored["location"], "Austin, TX")
         self.assertEqual(stored["visa_status"], "F1 OPT")
 
     def test_saving_two_personal_fields_keeps_the_name(self):
         """personal_info carries derived fields no form shows (R16)."""
         before = json.loads(TEMP.read_text(encoding="utf-8"))["personal_info"]
-        update_profile_fields("_board_test", {
+        update_profile_fields(None, "_board_test", {
             "personal_info": {"location": "Austin, TX"},
         })
         after = json.loads(TEMP.read_text(encoding="utf-8"))["personal_info"]
@@ -312,18 +314,18 @@ class TestTheRestOfTheLocationFields(unittest.TestCase):
         TEMP.unlink(missing_ok=True)
 
     def test_read_preferences_now_offers_them(self):
-        prefs = read_preferences("_board_test")
+        prefs = read_preferences(None, "_board_test")
         for field in ("countries", "states_priority", "states_acceptable",
                       "willing_to_relocate"):
             self.assertIn(field, prefs)
 
     def test_they_round_trip(self):
-        update_profile_fields("_board_test", {"job_preferences": {"locations": {
+        update_profile_fields(None, "_board_test", {"job_preferences": {"locations": {
             "countries": ["United States", "Canada"],
             "states_priority": ["California"],
             "willing_to_relocate": False,
         }}})
-        prefs = read_preferences("_board_test")
+        prefs = read_preferences(None, "_board_test")
 
         self.assertEqual(prefs["countries"], ["United States", "Canada"])
         self.assertEqual(prefs["states_priority"], ["California"])
@@ -332,15 +334,15 @@ class TestTheRestOfTheLocationFields(unittest.TestCase):
     def test_the_profile_still_validates(self):
         from tools.profile import load_profile
 
-        update_profile_fields("_board_test", {"job_preferences": {"locations": {
+        update_profile_fields(None, "_board_test", {"job_preferences": {"locations": {
             "countries": ["Canada"], "states_priority": [],
             "states_acceptable": [], "willing_to_relocate": False,
         }}})
-        profile = load_profile("_board_test")
+        profile = load_profile("_board_test", user_id=None)
         self.assertEqual(profile.job_preferences.locations.countries, ["Canada"])
 
     def test_relocation_false_is_not_read_as_missing(self):
         """`bool(...)` on a stored False must survive the read."""
-        update_profile_fields("_board_test", {"job_preferences": {
+        update_profile_fields(None, "_board_test", {"job_preferences": {
             "locations": {"willing_to_relocate": False}}})
-        self.assertFalse(read_preferences("_board_test")["willing_to_relocate"])
+        self.assertFalse(read_preferences(None, "_board_test")["willing_to_relocate"])

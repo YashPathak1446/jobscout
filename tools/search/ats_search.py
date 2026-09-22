@@ -61,10 +61,21 @@ logger = logging.getLogger(__name__)
 # `load_companies` returns the union. Upgrades bring new slugs, learned slugs
 # survive upgrades, and neither file has to know about the other.
 SEED_FILE = paths.asset("ats_companies.json")
-LEARNED_FILE = paths.user_path("data", "ats_companies.json")
 
-# The name callers and tests already use: where slugs get written.
-COMPANIES_FILE = LEARNED_FILE
+
+def learned_file(user_id) -> Path:
+    """
+    Where one user's learned slugs are written: `data/ats_companies.json`
+    under their home.
+
+    **Per user, not shared** (pilot plan A3, decided 2026-09-22). Sharing
+    would help everyone's discovery, but the list is learned from each
+    person's own searches — so one user's board would shift with what another
+    looked for, and the slugs themselves say which companies somebody is
+    pursuing. Sharing is a small deliberate change to make later; a leak found
+    after the fact is not. The shipped seed list is shared, because it ships.
+    """
+    return paths.user_path("data", "ats_companies.json", user_id=user_id)
 
 USER_AGENT = "jobscout/1.0 (+https://github.com/YashPathak1446/jobscout)"
 TIMEOUT_SECONDS = 25
@@ -299,25 +310,27 @@ def _read_slugs(file) -> dict:
     }
 
 
-def load_companies(path=None) -> dict:
+def load_companies(path=None, *, user_id) -> dict:
     """
-    Every slug this run can reach: the shipped list plus what was learned.
+    Every slug this user's run can reach: the shipped list plus what *they*
+    learned.
 
     `path` overrides both and reads that single file, which is what tests and
-    anyone pointing at a list of their own want.
+    anyone pointing at a list of their own want. `user_id` is required either
+    way, so no caller can reach the learned list without saying whose.
     """
     if path is not None:
         return _read_slugs(path)
 
     merged = {}
-    for source in (SEED_FILE, LEARNED_FILE):
+    for source in (SEED_FILE, learned_file(user_id)):
         for board, slugs in _read_slugs(source).items():
             known = merged.setdefault(board, [])
             known.extend(s for s in slugs if s not in known)
     return {board: sorted(slugs) for board, slugs in merged.items()}
 
 
-def harvest_slugs(urls, path=None) -> dict:
+def harvest_slugs(urls, path=None, *, user_id) -> dict:
     """
     Learn new company slugs from apply URLs and add them to the seed list.
 
@@ -325,12 +338,12 @@ def harvest_slugs(urls, path=None) -> dict:
     tells us that company's slug, and from then on its whole board is
     reachable without a key. Returns what was added, keyed by board.
     """
-    file = Path(path) if path else LEARNED_FILE
+    file = Path(path) if path else learned_file(user_id)
     # Everything already reachable, shipped and learned together, so a slug
     # the package already ships is not copied into the user's file as though
     # this run had discovered it. Without that check the learned file slowly
     # becomes a duplicate of the seed and the merge stops meaning anything.
-    known_everywhere = load_companies(path)
+    known_everywhere = load_companies(path, user_id=user_id)
     data = _read_slugs(file)
 
     added = {}
@@ -428,13 +441,15 @@ def _spread(by_company: dict, max_results: int) -> list:
     return spread
 
 
-def search_ats(max_results: int = 50, companies=None, boards=None, roles=None) -> list:
+def search_ats(max_results: int = 50, *, companies, boards=None, roles=None) -> list:
     """
     Pull open roles from public ATS boards. No API key.
 
     Args:
         max_results: Cap on listings returned.
-        companies: {board: [slug, ...]}. Defaults to the seed file.
+        companies: {board: [slug, ...]}. Required: the reachable list is
+            per user since A3, so the default that read it is gone and the
+            caller passes `load_companies(user_id=...)`.
         boards: Restrict to these boards. Defaults to all supported.
         roles: Job titles of interest, e.g. the profile's `target_roles`.
             Filtering happens **before** the cap, which is the whole point:
@@ -445,7 +460,6 @@ def search_ats(max_results: int = 50, companies=None, boards=None, roles=None) -
         JobListing objects with `full_jd` already populated, so ATS-sourced
         jobs need no enrichment pass.
     """
-    companies = companies if companies is not None else load_companies()
     wanted = boards or list(BOARDS)
 
     by_company, reached, failed, seen_total = {}, 0, 0, 0

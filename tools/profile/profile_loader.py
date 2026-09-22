@@ -20,9 +20,9 @@ from .profile_schema import UserProfile
 logger = logging.getLogger(__name__)
 
 
-def _default_profiles_dir() -> Path:
+def profiles_dir(user_id) -> Path:
     """
-    Where profiles live when the caller does not name a directory.
+    Where one user's profiles live: `user_profiles/` under their home.
 
     Through `tools.paths`, which is the one module that knows the difference
     between a checkout, an installed copy and a container. This walked
@@ -35,8 +35,17 @@ def _default_profiles_dir() -> Path:
     answers 200, and the dropdown is empty. Which is also why nothing caught
     it here — in a checkout `data_home()` is the repo root and both spellings
     happen to land on the same directory.
+
+    Per user since A3, and **the writer resolves through here too**
+    (`init_profile.profiles_dir`), so a scoped wizard save and a scoped
+    dropdown cannot come apart the way the two spellings above once did.
     """
-    return paths.user_path("user_profiles")
+    return paths.user_path("user_profiles", user_id=user_id)
+
+
+# The functions below take a parameter called `profiles_dir` — the public name
+# callers have used for years — which shadows this function inside them.
+_user_profiles_dir = profiles_dir
 
 
 class ProfileLoadError(Exception):
@@ -44,13 +53,17 @@ class ProfileLoadError(Exception):
     pass
 
 
-def load_profile(profile_name: str, profiles_dir: Optional[str] = None) -> UserProfile:
+def load_profile(profile_name: str, profiles_dir: Optional[str] = None, *,
+                 user_id) -> UserProfile:
     """
     Load and validate a user profile from JSON.
     
     Args:
         profile_name: Profile filename without extension (e.g., 'yash_pathak')
-        profiles_dir: Directory containing profiles (default: 'user_profiles/')
+        profiles_dir: Directory containing profiles (default: the user's
+            `user_profiles/`)
+        user_id: Whose profiles (`None` = unscoped). Required even with
+            `profiles_dir`, so no call can read a profile without saying whose.
         
     Returns:
         Validated UserProfile object
@@ -63,12 +76,11 @@ def load_profile(profile_name: str, profiles_dir: Optional[str] = None) -> UserP
         >>> print(profile.personal_info.name)
         'Yash Pathak'
     """
-    # Determine profiles directory
-    if profiles_dir is None:
-        profiles_dir = _default_profiles_dir()
-    else:
-        profiles_dir = Path(profiles_dir)
+    where = _user_profiles_dir(user_id) if profiles_dir is None else Path(profiles_dir)
+    return _load_from(profile_name, where)
 
+
+def _load_from(profile_name: str, profiles_dir: Path) -> UserProfile:
     if not profiles_dir.is_dir():
         raise ProfileLoadError(
             f"Could not find user_profiles/ directory. Looked in: {profiles_dir}"
@@ -80,7 +92,7 @@ def load_profile(profile_name: str, profiles_dir: Optional[str] = None) -> UserP
     if not profile_path.exists():
         raise ProfileLoadError(
             f"Profile not found: {profile_path}\n"
-            f"Available profiles: {list_available_profiles(profiles_dir)}"
+            f"Available profiles: {_list_in(profiles_dir)}"
         )
     
     # Load JSON
@@ -101,21 +113,23 @@ def load_profile(profile_name: str, profiles_dir: Optional[str] = None) -> UserP
         raise ProfileLoadError(f"Profile validation failed for {profile_name}: {e}")
 
 
-def list_available_profiles(profiles_dir: Optional[str] = None) -> list[str]:
+def list_available_profiles(profiles_dir: Optional[str] = None, *,
+                            user_id) -> list[str]:
     """
     List all available profile names (without .json extension).
     
     Args:
-        profiles_dir: Directory to search (default: 'user_profiles/')
+        profiles_dir: Directory to search (default: the user's `user_profiles/`)
+        user_id: Whose profiles (`None` = unscoped).
         
     Returns:
         List of profile names
     """
-    if profiles_dir is None:
-        profiles_dir = _default_profiles_dir()
-    else:
-        profiles_dir = Path(profiles_dir)
-    
+    where = _user_profiles_dir(user_id) if profiles_dir is None else Path(profiles_dir)
+    return _list_in(where)
+
+
+def _list_in(profiles_dir: Path) -> list[str]:
     if not profiles_dir.exists():
         return []
     
@@ -228,13 +242,13 @@ if __name__ == "__main__":
     
     if len(sys.argv) < 2:
         print("Usage: python profile_loader.py <profile_name>")
-        print(f"\nAvailable profiles: {', '.join(list_available_profiles())}")
+        print(f"\nAvailable profiles: {', '.join(list_available_profiles(user_id=None))}")
         sys.exit(1)
     
     profile_name = sys.argv[1]
     
     try:
-        profile = load_profile(profile_name)
+        profile = load_profile(profile_name, user_id=None)
         print_profile_summary(profile)
         
         # Test conditional logic

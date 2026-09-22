@@ -40,6 +40,7 @@ class TestPipelineDrivenLikeTheUI(unittest.TestCase):
         try:
             orchestrator = JobScoutOrchestrator(
                 profile_name=PROFILE,
+                user_id=None,
                 mock_mode=True,                 # no API calls anywhere
                 max_resumes=1,
                 generate_pdf=False,             # no LaTeX needed
@@ -124,7 +125,7 @@ class TestReviewBeforeGenerating(unittest.TestCase):
 
     def _orchestrator(self, **kwargs):
         return JobScoutOrchestrator(
-            profile_name=PROFILE, mock_mode=True, max_resumes=1,
+            profile_name=PROFILE, user_id=None, mock_mode=True, max_resumes=1,
             generate_pdf=False, output_dir=self.output_dir, **kwargs,
         )
 

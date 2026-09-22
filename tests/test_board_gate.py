@@ -281,9 +281,9 @@ class TestAgainstTheRealStore(unittest.TestCase):
 
         from agents.orchestrator import board_total, refresh_board_gate
 
-        refresh_board_gate("yash_pathak")
-        shown = board_total()
-        everything = board_total(include_ineligible=True)
+        refresh_board_gate(None, "yash_pathak")
+        shown = board_total(None)
+        everything = board_total(None, include_ineligible=True)
 
         self.assertLess(shown, everything, "the gate hides nothing at all")
         self.assertGreater(shown, everything / 3,

@@ -18,10 +18,22 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def cache_dir(user_id) -> Path:
+    """
+    Where one user's resume embeddings live: `cache/` under their home.
+
+    Was the constructor's `cache_dir="cache"` default, cwd-relative (Q31) and
+    the one of the four caches with no name to grep for — which is why the
+    plan says relocate three and the fourth is the one nobody walks.
+    """
+    from tools import paths
+    return paths.user_path("cache", user_id=user_id)
+
+
 class EmbeddingCache:
     """Cache for resume embeddings."""
 
-    def __init__(self, cache_dir: str = "cache", model: Optional[str] = None):
+    def __init__(self, cache_dir, model: Optional[str] = None):
         """
         Args:
             cache_dir: Where resume_embeddings.json lives

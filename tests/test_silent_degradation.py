@@ -109,9 +109,9 @@ class TestTheFloorRecordsWhyItWasReached(unittest.TestCase):
         if not (ROOT / "user_profiles" / "yash_pathak.json").exists():
             self.skipTest("needs a real profile; skipped on a clean clone")
 
-        profile = load_profile("yash_pathak")
+        profile = load_profile("yash_pathak", user_id=None)
         parser = ResumeParser(profile.resume_preferences.master_resume_path,
-                              skip_embeddings=True)
+                              skip_embeddings=True, user_id=None)
         self.agent = GenerationAgent(profile, parser, generate_pdf=False)
         self.selected = {"experiences": ["exp_sorenson_communications"],
                          "projects": []}
@@ -149,7 +149,8 @@ class TestTheUserIsToldInTheSummary(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             orchestrator = JobScoutOrchestrator(
-                profile_name="yash_pathak", output_dir=tmp, generate_pdf=False)
+                profile_name="yash_pathak", user_id=None, output_dir=tmp,
+                generate_pdf=False)
             orchestrator.state["generation_results"] = results
             orchestrator.state["discovered_jobs"] = []
             orchestrator.state["analysis_results"] = []

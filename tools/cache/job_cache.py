@@ -24,9 +24,22 @@ from typing import Optional, Dict, List
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CACHE_DIR = "cache"
 DEFAULT_JD_MAX_AGE_HOURS = 72       # Re-scrape JDs older than 3 days
 DEFAULT_URL_MAX_AGE_HOURS = 24 * 7  # Re-show jobs after 7 days
+
+
+def cache_dir(user_id) -> Path:
+    """
+    Where one user's seen-URL and scraped-JD cache lives: `cache/` under
+    their home.
+
+    Was `DEFAULT_CACHE_DIR = "cache"`, resolved against the working directory
+    (Q31). Per user because the seen-URL half is a record of what one person's
+    discovery surfaced; a shared one would hide from B every posting A's run
+    had already shown A.
+    """
+    from tools import paths
+    return paths.user_path("cache", user_id=user_id)
 
 
 class JobCache:
@@ -57,7 +70,7 @@ class JobCache:
 
     def __init__(
         self,
-        cache_dir: str = DEFAULT_CACHE_DIR,
+        cache_dir,
         jd_max_age_hours: int = DEFAULT_JD_MAX_AGE_HOURS,
         url_max_age_hours: int = DEFAULT_URL_MAX_AGE_HOURS,
     ):

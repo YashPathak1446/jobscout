@@ -253,7 +253,7 @@ class TestLatexSkipsConfirmation(unittest.TestCase):
 
         target = RESUMES / f"{STEM}_latex.tex"
         try:
-            result = extract_resume(source.read_bytes(), target.name)
+            result = extract_resume(None, source.read_bytes(), target.name)
             self.assertEqual(result["kind"], "latex")
             self.assertNotIn("schema", result)
         finally:
