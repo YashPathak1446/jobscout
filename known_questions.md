@@ -8585,6 +8585,45 @@ move, not the code. The acceptance run could not complete here (no
 `pdflatex`, embedding download 403); its stranger fixtures build profiles
 from the template, so `acceptance_clearance` now reaches scoring for them.
 
+## R93. Nothing ever judged the React board; a save and a run now do (pilot A4)
+
+**Decision:** (2026-09-22) `PATCH /api/profile/{name}` re-judges the board
+after it saves and returns `rejudged`. `JobScoutOrchestrator.run` re-judges
+right after discovery. Both go through `refresh_board_gate`, which only
+touches rows whose fingerprint is stale and logs rather than raises.
+
+**Found by checking the thing A4 said to check, and it was bigger than
+asked.** A4 asked whether the React board re-judges after About-you is saved.
+Nothing in `web/src` called `POST /api/board/gate`, and `PATCH /api/profile`
+did not re-judge. But `refresh_board_gate` had exactly one caller that ever
+ran, `app.py`'s render. `GET /api/board` names no profile, so it cannot
+re-judge on its own. Discovery writes rows with `gate_verdict = NULL`, and
+`job_store._VERDICT` reads NULL as shown. **So a board a user only ever saw
+in React, which is the hosted product the friends get, was never judged at
+all:** every row eligible, no badge, no hidden count, and an unconfirmed count
+of zero. A4's whole surface, not working on the UI it was for. It was hidden
+the same way as Q35, Q38 and Q41: the author runs Streamlit, and Streamlit
+judges on every render.
+
+**Chosen over calling `POST /api/board/gate` from About-you.** That needs
+`api.ts`, which is not in the repository (Q41). It would also cover one screen
+of three: Preferences' years, seniority and countries feed the same
+fingerprint, and a client-side call is a call the next screen forgets. The
+save route is the one place every profile edit passes through.
+
+**After discovery, not at the end of the run,** because discovery is where
+rows enter the board and the board's verdict reads discovery's text (Q40). A
+checkpoint stop or a failed generation still leaves a judged board.
+
+**Breaks if wrong:** each save and each run now also writes to that user's
+`jobs.db`, one pass over stale rows. A failure there must never fail the save
+or the run. `test_a_save_never_fails_because_the_rejudge_did` pins the save
+half. The route is a 28th `None` call site for A5 to scope, and
+`test_hosted_mode_has_no_unscoped_call_site` counts it.
+
+Mutation-checked: dropping either call fails its test (the verdict stays
+`undecidable` after the answer is saved; the run's re-judge is never called).
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -8926,6 +8965,12 @@ badge reads `gate_verdict`, `gate_reason` and `unconfirmed` defensively
 (`GateBadge.tsx`, `Board.tsx`) instead of through `Job` and the board
 response type, because those types are in the missing file. **When it is
 committed, declare the three fields there and drop the defensive reads.**
+
+*Still open 2026-09-22, later the same day.* The files were reported
+committed, but `git ls-remote` shows `web/src/lib/` on no branch or tag on
+the remote, so the commit has not been pushed. The type declarations and the
+defensive-read removal wait on the push. R93's re-judge went server-side
+partly for this reason.
 
 
 ## Q42. An undecidable job can take a top-K slot and get a resume

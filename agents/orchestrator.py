@@ -840,6 +840,16 @@ class JobScoutOrchestrator:
                 # Stage 1: Discovery
                 self._run_discovery(max_jobs)
 
+                # Discovery is where rows enter the board, and a row no gate
+                # has judged reads as shown (`job_store._VERDICT`). Streamlit
+                # re-judges before every render; the React board cannot — its
+                # GET names no profile — so until this, a board a React user
+                # only ever saw was never judged at all: every row eligible,
+                # no badge, no count. Here rather than at the end of the run
+                # so a checkpoint stop or a failed generation still leaves a
+                # judged board. Non-fatal by `refresh_board_gate`'s contract.
+                refresh_board_gate(self.user_id, self.profile_name)
+
                 # Stage 2: Enrichment
                 self._run_enrichment()
 

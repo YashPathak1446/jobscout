@@ -483,7 +483,18 @@ def profile_update(name: str, request: ProfileUpdate) -> dict:
         path = update_profile_fields(None, name, request.updates)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return {"saved": Path(path).name}
+
+    # Re-judge the board against what was just saved (A4). About-you's three
+    # answers and Preferences' years, seniority and countries all feed the
+    # gate's fingerprint, and the React board has no way to ask for this
+    # itself — `GET /api/board` names no profile, and nothing in the client
+    # called `POST /api/board/gate`. So a badge saying "you have not said
+    # whether you hold a clearance" outlived the answer. Here, rather than in
+    # each screen, so no screen can forget. Cheap: only rows whose
+    # fingerprint changed are touched, and a failure logs rather than failing
+    # the save.
+    return {"saved": Path(path).name,
+            "rejudged": refresh_board_gate(None, name)}
 
 
 class ComponentRules(BaseModel):

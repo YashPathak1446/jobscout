@@ -367,5 +367,128 @@ class TestAgainstTheRealStore(unittest.TestCase):
                            "the gate hides most of the board — too aggressive")
 
 
+class _Posting:
+    """What discovery hands the store. Only the fields `record` reads."""
+
+    def __init__(self, url, jd):
+        self.apply_url = url
+        self.id = url
+        self.title = "DevOps Engineer"
+        self.company = "Example"
+        self.location = "Washington, DC"
+        self.source = "test"
+        self.full_jd = jd
+
+
+class TestTheReactBoardIsJudged(unittest.TestCase):
+    """
+    Every re-judge the board ever got came from Streamlit's render (A4).
+
+    `refresh_board_gate` was called in exactly two places: `app.py` before
+    each board render, and `POST /api/board/gate`, which no screen called.
+    `GET /api/board` names no profile, so it cannot re-judge on its own, and
+    a row no gate has judged reads as shown. So on the React board — the one
+    the friends get — nothing was ever judged: every row eligible, no badge,
+    and an About-you answer that should clear a badge left it standing.
+
+    Judged now at the two moments a verdict can go stale from the React side:
+    a profile save, and a run writing new rows. Both walk the real HTTP route
+    or the real orchestrator, in a data home of their own.
+    """
+
+    CLEARANCE_JD = ("DevOps Engineer. Requirements: 2+ years with Kubernetes. "
+                    "Must hold an active Top Secret security clearance. "
+                    + "We build infrastructure for public-sector customers. " * 8)
+
+    def setUp(self):
+        import os
+        import shutil
+        from unittest import mock
+
+        self._dir = tempfile.TemporaryDirectory()
+        home = Path(self._dir.name)
+        (home / "user_profiles").mkdir()
+        (home / "data" / "master_resumes").mkdir(parents=True)
+        for name, where in (("priya_raghunathan.json", "user_profiles"),
+                            ("priya_raghunathan.tex", "data/master_resumes")):
+            source = (ROOT / where / name)
+            if not source.is_file():
+                self.skipTest(f"needs {where}/{name}")
+            shutil.copy(source, home / where / name)
+
+        self._env = mock.patch.dict(os.environ, {"JOBSCOUT_HOME": str(home)})
+        self._env.start()
+        self.addCleanup(self._env.stop)
+        self.addCleanup(self._dir.cleanup)
+
+        from tools.jobs.job_store import db_path
+        self.db = db_path(None)
+        store = JobStore(self.db)
+        store.record([_Posting("https://x.test/cleared", self.CLEARANCE_JD)])
+        store.close()
+
+    def _verdict(self):
+        store = JobStore(self.db)
+        try:
+            return store.get("https://x.test/cleared")["gate_verdict"]
+        finally:
+            store.close()
+
+    def _patch(self, holds_clearance):
+        from fastapi.testclient import TestClient
+        import api.main as main
+        return TestClient(main.app).patch(
+            "/api/profile/priya_raghunathan",
+            json={"updates": {"personal_info": {"work_authorization": {
+                "holds_clearance": holds_clearance}}}})
+
+    def test_saving_an_answer_rejudges_the_board(self):
+        from agents.orchestrator import refresh_board_gate
+        refresh_board_gate(None, "priya_raghunathan")
+        self.assertEqual(self._verdict(), UNDECIDABLE,
+                         "precondition: an unanswered clearance question")
+
+        response = self._patch("no")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(response.json()["rejudged"], 1)
+        self.assertEqual(self._verdict(), HIDDEN,
+                         "the answer was saved and the badge outlived it")
+
+    def test_a_save_never_fails_because_the_rejudge_did(self):
+        from unittest import mock
+        import agents.orchestrator as orchestrator
+
+        with mock.patch.object(orchestrator, "_board",
+                               side_effect=OSError("store unavailable")):
+            response = self._patch("no")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["rejudged"], 0)
+
+    def test_a_run_judges_the_rows_discovery_wrote(self):
+        from unittest import mock
+        import agents.orchestrator as orchestrator
+
+        seen = []
+        real = orchestrator.refresh_board_gate
+        with mock.patch.object(
+                orchestrator, "refresh_board_gate",
+                side_effect=lambda user, profile: seen.append((user, profile))
+                or real(user, profile)):
+            run = orchestrator.JobScoutOrchestrator(
+                profile_name="priya_raghunathan", user_id=None, mock_mode=True,
+                generate_pdf=False, max_resumes=1, backend="none")
+            with mock.patch.object(run, "_run_enrichment"), \
+                    mock.patch.object(run, "_run_analysis"), \
+                    mock.patch.object(run, "_run_generation"), \
+                    mock.patch.object(run, "_generate_summary"), \
+                    mock.patch.object(run, "_print_final_report"):
+                run.run(max_jobs=1)
+
+        self.assertEqual(seen, [(None, "priya_raghunathan")])
+        self.assertEqual(self._verdict(), UNDECIDABLE,
+                         "the row discovery left on the board was never judged")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -417,8 +417,9 @@ Departures, each for a reason stated in R90:
   `tests/test_scope_seam.py`, with the known-bad sources it proves itself
   against.
 - `test_hosted_mode_has_no_unscoped_call_site`, an expected failure that
-  **A5 is responsible for flipping.** It counts the 26 `None` call sites in
-  `api/main.py` statically, and at runtime under `JOBSCOUT_MODE=hosted`.
+  **A5 is responsible for flipping.** It counts the `None` call sites in
+  `api/main.py` statically, and at runtime under `JOBSCOUT_MODE=hosted`
+  (26 at A3, 28 after A4 and R93; the test is the count, not this line).
   `_as_the_api_serves` in `test_two_users.py` is the one line A5 changes there.
 
 ### A4. Work authorization (1–1½ days)
@@ -570,10 +571,15 @@ Q43 (Streamlit preferences crash on unanswered years, found by A4's test).
 --all`, the two `yash_pathak` corpus tests in `test_body_gate` and
 `test_experience_profile` (a company dropped only for a clearance demand is
 now undecidable — move the expectation), and `scripts/acceptance.py`, which
-could not complete in the container (no `pdflatex`). Also confirm the React
-board re-judges after About-you is saved: nothing in `Board.tsx` calls
-`POST /api/board/gate`, so if `api.ts` does not either, a badge will not
-clear until Streamlit or a run refreshes the store.
+could not complete in the container (no `pdflatex`).
+
+*Followed up 2026-09-22:* the third corpus test of this kind,
+`test_eligibility_gate`'s Scale AI DevOps posting, failed on the author's
+machine for exactly the clearance reason. It now asserts undecidable while
+the question is unanswered and hidden once it is answered "no". The React
+board did **not** re-judge, and worse, it was never judged at all. R93 wires
+the re-judge into `PATCH /api/profile` and the start of every run. Q43 is
+fixed. The `api.ts` types wait on Q41's push.
 
 ### A5. Accounts, session, per-route authorization (1½–2 days)
 
@@ -591,7 +597,7 @@ Lands **after** A3 — until the data is partitioned an ownership check returns
 **Left for A5 by A3, and each one fails the build until it is done:**
 
 - `tests/test_scope_seam.py::test_hosted_mode_has_no_unscoped_call_site` is
-  an expected failure. Flip it by giving every one of `api/main.py`'s 26
+  an expected failure. Flip it by giving every one of `api/main.py`'s
   `None` call sites the session's caller. Local mode keeps `None` through the
   identity dependency, not as a literal. The runtime half's probe requests
   will need a session cookie.
