@@ -346,6 +346,11 @@ def excludes_entry_level(text: str) -> bool:
 # `personal_info.us_citizen`, `.permanent_resident` and `.visa_status` have been
 # on every profile since R16 and were read by nothing. The only genuinely new
 # one is whether the user holds a clearance, which no resume could imply.
+#
+# A4 replaced those booleans with `personal_info.work_authorization`: three
+# answers, each "yes", "no" or "unknown", read only through `work_answer`.
+# The booleans could not say "unknown", so a profile that never answered was
+# judged a non-US person without sponsorship rights or a clearance.
 # ---------------------------------------------------------------------------
 
 # Held vs obtainable is the whole design. A posting that demands an *active*
@@ -450,11 +455,21 @@ def _plain(text: str) -> str:
     return re.sub(r"\s+", " ", text)
 
 
-def _is_us_person(profile) -> bool:
-    """Citizen or permanent resident — the ITAR sense of the term."""
-    personal = getattr(profile, "personal_info", None)
-    return bool(getattr(personal, "us_citizen", False)
-                or getattr(personal, "permanent_resident", False))
+def work_answer(profile, field: str) -> str:
+    """
+    One `work_authorization` answer: "yes", "no" or "unknown".
+
+    The only reader of those answers, and it is where absence becomes
+    unknown rather than no. `_is_us_person` read `us_citizen` with a default
+    of False, so a profile that never said anything was confidently not a US
+    person (A4). Anything that is not literally "yes" or "no" — a missing
+    section, a missing field, a value this code does not recognise — is
+    unknown here, never a guess in either direction.
+    """
+    auth = getattr(getattr(profile, "personal_info", None),
+                   "work_authorization", None)
+    value = auth.get(field) if isinstance(auth, dict) else getattr(auth, field, None)
+    return value if value in ("yes", "no") else "unknown"
 
 
 def posting_demands(text: str) -> dict:
@@ -499,51 +514,75 @@ def posting_demands(text: str) -> dict:
     return demands
 
 
+def _judge_demands(demands: dict, profile) -> tuple:
+    """
+    (ruled_out, unanswered) — what the posting demands, against the answers.
+
+    Three-valued on purpose. A demand meets "yes" (passes), "no" (rules out)
+    or "unknown" (neither — the reader has not said). Unknown-as-eligible is
+    the prefer-not-to-say bug this replaced; unknown-as-ineligible empties the
+    board for every new profile, since the template starts unknown.
+
+    **One entailment, and only one:** a US person cannot need sponsorship, so
+    `us_person == "yes"` satisfies a no-sponsorship posting even when
+    `needs_sponsorship` is unanswered. That follows from an answer. The
+    reverse does not hold — not needing sponsorship says nothing about
+    citizenship (a TN or an H-4 EAD holder needs none) — and no further
+    entailments are chained without a decision to do so.
+    """
+    clearance = work_answer(profile, "holds_clearance")
+    us_person = work_answer(profile, "us_person")
+    sponsorship = work_answer(profile, "needs_sponsorship")
+
+    ruled_out, unanswered = [], []
+
+    if demands["clearance_held"]:
+        if clearance == "no":
+            ruled_out.append(
+                "requires a security clearance you already hold; this profile "
+                "says it does not have one")
+        elif clearance == "unknown":
+            unanswered.append(
+                "requires an active security clearance, and you have not said "
+                "whether you hold one")
+
+    if demands["us_person"]:
+        if us_person == "no":
+            ruled_out.append(
+                "is restricted to US citizens or permanent residents "
+                "(clearance, ITAR or export-control work)")
+        elif us_person == "unknown":
+            unanswered.append(
+                "is restricted to US citizens or permanent residents, and you "
+                "have not said whether you are one")
+
+    if demands["no_sponsorship"] and us_person != "yes":
+        if sponsorship == "yes":
+            ruled_out.append(
+                "states it does not sponsor visas, and this profile needs "
+                "sponsorship")
+        elif sponsorship == "unknown":
+            unanswered.append(
+                "states it does not sponsor visas, and you have not said "
+                "whether you will need sponsorship")
+
+    return ruled_out, unanswered
+
+
 def eligibility_disqualifiers(text: str, profile) -> list:
     """
     Reasons the posting's stated eligibility rules this candidate out.
 
-    Now only the judgement half: `posting_demands` reads the posting, and this
-    compares what it asks for against who the profile says you are.
+    Only the answers that settle it: a demand met by "unknown" is not a reason
+    here, and not a pass either — `judge_body` reports it as undecidable.
     """
     if not text:
         return []
+    return _judge_demands(posting_demands(text), profile)[0]
 
-    personal = getattr(profile, "personal_info", None)
-    holds_clearance = bool(getattr(personal, "holds_security_clearance", False))
-    us_person = _is_us_person(profile)
 
-    demands = posting_demands(text)
-    wants_held = demands["clearance_held"]
-    wants_us_person = demands["us_person"]
-    bars_sponsorship = demands["no_sponsorship"]
-
-    reasons = []
-    if wants_held and not holds_clearance:
-        reasons.append(
-            "requires a security clearance you already hold; this profile "
-            "does not list one")
-    if wants_us_person and not us_person:
-        reasons.append(
-            "is restricted to US citizens or permanent residents "
-            "(clearance, ITAR or export-control work)")
-    if bars_sponsorship and not us_person:
-        reasons.append(
-            "states it does not sponsor visas, and this profile needs "
-            "sponsorship")
-    return reasons
-
-def body_disqualifiers(text: str, profile) -> list:
-    """
-    Reasons this JD's body rules the profile out. Empty means keep.
-
-    Deterministic and offline by design: it runs on every enriched job, and a
-    gate that cost an API call per posting would be a gate nobody could afford
-    to leave on.
-    """
-    if not text:
-        return []
-
+def _experience_disqualifiers(text: str, profile) -> list:
+    """The R54 half: a years floor above the profile, or no early-career."""
     reasons = []
 
     floor = required_years(text)
@@ -556,9 +595,86 @@ def body_disqualifiers(text: str, profile) -> list:
     if excludes_entry_level(text):
         reasons.append("states that early-career applicants are not eligible")
 
-    reasons.extend(eligibility_disqualifiers(text, profile))
-
     return reasons
+
+
+def body_disqualifiers(text: str, profile) -> list:
+    """
+    Reasons this JD's body rules the profile out. Empty means *not ruled out*
+    — which is not the same as eligible; see `judge_body`.
+
+    Deterministic and offline by design: it runs on every enriched job, and a
+    gate that cost an API call per posting would be a gate nobody could afford
+    to leave on.
+    """
+    if not text:
+        return []
+    return _experience_disqualifiers(text, profile) + eligibility_disqualifiers(
+        text, profile)
+
+
+# ---------------------------------------------------------------------------
+# The verdict (pilot A4)
+#
+# `gate_reason` returned "" or a reason, and "" meant two things: this
+# posting was read and nothing rules you out, and nothing could be read at
+# all. R61 made the pipeline keep postings whose scrape failed, and the gate
+# waved every one of them through as eligible on a one-line snippet.
+#
+# So the verdict has three states and a discriminator rather than an
+# overloaded empty string. Undecidable jobs are **shown, badged and counted**:
+# never silently eligible, never silently hidden.
+# ---------------------------------------------------------------------------
+
+SHOWN, HIDDEN, UNDECIDABLE = "shown", "hidden", "undecidable"
+VERDICTS = (SHOWN, HIDDEN, UNDECIDABLE)
+
+UNREADABLE_REASON = ("its description could not be read, so its requirements "
+                     "are unknown")
+
+
+@dataclass(frozen=True)
+class GateVerdict:
+    """What the gates make of one posting for one profile."""
+    state: str
+    reason: str = ""
+
+
+def judge_body(text: str, profile, *, readable=None) -> GateVerdict:
+    """
+    The body gate's verdict, shared by the pipeline and the board (Q39).
+
+    `readable` is what the caller knows about the text's provenance: the
+    pipeline passes `scraped_successfully`, the board has no such column and
+    passes None, leaving length to decide via `posting_facts.demands_facet`.
+
+    Precedence: anything that rules the profile out hides the job, even on a
+    thin body — a snippet that says "8+ years" or "active TS/SCI" is the
+    posting's own words. Otherwise a demand met by an unanswered question, or
+    a body too thin to read, is undecidable. Otherwise shown.
+    """
+    # Imported here: posting_facts imports this module. `_gate_source` hashes
+    # both files, so an edit to the readability rule re-judges the board too.
+    from .posting_facts import demands_facet
+
+    text = text or ""
+    demands, basis = demands_facet(text)
+    if basis == "unknown":
+        # Too thin to trust as a whole, but what it does say, it says.
+        demands = posting_demands(text)
+    if readable is False:
+        basis = "unknown"
+
+    ruled_out, unanswered = _judge_demands(demands, profile)
+    ruled_out = (_experience_disqualifiers(text, profile) if text else []) + ruled_out
+
+    if ruled_out:
+        return GateVerdict(HIDDEN, ruled_out[0])
+    if unanswered:
+        return GateVerdict(UNDECIDABLE, unanswered[0])
+    if basis == "unknown":
+        return GateVerdict(UNDECIDABLE, UNREADABLE_REASON)
+    return GateVerdict(SHOWN)
 
 
 def evaluate(job, profile) -> FilterDecision:
@@ -764,10 +880,18 @@ def _score_us_location(loc_result: LocationResult, location_prefs) -> int:
 # file re-runs the gate over the store, which is milliseconds.
 # ---------------------------------------------------------------------------
 
+# `judge_body` reads its readability rule from posting_facts, so that file is
+# gate code too. A third file joining the gate belongs on this list, or an
+# edit to it leaves every stored verdict judged under the old rule.
+_GATE_FILES = ("job_filter.py", "posting_facts.py")
+
+
 def _gate_source() -> str:
-    """This module's own text. Any edit to a gate changes it."""
+    """The gate's own text. Any edit to a gate changes it."""
+    here = Path(__file__).parent
     try:
-        return Path(__file__).read_text(encoding="utf-8")
+        return "\n".join((here / name).read_text(encoding="utf-8")
+                         for name in _GATE_FILES)
     except OSError:  # pragma: no cover - only if the source is unreadable
         return __name__
 
@@ -782,16 +906,15 @@ def gate_fingerprint(profile) -> str:
     """
     prefs = getattr(profile, "job_preferences", None)
     locations = getattr(prefs, "locations", None)
-    personal = getattr(profile, "personal_info", None)
 
     relevant = json.dumps({
         "seniority": sorted(getattr(prefs, "seniority", None) or []),
         "years_experience": getattr(prefs, "years_experience", None),
         "exclude_keywords": sorted(getattr(prefs, "exclude_keywords", None) or []),
         "countries": sorted(getattr(locations, "countries", None) or []),
-        "us_citizen": bool(getattr(personal, "us_citizen", False)),
-        "permanent_resident": bool(getattr(personal, "permanent_resident", False)),
-        "clearance": bool(getattr(personal, "holds_security_clearance", False)),
+        "us_person": work_answer(profile, "us_person"),
+        "needs_sponsorship": work_answer(profile, "needs_sponsorship"),
+        "holds_clearance": work_answer(profile, "holds_clearance"),
     }, sort_keys=True)
 
     digest = hashlib.sha256()
@@ -800,18 +923,21 @@ def gate_fingerprint(profile) -> str:
     return digest.hexdigest()[:16]
 
 
-def gate_reason(row, profile) -> str:
+def gate_verdict(row, profile) -> GateVerdict:
     """
-    Why this stored job would not be shown, or "" if it would.
+    What the board should do with this stored job: shown, hidden, undecidable.
 
     Takes a store row rather than a `JobListing`, because this runs over what
-    the board already holds rather than over what discovery just found. Both
-    of the gates that can be re-checked from a stored row are applied: the body
-    gate (R54, R56) and the country gate (R55).
+    the board already holds rather than over what discovery just found. The
+    body gate (R54, R56, A4) via `judge_body`, then the country gate (R55),
+    which the pipeline's gate does not repeat because discovery applied it.
+
+    A country that rules the job out hides it even when the body was
+    undecidable: the location is a structured field, not the unread text.
     """
-    reasons = body_disqualifiers((row.get("full_jd") or ""), profile)
-    if reasons:
-        return reasons[0]
+    body = judge_body(row.get("full_jd") or "", profile)
+    if body.state == HIDDEN:
+        return body
 
     preferred = getattr(
         getattr(getattr(profile, "job_preferences", None), "locations", None),
@@ -819,7 +945,8 @@ def gate_reason(row, profile) -> str:
     if preferred:
         location = parse_location(row.get("location") or "")
         if location.country and location.country not in preferred:
-            return (f"Location country '{location.country}' not in preferred "
-                    f"countries {preferred}")
+            return GateVerdict(
+                HIDDEN, f"Location country '{location.country}' not in "
+                        f"preferred countries {preferred}")
 
-    return ""
+    return body

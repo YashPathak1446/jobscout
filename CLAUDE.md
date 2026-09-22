@@ -136,14 +136,15 @@ emits progress and writes state to `outputs/<date>/`.
   scrape is **kept, scored, and skipped only for resume generation** — the
   short description discovery found is thin, not false, so the job belongs on
   the board (R61). `scraped_successfully: False` is written at
-  `enrichment_agent.py:159`, and its **only** reader is
-  `orchestrator._split_unreadable` (`:1087`), which runs at generation.
+  `enrichment_agent.py:159`, and it is read in two places: `_apply_body_gate`
+  passes it to `job_filter.judge_body` as `readable`, and
+  `orchestrator._split_unreadable` skips the job at generation.
   *This line used to say "dropped, never scored", which is wrong on both
-  verbs and inverted R61's own record.* The gate does not read the flag at
-  all: `_apply_body_gate` (`:992`) runs `body_disqualifiers` on the snippet,
-  that returns `[]` for thin text (`job_filter.py:544`), and the job is stored
-  `gate_reason = ""` — **eligible**. Fixing that is the pilot plan's A4; do
-  not read this line as saying it is already handled.
+  verbs and inverted R61's own record.* Since A4 the gate's verdict has three
+  states — shown / hidden / **undecidable** — and an unreadable posting is
+  undecidable: kept, scored and counted, never silently eligible.
+  There are **two gates** sharing that judgement, one per run and one per
+  board read, and they read different text for the same job (Q39, Q40).
 - `analysis_agent` embeds resume components and JDs, then blends embedding
   score, keyword overlap, component importance and conditional triggers.
 - `generation_agent` — 2600 lines, the largest thing here — selects

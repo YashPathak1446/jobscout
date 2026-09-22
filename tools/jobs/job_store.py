@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     run_date    TEXT,
     selection   TEXT,
     gate_reason  TEXT,
-    gate_checked TEXT
+    gate_checked TEXT,
+    gate_verdict TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_score  ON jobs(score);
@@ -105,6 +106,15 @@ CREATE TABLE IF NOT EXISTS status_history (
 );
 CREATE INDEX IF NOT EXISTS idx_history_url ON status_history(url, changed_at);
 """
+
+
+# The verdict a row effectively has. `gate_verdict` arrived with A4; a row
+# judged before it has only `gate_reason`, where "" meant shown and anything
+# else hidden. Read through this rather than either column, so a row the gate
+# has not reached yet is neither lost nor promoted — and a never-judged row
+# (both NULL) is shown, because an unrun gate must not empty the board.
+_VERDICT = ("COALESCE(gate_verdict, CASE WHEN COALESCE(gate_reason, '') != ''"
+            " THEN 'hidden' ELSE 'shown' END)")
 
 
 def _now() -> str:
@@ -183,6 +193,7 @@ class JobStore:
         ("selection", "TEXT"),         # R57: why this resume looks like this
         ("gate_reason", "TEXT"),       # R62: why the board would not show it
         ("gate_checked", "TEXT"),      # R62: the fingerprint it was judged under
+        ("gate_verdict", "TEXT"),      # A4: shown / hidden / undecidable
     )
 
     def _migrate(self) -> None:
@@ -222,9 +233,10 @@ class JobStore:
         """
         Re-judge every row whose verdict predates the current gate (R62).
 
-        `evaluate(row) -> str` returns why the job would be hidden, or "" if it
-        would be shown. `fingerprint` covers both the gate's code and the parts
-        of the profile it reads, so a row is stale exactly when either changed.
+        `evaluate(row)` returns a `job_filter.GateVerdict`: a state — shown,
+        hidden or undecidable (A4) — and the reason, which for a shown job is
+        "". `fingerprint` covers both the gate's code and the parts of the
+        profile it reads, so a row is stale exactly when either changed.
 
         Returns how many rows were re-judged. After the first pass this is a
         cheap indexed comparison that matches nothing, which is what lets the
@@ -235,16 +247,19 @@ class JobStore:
             (fingerprint,)).fetchall()
 
         for row in stale:
+            verdict = evaluate(dict(row))
             self._db.execute(
-                "UPDATE jobs SET gate_reason = ?, gate_checked = ? WHERE url = ?",
-                (evaluate(dict(row)) or "", fingerprint, row["url"]))
+                "UPDATE jobs SET gate_verdict = ?, gate_reason = ?,"
+                " gate_checked = ? WHERE url = ?",
+                (verdict.state, verdict.reason or "", fingerprint, row["url"]))
 
         if stale:
             self._db.commit()
-            hidden = sum(1 for row in self._db.execute(
-                "SELECT gate_reason FROM jobs WHERE gate_reason != ''"))
+            counts = dict(self._db.execute(
+                f"SELECT {_VERDICT}, COUNT(*) FROM jobs GROUP BY 1").fetchall())
             logger.info(f"Board gate: re-judged {len(stale)} job(s), "
-                        f"{hidden} now hidden")
+                        f"{counts.get('hidden', 0)} now hidden, "
+                        f"{counts.get('undecidable', 0)} undecidable")
         return len(stale)
 
     def selection(self, url: str):
@@ -339,7 +354,7 @@ class JobStore:
 
     def query(self, status=None, min_score=None, company=None, source=None,
               unscored=False, has_resume=None, search=None, sort="best",
-              limit=200, offset=0, eligible=None) -> list:
+              limit=200, offset=0, eligible=None, unconfirmed=False) -> list:
         """
         The board's read path: filter, then order.
 
@@ -361,14 +376,19 @@ class JobStore:
                 after the fact, because filtering a page that SQL already
                 sliced turns a page of twenty into a page of twelve (R62).
                 A row never judged counts as eligible — an unrun gate must not
-                empty the board.
+                empty the board. Undecidable jobs are eligible: shown, and
+                badged (A4).
+            unconfirmed: Only the undecidable ones — what the board counts
+                as "shown, but unconfirmed".
         """
         where, params = [], []
 
         if eligible is True:
-            where.append("(gate_reason IS NULL OR gate_reason = '')")
+            where.append(f"{_VERDICT} != 'hidden'")
         elif eligible is False:
-            where.append("(gate_reason IS NOT NULL AND gate_reason != '')")
+            where.append(f"{_VERDICT} = 'hidden'")
+        if unconfirmed:
+            where.append(f"{_VERDICT} = 'undecidable'")
 
         if status:
             wanted = [status] if isinstance(status, str) else list(status)

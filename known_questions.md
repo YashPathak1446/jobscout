@@ -8525,6 +8525,66 @@ without the fix. Q38 was undercounted: `test_latex_escaping` calls
 `find_pdflatex` at import, so seven tests errored, not six, and one of them
 was a whole module that never loaded.
 
+## R92. Work authorization is three answers, and the gate has three verdicts (pilot A4)
+
+**Decision:** (2026-09-22) `personal_info.work_authorization` replaces
+`us_citizen`, `permanent_resident` and `holds_security_clearance`. Each of
+`us_person`, `needs_sponsorship` and `holds_clearance` is
+`Literal["yes","no","unknown"]`, defaulting to unknown. The gate's verdict is
+`GateVerdict(state, reason)` with state shown / hidden / **undecidable**,
+stored in a new `gate_verdict` column beside `gate_reason`. Undecidable jobs
+are shown and counted; the badge is the next commit.
+
+**The migration** runs on every read, never as a file rewrite:
+`migrate_work_authorization` is called by `PersonalInfo`'s before-validator
+and by `init_profile.read_personal`, which reads raw JSON for the About-you
+screen and would otherwise show blanks for answers the gate already uses.
+`test_work_authorization.py` walks the table through both and compares them,
+including the absent rows. Two decisions the pilot plan left open, both
+approved:
+
+- **Clearance `false` → unknown.** It was an unchecked checkbox's default.
+  Consequence, stated before it shipped: jobs demanding an active clearance
+  move from hidden to *shown, undecidable* for every existing profile,
+  including the author's.
+- **One entailment.** `us_person == "yes"` satisfies a no-sponsorship
+  posting even with `needs_sponsorship` unknown, because a US person cannot
+  need sponsorship. Not the reverse (a TN or H-4 EAD holder needs none and is
+  not a US person), and no further entailments without a decision.
+
+**Where the verdict lands.** One function, `job_filter.judge_body`, used by
+both gates (Q39): the pipeline's `_apply_body_gate`, which passes
+`scraped_successfully` as `readable`, drops only `hidden` and logs the
+undecidable count; and the board's `gate_verdict`, which adds the country
+gate and judges readability by length through `posting_facts.demands_facet`
+— whose only importer until now was its own test. A ruling-out beats an
+unanswered question even on a thin body, because "8+ years" in a snippet is
+still the posting's own words.
+
+**Chosen over** keeping the booleans and adding a "declined" flag: two
+representations of one fact guarantee a fix lands on one. **Rejected:**
+putting the judgement in a new module. `gate_fingerprint` hashes gate
+*source*, and a third file is a file it would have to be told about — so
+instead `_gate_source` now hashes `job_filter.py` and `posting_facts.py`,
+and a test asserts the readability rule is inside the hash.
+
+**Breaks if wrong:** an undecidable job is scored, and can take a top-K slot
+and get a generated resume, for someone who has not said whether they can
+hold it. Generation already skips unreadable postings (`_split_unreadable`);
+it does not skip unanswered ones. That is a product call left open, not an
+oversight.
+
+**Not verified here, and needed on the author's machine:**
+`baseline.py verify --all` reports MISSING in this container, as it did for
+A3, and `test_body_gate`/`test_experience_profile` hold two author-only tests
+asserting the exact set of companies `body_disqualifiers` drops for
+`yash_pathak` against the frozen corpus. If one of those was dropped *only*
+for an active-clearance demand, it is now undecidable instead and that
+assertion will fail — which is this decision, and the expectation should
+move, not the code. The acceptance run could not complete here (no
+`pdflatex`, embedding download 403); its stranger fixtures build profiles
+from the template, so `acceptance_clearance` now reaches scoring for them.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

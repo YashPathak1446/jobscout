@@ -41,11 +41,13 @@ from tools.jobs.job_filter import (  # noqa: E402
 
 
 class _Personal:
-    def __init__(self, us_citizen=True, permanent_resident=False,
-                 holds_security_clearance=False):
-        self.us_citizen = us_citizen
-        self.permanent_resident = permanent_resident
-        self.holds_security_clearance = holds_security_clearance
+    # Every answer given: these tests pin what a *settled* answer does. What
+    # an unanswered one does is `test_work_authorization.py` (A4).
+    def __init__(self, us_person="yes", needs_sponsorship="no",
+                 holds_clearance="no"):
+        self.work_authorization = {"us_person": us_person,
+                                   "needs_sponsorship": needs_sponsorship,
+                                   "holds_clearance": holds_clearance}
 
 
 class _Prefs:
@@ -59,9 +61,9 @@ class _Profile:
 
 
 CITIZEN = _Profile()
-CLEARED = _Profile(holds_security_clearance=True)
-GREEN_CARD = _Profile(us_citizen=False, permanent_resident=True)
-F1_OPT = _Profile(us_citizen=False, permanent_resident=False)
+CLEARED = _Profile(holds_clearance="yes")
+GREEN_CARD = _Profile()  # the same answers as a citizen: a US person
+F1_OPT = _Profile(us_person="no", needs_sponsorship="yes")
 
 
 # The two Scale AI postings, verbatim apart from surrounding markup.

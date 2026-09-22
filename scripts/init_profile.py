@@ -16,7 +16,8 @@ What it derives (see tools/profile/derivation.py):
     component_importance from resume order — top-2 high, next-4 medium
 
 What it deliberately leaves for you:
-    location, visa_status, us_citizen, permanent_resident
+    location, visa_status, work_authorization (us_person,
+    needs_sponsorship, holds_clearance)
         Legal and eligibility meaning a resume does not reliably state. An
         address line is where you live, not where you are allowed to work.
     target_roles, locations, exclude_keywords
@@ -37,6 +38,7 @@ from tools import paths
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from tools.profile.profile_schema import migrate_work_authorization  # noqa: E402
 from tools.profile.derivation import (  # noqa: E402
     derive_component_importance,
     derive_conditional_triggers,
@@ -50,8 +52,15 @@ TEMPLATE = paths.asset("profile_template.json")
 
 # Fields a human must confirm. Listed so the script can report them rather
 # than let a placeholder slip into a live run.
+#
+# The three work-authorization answers are dotted because they are nested,
+# and listed separately because each is its own question: one answered and
+# two left unknown is a profile the gate will badge, not a finished one (A4).
 NEEDS_HUMAN = {
-    "personal_info": ["location", "visa_status", "us_citizen", "permanent_resident"],
+    "personal_info": ["location", "visa_status",
+                      "work_authorization.us_person",
+                      "work_authorization.needs_sponsorship",
+                      "work_authorization.holds_clearance"],
     "job_preferences": ["target_roles", "locations", "exclude_keywords"],
 }
 
@@ -471,12 +480,17 @@ def read_personal(user_id, name: str) -> dict:
     """
     path = _profile_file(user_id, name)
 
-    personal = json.loads(path.read_text(encoding="utf-8")).get("personal_info", {})
+    raw = json.loads(path.read_text(encoding="utf-8")).get("personal_info", {})
+    # Through the same migration the loader applies, so this screen never
+    # shows blanks for answers the gate is already acting on (A4). Raw JSON
+    # would skip it: `PersonalInfo` is where it runs for everything else.
+    personal = migrate_work_authorization(raw)
+    auth = personal["work_authorization"]
     return {
         "location": personal.get("location", "") or "",
         "visa_status": personal.get("visa_status", "") or "",
-        "holds_security_clearance": bool(
-            personal.get("holds_security_clearance", False)),
+        "holds_security_clearance": auth.get("holds_clearance") == "yes",
+        "work_authorization": auth,
     }
 
 
@@ -693,7 +707,10 @@ def main():
     missing = [f for f in NEEDS_HUMAN["personal_info"] if f not in derived_info]
     print("\nSTILL NEEDS YOU — these are placeholders, not derived:")
     for field in missing:
-        print(f"    personal_info.{field:22} {profile['personal_info'].get(field)!r}")
+        value = profile["personal_info"]
+        for part in field.split("."):
+            value = value.get(part) if isinstance(value, dict) else None
+        print(f"    personal_info.{field:38} {value!r}")
     for field in NEEDS_HUMAN["job_preferences"]:
         print(f"    job_preferences.{field}")
 

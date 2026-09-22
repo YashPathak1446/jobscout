@@ -138,7 +138,7 @@ class TestPersonalInfoDerivation(unittest.TestCase):
         # Legal and eligibility meaning: an address line is where you live,
         # not where you are allowed to work.
         info = derive_personal_info(_FakeResume())
-        for field in ("location", "visa_status", "us_citizen", "permanent_resident"):
+        for field in ("location", "visa_status", "work_authorization"):
             self.assertNotIn(field, info)
 
     def test_omits_empty_values_rather_than_writing_blanks(self):

@@ -14,9 +14,11 @@
     "location": "",
     "degree": "",
     "visa_status": "",
-    "us_citizen": false,
-    "permanent_resident": false,
-    "holds_security_clearance": false,
+    "work_authorization": {
+      "us_person": "unknown",
+      "needs_sponsorship": "unknown",
+      "holds_clearance": "unknown"
+    },
     "_comment": [
       "Blank means unknown, and unknown is what a template knows about someone",
       "it has never met. These fields used to carry instructions as values \u2014",

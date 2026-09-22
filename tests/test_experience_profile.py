@@ -176,9 +176,9 @@ class TestWhatTheDerivedRangeFeeds(unittest.TestCase):
 
         a, b = _Profile(years=2), _Profile(years=9)
         for profile in (a, b):
-            profile.personal_info = type("P", (), {
-                "us_citizen": True, "permanent_resident": False,
-                "holds_security_clearance": False})()
+            profile.personal_info = type("P", (), {"work_authorization": {
+                "us_person": "yes", "needs_sponsorship": "no",
+                "holds_clearance": "no"}})()
         self.assertNotEqual(gate_fingerprint(a), gate_fingerprint(b))
 
 

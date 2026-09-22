@@ -7,8 +7,102 @@ All profile fields are defined here with validation rules.
 Location: jobscout_v3/tools/profile/profile_schema.py
 """
 
-from typing import Optional, Dict, List
-from pydantic import BaseModel, Field, field_validator
+from typing import Optional, Dict, List, Literal
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+# ---------------------------------------------------------------------------
+# Work authorization (pilot A4)
+#
+# Three questions, three answers each. A string rather than `Optional[bool]`
+# on purpose: `bool("unknown")` is True and `bool(None)` is False, and the gate
+# this replaces turned a missing attribute into a confident "not a US person"
+# exactly that way. Nothing can coerce "unknown" into an answer by accident.
+#
+# `us_person` is the ITAR sense — citizen or permanent resident — because that
+# is what the postings mean by it. `needs_sponsorship` is the question
+# employers ask, "now or in future", and is not derivable from a visa type:
+# an H-1B holder needs a transfer, F-1 OPT needs future sponsorship, a green
+# card needs none. `holds_clearance` means active today.
+#
+# Deliberately absent: clearance level, OPT/STEM-OPT end date, EAD. Nothing
+# reads them — `posting_demands` does not distinguish Secret from TS/SCI —
+# and a field with no reader is the recurring bug.
+# ---------------------------------------------------------------------------
+
+WorkAnswer = Literal["yes", "no", "unknown"]
+WORK_ANSWERS = ("yes", "no", "unknown")
+
+
+class WorkAuthorization(BaseModel):
+    """What this person may take, as answered — `unknown` until they say."""
+    us_person: WorkAnswer = "unknown"
+    needs_sponsorship: WorkAnswer = "unknown"
+    holds_clearance: WorkAnswer = "unknown"
+
+
+# The legacy dropdown's values that carried a fact. "Other / prefer not to
+# say", blank, and anything typed by hand carry none, and map to unknown.
+_LEGACY_US_PERSON = {"US Citizen", "Green Card"}
+_LEGACY_SPONSORED = {"F1 OPT", "F1 CPT", "H1B"}
+LEGACY_WORK_KEYS = ("us_citizen", "permanent_resident", "holds_security_clearance")
+
+
+def migrate_work_authorization(personal: dict) -> dict:
+    """
+    `personal_info` with `work_authorization` filled in and the legacy keys gone.
+
+    The one place old profiles are read. Called at load by `PersonalInfo`
+    and by `init_profile.read_personal`, which reads raw JSON for the
+    About-you screen — two readers, one function, so the screen never shows
+    blanks for answers the gate is already using. Nothing is written back:
+    the migrated answers reach disk when the user next saves About-you.
+
+    An existing `work_authorization` wins outright. Otherwise:
+
+        us_citizen: true, or permanent_resident: true   yes / no
+        visa_status "US Citizen" or "Green Card"          yes / no
+        visa_status "F1 OPT", "F1 CPT", "H1B"             no  / yes
+        anything else, or no keys at all                  unknown / unknown
+
+    Clearance separately: `holds_security_clearance: true` is yes, and
+    `false` is **unknown**, because it was an unchecked checkbox's default
+    and a default is not an answer.
+
+    The legacy `false/false` is the row that matters. The template shipped
+    it, so every profile built without choosing Citizen or Green Card has
+    it — including everyone who picked "prefer not to say", whom the old
+    derivation silently recorded as not a US person.
+    """
+    personal = dict(personal or {})
+    legacy = {key: personal.pop(key, None) for key in LEGACY_WORK_KEYS}
+
+    stored = personal.get("work_authorization")
+    if isinstance(stored, dict):
+        # A null sub-key is an absent one, not a fourth answer.
+        personal["work_authorization"] = {
+            field: stored.get(field) if stored.get(field) is not None else "unknown"
+            for field in WorkAuthorization.model_fields}
+        return personal
+    if stored is not None and not isinstance(stored, dict):
+        return personal  # let validation reject it rather than guess
+
+    visa = (personal.get("visa_status") or "").strip()
+    if (legacy["us_citizen"] is True or legacy["permanent_resident"] is True
+            or visa in _LEGACY_US_PERSON):
+        us_person, sponsorship = "yes", "no"
+    elif visa in _LEGACY_SPONSORED:
+        us_person, sponsorship = "no", "yes"
+    else:
+        us_person, sponsorship = "unknown", "unknown"
+
+    personal["work_authorization"] = {
+        "us_person": us_person,
+        "needs_sponsorship": sponsorship,
+        "holds_clearance": "yes" if legacy["holds_security_clearance"] is True
+        else "unknown",
+    }
+    return personal
 
 
 class PersonalInfo(BaseModel):
@@ -23,15 +117,19 @@ class PersonalInfo(BaseModel):
     school: str
     location: str
     degree: str
-    visa_status: str
-    us_citizen: bool
-    permanent_resident: bool
-    # The one eligibility fact no resume implies (R56). Defaulting to False is
-    # the safe direction here even though defaults that hide jobs are usually
-    # the wrong ones: a profile that says nothing about a clearance almost
-    # certainly does not have one, and the postings this excludes say in their
-    # own words that an applicant without one will not be considered.
-    holds_security_clearance: bool = False
+    # Free text for display. **Nothing reads it** for eligibility — that is
+    # `work_authorization`, which it used to be derived into (A4).
+    visa_status: str = ""
+    # Replaces `us_citizen`, `permanent_resident` and
+    # `holds_security_clearance`, which are migrated on load and then
+    # ignored. Keeping them alongside would guarantee a fix lands on one and
+    # not the other.
+    work_authorization: WorkAuthorization = Field(default_factory=WorkAuthorization)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy(cls, data):
+        return migrate_work_authorization(data) if isinstance(data, dict) else data
 
 
 class LocationPreferences(BaseModel):
@@ -43,13 +141,6 @@ class LocationPreferences(BaseModel):
     cities: List[str] = Field(default_factory=list)
     remote_ok: bool = True
     willing_to_relocate: bool = True
-
-
-class CitizenshipRestrictions(BaseModel):
-    """Citizenship requirements."""
-    us_citizenship_required: bool = False
-    green_card_acceptable: bool = True
-    h1b_sponsorship_ok: bool = True
 
 
 class JobPreferences(BaseModel):
@@ -498,6 +589,9 @@ class UserProfile(BaseModel):
 __all__ = [
     'UserProfile',
     'PersonalInfo',
+    'WorkAuthorization',
+    'WORK_ANSWERS',
+    'migrate_work_authorization',
     'JobPreferences',
     'ResumePreferences',
     'AgentPreferences',

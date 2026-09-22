@@ -105,9 +105,9 @@ class TestThingsClaimedToBeWired(unittest.TestCase):
                     countries = ["United States"]
 
             class personal_info:
-                us_citizen = True
-                permanent_resident = False
-                holds_security_clearance = False
+                work_authorization = {"us_person": "yes",
+                                      "needs_sponsorship": "no",
+                                      "holds_clearance": "no"}
 
         before = gate_fingerprint(_P)
         _P.job_preferences.years_experience = 9

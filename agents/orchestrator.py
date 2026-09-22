@@ -227,14 +227,23 @@ def board_jobs(user_id, status=None, min_score=None, has_resume=None, company=No
 
 
 def board_total(user_id, status=None, min_score=None, has_resume=None, company=None,
-                source=None, search=None, include_ineligible=False) -> int:
-    """How many jobs match, ignoring the page window."""
+                source=None, search=None, include_ineligible=False,
+                unconfirmed=False) -> int:
+    """
+    How many jobs match, ignoring the page window.
+
+    `unconfirmed=True` counts only the shown jobs the gate could not decide
+    (A4): a requirement met by a question you have not answered, or a posting
+    that could not be read. The board states that number next to the hidden
+    one, because a badge you have to scroll to find is not a count.
+    """
     store = _board(user_id)
     try:
         return store.count(status=status, min_score=min_score,
                            has_resume=has_resume, company=company,
                            source=source, search=search,
-                           eligible=None if include_ineligible else True)
+                           eligible=None if include_ineligible else True,
+                           unconfirmed=unconfirmed)
     finally:
         store.close()
 
@@ -250,7 +259,7 @@ def refresh_board_gate(user_id, profile_name: str) -> int:
     Non-fatal. A board that cannot re-judge should show what it has rather than
     refuse to render, so a failure here is logged and the stale verdicts stand.
     """
-    from tools.jobs.job_filter import gate_fingerprint, gate_reason
+    from tools.jobs.job_filter import gate_fingerprint, gate_verdict
 
     try:
         profile = load_profile(profile_name, user_id=user_id)
@@ -263,7 +272,7 @@ def refresh_board_gate(user_id, profile_name: str) -> int:
         store = _board(user_id)
         return store.refresh_gate(
             gate_fingerprint(profile),
-            lambda row: gate_reason(row, profile),
+            lambda row: gate_verdict(row, profile),
         )
     except Exception as exc:
         logger.warning(f"Board gate not refreshed: {exc}")
@@ -1044,25 +1053,41 @@ class JobScoutOrchestrator:
         Non-fatal by construction. A job that survives is scored as before; a
         job that does not is logged with the reason, because a filter that
         silently removes things is the shape this project keeps regretting.
-        """
-        from tools.jobs.job_filter import body_disqualifiers
 
-        kept, dropped = [], []
+        The verdict is `judge_body`'s, the same function the board's gate
+        uses (Q39), so the two cannot disagree about the same text. Only
+        `hidden` drops. An undecidable job — a scrape that failed (R61), or a
+        requirement met by a question the profile has not answered (A4) — is
+        kept and scored, and counted here rather than passed silently.
+        """
+        from tools.jobs.job_filter import HIDDEN, UNDECIDABLE, judge_body
+
+        kept, dropped, undecided = [], [], []
         for job in jobs or []:
-            reasons = body_disqualifiers(job.get("full_jd", ""), self.profile)
-            if reasons:
-                dropped.append((job, reasons))
-            else:
-                kept.append(job)
+            verdict = judge_body(
+                job.get("full_jd", ""), self.profile,
+                readable=job.get("scraped_successfully") is not False)
+            if verdict.state == HIDDEN:
+                dropped.append((job, verdict.reason))
+                continue
+            if verdict.state == UNDECIDABLE:
+                undecided.append((job, verdict.reason))
+            kept.append(job)
 
         if dropped:
             logger.info(f"🚫 Body gate dropped {len(dropped)} of {len(jobs)} "
                         f"job(s) whose description rules you out:")
-            for job, reasons in dropped:
+            for job, reason in dropped:
                 logger.info(f"   {job.get('company', '?')} — "
                             f"{str(job.get('title', ''))[:48]}")
-                for reason in reasons:
-                    logger.info(f"      {reason}")
+                logger.info(f"      {reason}")
+        if undecided:
+            logger.info(f"❔ Body gate could not decide {len(undecided)} of "
+                        f"{len(jobs)} job(s); kept, and marked on the board:")
+            for job, reason in undecided:
+                logger.info(f"   {job.get('company', '?')} — "
+                            f"{str(job.get('title', ''))[:48]}")
+                logger.info(f"      {reason}")
 
         return kept
 

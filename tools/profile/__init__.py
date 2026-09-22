@@ -7,6 +7,9 @@ Provides user profile loading and validation.
 from .profile_schema import (
     UserProfile,
     PersonalInfo,
+    WorkAuthorization,
+    WORK_ANSWERS,
+    migrate_work_authorization,
     JobPreferences,
     ResumePreferences,
     AgentPreferences,
@@ -38,6 +41,9 @@ __all__ = [
     # Schema
     'UserProfile',
     'PersonalInfo',
+    'WorkAuthorization',
+    'WORK_ANSWERS',
+    'migrate_work_authorization',
     'JobPreferences',
     'ResumePreferences',
     'AgentPreferences',

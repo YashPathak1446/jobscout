@@ -141,8 +141,17 @@ class TestTheTemplateStoresNoInstructions(unittest.TestCase):
                 "offer an answer the user never gave")
 
     def test_it_asserts_nothing_about_citizenship(self):
-        self.assertFalse(self.personal.get("us_citizen"))
-        self.assertFalse(self.personal.get("permanent_resident"))
+        """
+        It used to ship `us_citizen: false, permanent_resident: false`, which
+        is not silence: it is "not a US person", and every profile the wizard
+        built carried it unless the user picked Citizen or Green Card (A4).
+        """
+        self.assertEqual(self.personal.get("work_authorization"), {
+            "us_person": "unknown", "needs_sponsorship": "unknown",
+            "holds_clearance": "unknown"})
+        for legacy in ("us_citizen", "permanent_resident",
+                       "holds_security_clearance"):
+            self.assertNotIn(legacy, self.personal)
 
     def test_the_guidance_still_exists_somewhere(self):
         """Blanking the fields must not delete what they meant."""
