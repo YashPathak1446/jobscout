@@ -9266,6 +9266,23 @@ one worker, so no shared store is needed yet); or Fly's proxy-level limits.
 **Leaning:** in process, keyed on email and on `Fly-Client-IP`, before A12.
 Revisit when there is more than one machine.
 
+## Q47. The API hands callers absolute server paths
+
+**Status:** Open, found 2026-09-22 by A5's listing test. `/api/board/stats`
+returns `path`, the absolute location of the caller's `jobs.db`, and nothing
+in React reads it. `/api/runs` returns each run's absolute directory,
+`/api/run/{id}` returns `output_dir`, and `POST /api/profile` returns
+`profile_path`. Hosted, each of these is
+`/data/users/<caller's id>/...`. It is the caller's own id, so this is not a
+cross-user leak, and A5's tests do not treat it as one. But it tells every
+caller the server's layout, and a path a client can read is a path a client
+will one day send back.
+
+Options: strip them in the API as a transport decision (the `_without_jd`
+precedent), sending paths relative to the caller's home where a client
+genuinely needs one, as `/api/file` already takes. **Leaning:** that,
+checking each field for a React reader first. `runs[].path` has one.
+
 ---
 
 # Out of scope
