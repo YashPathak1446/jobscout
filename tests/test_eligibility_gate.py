@@ -34,9 +34,13 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from tools.jobs.job_filter import (  # noqa: E402
+    HIDDEN,
+    UNDECIDABLE,
     _plain,
     body_disqualifiers,
     eligibility_disqualifiers,
+    judge_body,
+    work_answer,
 )
 
 
@@ -292,17 +296,42 @@ class TestAgainstTheRealRun(unittest.TestCase):
                 return job
         return None
 
-    def test_the_scale_ai_devops_posting_is_finally_dropped(self):
+    def test_the_scale_ai_devops_posting_is_undecidable_until_clearance_is_answered(self):
         """
         It cleared R54 (2 years) and R55 (Washington, DC) and was the only
         posting in the run that no existing gate could see.
+
+        It used to be *dropped*, on `holds_security_clearance: false`. A4
+        made that false an unanswered question rather than a "no" — it was an
+        unchecked checkbox's default, and a default is not an answer — so a
+        profile that never said is now shown the posting **badged
+        undecidable**, not hidden (R92, decided 2026-09-22). The demand
+        itself is still detected: answer "no" and it drops, with the same
+        reason it always had. Both halves are asserted, so this cannot pass
+        by the detection going quiet.
         """
         job = self._first("Scale AI", "DevOps")
         if job is None:
             self.skipTest("posting not in this run")
-        reasons = eligibility_disqualifiers(job.get("full_jd", ""), self.profile)
-        self.assertTrue(reasons)
+        text = job.get("full_jd", "")
+
+        if work_answer(self.profile, "holds_clearance") != "unknown":
+            self.skipTest("this profile has answered the clearance question; "
+                          "the undecidable half needs it unanswered")
+
+        self.assertEqual(eligibility_disqualifiers(text, self.profile), [],
+                         "an unanswered clearance question is not a reason")
+        verdict = judge_body(text, self.profile,
+                             readable=job.get("scraped_successfully"))
+        self.assertEqual(verdict.state, UNDECIDABLE)
+        self.assertIn("clearance", verdict.reason)
+
+        answered = self.profile.model_copy(deep=True)
+        answered.personal_info.work_authorization.holds_clearance = "no"
+        reasons = eligibility_disqualifiers(text, answered)
+        self.assertTrue(reasons, "the clearance demand is no longer detected")
         self.assertIn("clearance", reasons[0])
+        self.assertEqual(judge_body(text, answered).state, HIDDEN)
 
     def test_the_forward_deployed_posting_is_not_dropped_on_eligibility(self):
         """
