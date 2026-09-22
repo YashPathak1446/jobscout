@@ -23,6 +23,39 @@ API = ROOT / "api" / "main.py"
 ALLOWED_PROJECT_MODULES = {"agents.orchestrator", "scripts.init_profile"}
 PROJECT_PACKAGES = {"agents", "tools", "scripts", "config"}
 
+# Facade functions the HTTP layer legitimately reaches for and the Streamlit
+# view does not. Both are here for one reason: HTTP addresses resources by
+# URL and an in-process view does not.
+#
+#   board_job      `/api/job/{id}` needs a single-row read. `app.py` renders
+#                  the board and its expanders from one `board_jobs()` page,
+#                  so it never fetches a row on its own.
+#   outputs_root   `/api/file` has to prove a requested path is inside the
+#                  outputs tree before serving it (api/main.py:579-582).
+#                  Streamlit hands `st.download_button` bytes it already
+#                  holds, so no containment check exists to anchor.
+#
+# Anything else appearing here fails the build. Re-exported through
+# `agents.orchestrator` rather than imported from `tools.paths` because
+# ALLOWED_PROJECT_MODULES above leaves no alternative.
+HTTP_ONLY = {"board_job", "outputs_root"}
+
+
+def _facade_imports(tree):
+    """
+    Every name a view imports from `agents.orchestrator`.
+
+    The authoritative surface, not an approximation of it: both views reach
+    the pipeline through this one statement, so what they import is exactly
+    what they can see. An AST name scan instead counts `Path` and `Optional`
+    as facade access.
+    """
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "agents.orchestrator":
+            found.update(alias.asname or alias.name for alias in node.names)
+    return found
+
 
 def _imported_modules(tree):
     """Every module named by an import in the file."""
@@ -155,24 +188,60 @@ class TestTheApiIsAViewLayerToo(unittest.TestCase):
         diverge. Streamlit and React are twin views of one surface; the
         moment one of them can see something the other cannot, a fix will
         land on whichever the author happens to be using.
+
+        This used to assert `(api_names & facade) <= facade` — true for
+        every possible input, so the one test standing between the two UIs
+        asserted nothing. Two things were wrong, not one:
+
+        1. An intersection with a set is a subset of that set. And the
+           failure message it carried ("the API calls something that is
+           not on the facade") named a condition the mechanism cannot
+           detect: intersecting *with* the facade can only yield facade
+           members. There was no non-tautological reading of it.
+        2. It compared AST name scans, so `Optional` and `Path` counted as
+           facade divergence — both files name them from typing/pathlib,
+           and both collide with orchestrator's module namespace. Sixteen
+           of the 43 names `dir()` reports are incidental imports.
+
+        Both views reach the facade through one `from agents.orchestrator
+        import (...)`, which `test_project_imports_are_limited_to_the_two_
+        entry_points` already guarantees is the only way in. So the import
+        list *is* the surface each view can see, and comparing the two
+        lists is exact rather than approximate.
         """
-        app_names = {n.attr if isinstance(n, ast.Attribute) else n.id
-                     for n in ast.walk(ast.parse(APP.read_text(encoding="utf-8")))
-                     if isinstance(n, (ast.Name, ast.Attribute))}
-        api_names = {n.attr if isinstance(n, ast.Attribute) else n.id
-                     for n in ast.walk(self.tree)
-                     if isinstance(n, (ast.Name, ast.Attribute))}
+        app_imports = _facade_imports(ast.parse(APP.read_text(encoding="utf-8")))
+        api_imports = _facade_imports(self.tree)
 
-        import agents.orchestrator as orch
-        facade = {n for n in dir(orch)
-                  if not n.startswith("_") and callable(getattr(orch, n))}
+        only_api = sorted(api_imports - app_imports)
+        only_app = sorted(app_imports - api_imports)
 
-        only_api = sorted((api_names & facade) - app_names)
-        # One-way for now: the React port is still being built, so it may
-        # legitimately lag. What it may not do is invent its own way in.
-        self.assertTrue(
-            (api_names & facade) <= facade,
-            f"the API calls something that is not on the facade: {only_api}")
+        # `only_app` is the legitimate lag: the React port is still being
+        # built and Streamlit is allowed to be ahead of it. `only_api` is
+        # not symmetrical — a facade function only the HTTP layer reaches
+        # for is a surface no one is reading in the other view, which is
+        # exactly where R69 and R70 both landed.
+        #
+        # Two are correct today, for one reason: HTTP addresses resources
+        # and an in-process view does not.
+        unexplained = sorted(set(only_api) - set(HTTP_ONLY))
+        self.assertEqual(
+            unexplained, [],
+            "the API reaches for a facade function Streamlit does not, with "
+            f"no reason recorded: {unexplained}. Either give the Streamlit "
+            "view the same access or add it to HTTP_ONLY with why.")
+
+        # And the exemption list must not rot. If Streamlit grows a detail
+        # view, `board_job` stops being HTTP-only and the entry becomes a
+        # comment crediting a distinction that no longer exists — R55's
+        # shape, and the shape of the tautology this test replaced.
+        stale = sorted(set(HTTP_ONLY) - set(only_api))
+        self.assertEqual(
+            stale, [],
+            f"HTTP_ONLY exempts facade names both views now import: {stale}. "
+            "Delete the entries.")
+
+        # Named so a reader of a passing run can still see the split.
+        self.assertIsInstance(only_app, list)
 
 
 if __name__ == "__main__":
