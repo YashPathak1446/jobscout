@@ -9250,6 +9250,22 @@ bumps, which is instance seven of the recurring bug. Until then the
 workaround is operational: rotating `JOBSCOUT_SESSION_SECRET` signs everyone
 out.
 
+## Q46. Sign-in has no rate limit
+
+**Status:** Open, deferred (decided 2026-09-22). `POST /api/session` and
+`POST /api/account` accept unlimited attempts. What limits guessing today:
+the instance is invite-only with about five accounts, passphrases are at
+least 12 characters, and each attempt costs a 16 MB scrypt, measured at
+37 ms in the dev container (not on a Fly shared-cpu machine).
+None of that is a limit. The scrypt cost also makes the endpoint a cheap way
+to load the one shared-cpu machine, which is the more likely harm at pilot
+scale.
+
+Options: a per-email and per-IP token bucket in process memory (one machine,
+one worker, so no shared store is needed yet); or Fly's proxy-level limits.
+**Leaning:** in process, keyed on email and on `Fly-Client-IP`, before A12.
+Revisit when there is more than one machine.
+
 ---
 
 # Out of scope
