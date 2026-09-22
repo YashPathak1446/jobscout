@@ -8768,6 +8768,73 @@ CLAUDE.md names: one machine always takes the same side. The fix is small
 (skip `~` entries on POSIX, or catch the `RuntimeError` per directory) and
 outside A3, so it is logged rather than folded in.
 
+## Q39. There are two eligibility gates, and the plan described one
+
+**Status:** Open, found 2026-09-22 while scoping pilot stage A4. A4 fixes the
+*judgement* both gates make; the fact that there are two stays true, and is
+recorded here so the divergence is not rediscovered as a surprise.
+
+The pilot plan's A4 said `_apply_body_gate` stores `gate_reason = ""` for an
+unreadable posting. It does not store anything. There are two gates over the
+same question, and they are separate code:
+
+```
+pipeline   orchestrator._apply_body_gate      body_disqualifiers(full_jd)
+           runs once per run, between enrichment and analysis; a job it
+           rules out is dropped from *this run* and never scored
+board      orchestrator.refresh_board_gate    job_filter.gate_reason(row)
+           runs before every board read over every stored row; writes
+           gate_reason / gate_checked, which is what hides a job (R62)
+```
+
+They differ in three ways, none of them written down before now:
+
+- **Inputs.** The pipeline gate sees the enriched job, including
+  `scraped_successfully`. The board gate sees a store row, which has no such
+  column, so it can only tell an unreadable posting by its length.
+- **Rules.** The board gate also applies the country gate (R55); the
+  pipeline gate does not, because discovery already did.
+- **Text.** They do not read the same JD — see Q40.
+
+A4 routes both through one judgement function so the verdict cannot differ
+for the same text and profile. What it does not do is merge them: the
+pipeline gate protects the analysis budget and the board gate protects the
+reader, and those run at different times for different reasons. **A rule
+added to one gate and not the other is the two-paths-one-walked shape.**
+The shared function makes that harder but does not make it impossible —
+`body_disqualifiers` is still importable on its own.
+
+## Q40. Enrichment never writes the JD it scraped back to the store
+
+**Status:** Open, found 2026-09-22 alongside Q39. Not fixed in A4.
+
+`JobStore.record` is called once, by discovery (`discovery_agent.py:145`),
+with whatever `full_jd` the listing carried. Enrichment then scrapes the real
+posting, and the pipeline scores and generates against *that* text — but
+nothing writes it back. `record` only fills a JD that was empty, and only on
+a later re-discovery.
+
+So for the same job the two gates of Q39 read different text:
+
+- **Greenhouse, Ashby, Lever, SmartRecruiters** inline or hydrate the JD at
+  discovery (`ats_search.py:94`, `_hydrate`), so the stored text is roughly
+  what enrichment would scrape. The divergence is small.
+- **Keyed sources** (Adzuna and similar) record a snippet or nothing. The
+  board judges the snippet forever, even after enrichment read the full
+  posting and the pipeline gate ruled on it.
+
+Before A4 that meant a keyed-source job read as eligible on the board
+(`body_disqualifiers("")` is `[]`) whatever its real body said. After A4 it
+reads as **undecidable** — shown, badged "couldn't read the requirements",
+and counted — which is honest but permanent, because the text that would
+resolve it is in the enrichment cache and the store never asks.
+
+The obvious fix is `store.set_jd(url, text)` after a successful scrape,
+wired in `_store_scores`'s neighbour. Open questions before doing it: whether
+a scraped body should replace a non-empty listing body (probably yes, it is
+the fuller text), and whether that write should invalidate `gate_checked`
+for the row (it must — a verdict on old text is R62's stale verdict).
+
 ---
 
 # Out of scope
