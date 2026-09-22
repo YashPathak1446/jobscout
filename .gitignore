@@ -90,6 +90,11 @@ data/master_resumes/*.doc
 # CREATE TABLE IF NOT EXISTS; neither ever needed to be in the repo.
 data/*.db
 
+# Every scoped user's whole tree (A3's partition). In a checkout the data home
+# is the repo root, so a hosted-mode run without JOBSCOUT_HOME writes each
+# account's profiles, resumes and databases here. A directory, not a list of
+# what is in it today (A5).
+/users/
 
 user_profiles/*.json
 !user_profiles/*.example.json

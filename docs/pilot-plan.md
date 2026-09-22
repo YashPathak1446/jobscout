@@ -608,6 +608,49 @@ Lands **after** A3 — until the data is partitioned an ownership check returns
   `data/accounts.db` is global by design, so it is not a user store and does
   not belong in the snapshot's table. Say so there when it lands.
 
+#### What shipped, and where it departed from the above (R95)
+
+All three items left by A3 are done, and all three were measured:
+
+1. `test_hosted_mode_has_no_unscoped_call_site` passes. The static count went
+   from 28 to 0. The runtime probe now signs in, and it asserts every facade
+   call receives *that* caller, not just a non-`None` one.
+2. `_as_the_api_serves(user)` returns `user`, and the A2.4 pair's decorators
+   are gone. Under `USER_B = USER_A` both go red; without it both are green.
+3. `path_snapshot.py verify` still says `unmoved`. `accounts.db` is noted
+   there as global rather than listed.
+
+Also as planned: `/api/health` lists the caller's own profiles. `api.ts`'s
+fetch sites each report a 401. `App.tsx` gained the `'signin'` state, and it
+renders nothing until the server has said which mode it is in.
+
+Departures and additions, each recorded in R95:
+
+- **Redeem, not only sign in.** `POST /api/account` claims an invite and
+  signs in. `scripts/admin.py invite` shipped now rather than with A6,
+  otherwise nobody could get in until A6. The other three subcommands stay
+  with A6.
+- **The Basic-auth gate is deleted** in the same change that proves the
+  session gate. It is not kept alongside.
+- **Local mode serves loopback only**, on top of decision 3's boot refusal.
+  A deploy that loses `JOBSCOUT_MODE` refuses to boot on Fly, or else 403s
+  and logs ERROR on every request from another machine, plus an ERROR at
+  boot for a non-loopback `--host`.
+- **Three 200s became 404s:** `POST /api/job/status` (a store behaviour
+  change), `POST /api/board/gate` and `POST /api/run` for a profile the
+  caller does not have.
+- **`/users/` is ignored.**
+
+Logged, not done: Q45 (a passphrase reset does not end sessions; ships with
+A6's `reset-passphrase`), Q46 (no sign-in rate limit), Q47 (the API sends
+absolute server paths) and Q48 (Streamlit serves every interface in local
+mode, the twin of the loopback guard).
+
+**Run on the author's machine before relying on A5:** `baseline.py verify
+--all`, which reports MISSING here as it did at A3, and the 14 suite errors
+that need `yash_pathak.json`, which is absent from this checkout and was
+failing identically before A5.
+
 ### A6. The delete path (½ day)
 
 `DELETE /api/account` (there are currently **zero** `@app.delete` routes).

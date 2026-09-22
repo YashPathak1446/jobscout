@@ -14,36 +14,55 @@ function `app.py` already calls, and the two UIs are interchangeable views of
 the same surface. Nothing in `agents/orchestrator.py` changed to make this
 work, which is the evidence the boundary was real.
 
-Local and single-user, by design. There is no auth here because there is no
-second user — the hosted tier is a separate project (Q15), and putting a
-half-built session layer in now would be the speculative generality R4
-rejected.
+**Two modes (pilot plan A5).** `JOBSCOUT_MODE=local`, the default, is one
+person on their own machine: no accounts, and every facade call is the
+unscoped user. It serves loopback clients only, and refuses anything else with
+a 403 and an ERROR log line — a deploy that lost the flag has to be loud, not
+open. `JOBSCOUT_MODE=hosted` needs `JOBSCOUT_SESSION_SECRET` or the import
+below refuses to boot, and every `/api` route except signing in names its
+caller through a signed session cookie.
 
-**That stops being true the moment this is deployed**, and the thing standing
-in the way was easy to miss: the CORS list below pins the browser to
-`localhost:5173`, so it is currently the only reason nineteen unauthenticated
-endpoints are not reachable from anywhere. Deploying *requires* changing it.
-So `JOBSCOUT_ACCESS_SECRET` gates the whole app behind one shared password
-until real accounts exist — not a session layer, deliberately: one secret, no
-users, no roles, and it is deleted the day managed auth lands. Unset, nothing
-changes for a local run.
+**Authorization is by partition, not by predicate.** No route checks that a
+job, a run or a file "belongs" to the caller: each one reads the caller's own
+stores (A3), where somebody else's job, run or file does not exist. So another
+user's identifier gets exactly the 404 a made-up one does, byte for byte, and
+`tests/test_authorization.py` holds that. A 403 would be a confirmation that
+the thing exists.
+
+`_caller` is how a route learns who is asking, and every `/api` route outside
+`OPEN_ROUTES` must depend on it — `test_every_api_route_names_its_caller`
+walks the routes and fails on one that does not. Local mode's `None` comes out
+of that dependency, never out of a literal at a call site, which is what
+`test_hosted_mode_has_no_unscoped_call_site` counts.
+
+The shared-password Basic-auth gate this file carried until A5 is gone. It was
+authentication without authorization, and its docstring said it would be
+deleted the day accounts landed rather than extended.
 
 Run it with:
     uvicorn api.main:app --reload --port 8000
 """
 
+import ipaddress
+import logging
 import os
-import secrets
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from agents.orchestrator import (
+    SESSION_COOKIE,
+    SESSION_TTL_SECONDS,
+    EmailTaken,
+    InviteRefused,
+    PassphraseRefused,
+    account_email,
     active_runs,
     available_profiles,
     backend_status,
@@ -53,17 +72,22 @@ from agents.orchestrator import (
     board_sorts,
     board_stats,
     board_total,
+    check_hosting,
     derived_levels,
     ghosted_jobs,
+    hosting_mode,
     job_history,
     job_selection,
     job_statuses,
     pdflatex_available,
     previous_runs,
+    redeem_invite,
     refresh_board_gate,
     score_bands,
     seniority_levels,
+    session_user,
     set_job_status,
+    sign_in,
     start_run,
     run_status,
     user_outputs_root,
@@ -82,14 +106,41 @@ from scripts.init_profile import (
     write_component_rules,
 )
 
-# **Every `None` passed as a user below is the gap A5 closes.** Since A3 every
-# facade call names whose data it touches, and `None` is the unscoped layout:
-# one directory for every caller. That is correct on localhost, where there is
-# one person, and it is what a hosted instance still does until the session
-# cookie (A5/A6) gives each request a caller to name. Stated at each call site
-# rather than hidden in a default so the gap stays countable —
-# `test_hosted_mode_has_no_unscoped_call_site` counts it, and is an expected
-# failure until A5 brings the count to zero.
+# Refuse to boot an instance that cannot name its callers: `hosted` without a
+# session secret, a mode that is not one of the two words, or local mode on a
+# hosting platform. At import, so uvicorn exits before it binds.
+check_hosting()
+
+log = logging.getLogger("jobscout.api")
+
+
+def _bound_host(argv=None) -> Optional[str]:
+    """The `--host` uvicorn was started with, or None if it was not given."""
+    argv = sys.argv if argv is None else argv
+    for i, arg in enumerate(argv):
+        if arg == "--host" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--host="):
+            return arg.split("=", 1)[1]
+    return os.getenv("UVICORN_HOST")
+
+
+def _warn_if_local_mode_is_listening_widely(argv=None) -> bool:
+    """
+    Local mode bound past loopback — the shipped Dockerfile's `--host 0.0.0.0`
+    run without `JOBSCOUT_MODE=hosted` — is said at boot, at ERROR, before
+    the first request is refused. Said rather than refused: the middleware
+    below is what enforces, and this reads argv, which is a hint about the
+    bind and not the bind itself. Returns whether it warned.
+    """
+    host = _bound_host(argv)
+    if check_hosting() != "local" or host is None or _is_loopback(host):
+        return False
+    log.error("JOBSCOUT_MODE is local but uvicorn is bound to %s. Local mode "
+              "has no accounts; every request from another machine will be "
+              "refused. If this is a deploy, set JOBSCOUT_MODE=hosted and "
+              "JOBSCOUT_SESSION_SECRET.", host)
+    return True
 
 app = FastAPI(title="JobScout", version="1.0.0")
 
@@ -118,45 +169,86 @@ app.add_middleware(
 LIVENESS = "/healthz"
 
 
+def _is_loopback(host: Optional[str]) -> bool:
+    # Starlette's TestClient reports its peer as the literal "testclient",
+    # which no TCP connection can: a real peer is always an address.
+    if host is None or host == "testclient":
+        return True
+    try:
+        return ipaddress.ip_address(host.split("%")[0]).is_loopback
+    except ValueError:
+        return False
+
+
+def _from_elsewhere(request: Request) -> Optional[str]:
+    """The first non-loopback address this request came from, or None."""
+    peer = request.client.host if request.client else None
+    if not _is_loopback(peer):
+        return peer
+    # A reverse proxy on this machine makes every peer loopback, and says who
+    # it was forwarding for. Uvicorn already rewrites the peer from these when
+    # the proxy is loopback; checking them again costs nothing.
+    forwarded = request.headers.get("x-forwarded-for", "")
+    for hop in (part.strip() for part in forwarded.split(",")):
+        if hop and not _is_loopback(hop):
+            return hop
+    return None
+
+
+_warn_if_local_mode_is_listening_widely()
+
+
 @app.middleware("http")
-async def require_the_shared_secret(request: Request, call_next):
+async def local_mode_serves_this_machine_only(request: Request, call_next):
     """
-    One password in front of everything, while "everything" has no owner.
+    Local mode has no accounts and one unscoped user, which is correct on a
+    laptop and an open instance anywhere else. The mode is one environment
+    variable, and a deploy that drops it would otherwise come up silently
+    serving every caller one directory.
 
-    HTTP Basic, so a browser prompts for it and the React build needs no
-    change — the whole point is that this is temporary scaffolding that Day
-    3's managed auth deletes rather than extends.
-
-    **This is authentication, not authorization**, and the difference is the
-    part that ships broken: it establishes that a caller knows the password,
-    not that the data they are asking for is theirs. With one user those are
-    the same statement. With two they are not, and every endpoint will need
-    its own check that the `user_id` it is about matches the session — a board
-    row, a run, a generated file. Nothing here provides that and nothing here
-    should be mistaken for it.
+    So in local mode a request from a non-loopback peer is refused, on every
+    path including `/healthz` and the static build, and logged at ERROR every
+    time. A platform health check then fails the deploy, which is the point:
+    noisy, not open. There is no switch to allow it — a person who wants the
+    app reachable from another machine wants hosted mode, which has a door.
     """
-    secret = os.getenv("JOBSCOUT_ACCESS_SECRET")
-    if not secret or request.url.path == LIVENESS:
-        return await call_next(request)
-
-    offered = ""
-    header = request.headers.get("authorization", "")
-    if header.lower().startswith("basic "):
-        import base64
-        try:
-            decoded = base64.b64decode(header[6:]).decode("utf-8", "replace")
-            offered = decoded.partition(":")[2]
-        except Exception:                      # malformed header, not a match
-            offered = ""
-
-    # Constant-time: a plain `==` leaks the secret's prefix through timing,
-    # and this is the one comparison in the codebase where that matters.
-    if not secrets.compare_digest(offered, secret):
-        return Response(
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="JobScout"'},
-        )
+    if hosting_mode() == "local":
+        stranger = _from_elsewhere(request)
+        if stranger is not None:
+            log.error(
+                "Refused %s %s from %s: JOBSCOUT_MODE is local, which has no "
+                "accounts and serves loopback only. If this instance is "
+                "deployed, set JOBSCOUT_MODE=hosted and JOBSCOUT_SESSION_SECRET.",
+                request.method, request.url.path, stranger)
+            return Response(
+                status_code=403,
+                content="This JobScout instance is in local mode and serves "
+                        "this machine only.",
+                media_type="text/plain")
     return await call_next(request)
+
+
+def _caller(request: Request) -> Optional[str]:
+    """
+    Whose data this request is served from.
+
+    Local mode: `None`, the unscoped layout — one person, no accounts.
+    Hosted: the user id the session cookie names, or a 401. Absent, tampered,
+    expired, signed under another secret, or for a deleted account all get the
+    same 401 with the same body: which one it was is not the caller's business.
+    """
+    if hosting_mode() == "local":
+        return None
+    user = session_user(request.cookies.get(SESSION_COOKIE, ""))
+    if user is None:
+        raise HTTPException(status_code=401, detail="Sign in to continue.")
+    return user
+
+
+# The only `/api` routes a caller reaches without being signed in: finding out
+# whether you are, signing in, signing out, and redeeming an invite.
+OPEN_ROUTES = {("GET", "/api/session"), ("POST", "/api/session"),
+               ("DELETE", "/api/session"), ("POST", "/api/account")}
 
 
 @app.get(LIVENESS)
@@ -165,13 +257,104 @@ def healthz() -> dict:
     return {"ok": True}
 
 
+# ---------------------------------------------------------- session ----
+#
+# Invite-only (plan decision 2): `scripts/admin.py invite` prints a code, the
+# friend redeems it here with an email and a passphrase, and is signed in.
+# There is no public signup and no reset flow — the admin script is the reset.
+
+def _no_accounts_here() -> None:
+    raise HTTPException(status_code=404,
+                        detail="This instance runs in local mode and has no accounts.")
+
+
+def _set_session(response: Response, token: str) -> None:
+    # HttpOnly: no script reads it. Secure: never over plain HTTP (browsers
+    # treat localhost as secure, so a local hosted-mode run still works).
+    # SameSite=Strict: no other site's page can make a request that carries
+    # it, which is this app's CSRF defence — there is no token to forget.
+    response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_TTL_SECONDS,
+                        httponly=True, secure=True, samesite="strict", path="/")
+
+
+class SignIn(BaseModel):
+    email: str
+    passphrase: str
+
+
+class Redeem(BaseModel):
+    invite_code: str
+    email: str
+    passphrase: str
+
+
+@app.get("/api/session")
+def session_read(request: Request) -> dict:
+    """
+    Which mode this is, and who is signed in. Answers without a session,
+    because the screen that asks is the one deciding whether to show sign-in.
+
+    `user` is None for "nobody", never absent: the screen has to tell "not
+    signed in" from "not asked yet".
+    """
+    mode = hosting_mode()
+    if mode == "local":
+        return {"mode": mode, "user": None}
+    user = session_user(request.cookies.get(SESSION_COOKIE, ""))
+    return {"mode": mode,
+            "user": {"email": account_email(user)} if user else None}
+
+
+@app.post("/api/session")
+def session_create(request: SignIn, response: Response) -> dict:
+    """Sign in. One answer for an unknown email and a wrong passphrase."""
+    if hosting_mode() == "local":
+        _no_accounts_here()
+    token = sign_in(request.email, request.passphrase)
+    if token is None:
+        raise HTTPException(status_code=401,
+                            detail="That email and passphrase do not match an account.")
+    _set_session(response, token)
+    return {"signed_in": True}
+
+
+@app.delete("/api/session")
+def session_delete(response: Response) -> dict:
+    """Sign out. Works without a valid session: forgetting one is always allowed."""
+    response.delete_cookie(SESSION_COOKIE, path="/", secure=True, httponly=True,
+                           samesite="strict")
+    return {"signed_in": False}
+
+
+@app.post("/api/account")
+def account_create(request: Redeem, response: Response) -> dict:
+    """
+    Redeem an invite: attach an email and a passphrase, and sign in.
+
+    A code that never existed and one already used are the same 404 — which
+    of the two is a fact about somebody else's invite.
+    """
+    if hosting_mode() == "local":
+        _no_accounts_here()
+    try:
+        token = redeem_invite(request.invite_code, request.email, request.passphrase)
+    except InviteRefused as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except EmailTaken as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (PassphraseRefused, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _set_session(response, token)
+    return {"signed_in": True}
+
+
 # ------------------------------------------------------------- meta ----
 
 @app.get("/api/health")
-def health() -> dict:
+def health(user: Optional[str] = Depends(_caller)) -> dict:
     """What this machine can do, which the UI has to say out loud (R43)."""
     return {
-        "profiles": available_profiles(None),
+        "profiles": available_profiles(user),
         "backend": backend_status(),
         "pdflatex": pdflatex_available(),
         "statuses": list(job_statuses()),
@@ -180,7 +363,8 @@ def health() -> dict:
 
 
 @app.get("/api/levels")
-def levels(years: Optional[int] = Query(None, ge=0, le=YEARS_EXPERIENCE_MAX)) -> dict:
+def levels(years: Optional[int] = Query(None, ge=0, le=YEARS_EXPERIENCE_MAX),
+           user: Optional[str] = Depends(_caller)) -> dict:
     """
     Every seniority level, and the ones a number of years implies (R68).
 
@@ -203,7 +387,7 @@ class BackendRequest(BaseModel):
 
 
 @app.post("/api/backend")
-def backend(request: BackendRequest) -> dict:
+def backend(request: BackendRequest, user: Optional[str] = Depends(_caller)) -> dict:
     """
     What will rewrite bullets if this key is used, and what that costs.
 
@@ -217,6 +401,24 @@ def backend(request: BackendRequest) -> dict:
     caller should ask when the answer could have changed, not per keystroke.
     """
     return backend_status(request.key)
+
+
+# One answer for a profile that is not yours, wherever it might be. The loader's
+# own message names the directory it looked in, which is the server's layout.
+NO_SUCH_PROFILE = "No such profile"
+
+
+def _own_profile(user, name: str) -> None:
+    """
+    404 before doing anything with a profile the caller does not have.
+
+    Without this, a run for a missing profile started a thread that failed a
+    minute later, and a re-judge of one quietly reported zero rows moved.
+    Neither leaked anything, but both answered 200 about a profile that is
+    not the caller's to name.
+    """
+    if name not in available_profiles(user):
+        raise HTTPException(status_code=404, detail=NO_SUCH_PROFILE)
 
 
 # ------------------------------------------------------------ board ----
@@ -233,6 +435,7 @@ def board(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     include_ineligible: bool = False,
+    user: Optional[str] = Depends(_caller),
 ) -> dict:
     """
     One page of the board, and the total it is a page of.
@@ -244,7 +447,7 @@ def board(
     """
     criteria = dict(status=status, min_score=min_score, has_resume=has_resume,
                     company=company, source=source, search=search)
-    total = board_total(None, include_ineligible=include_ineligible, **criteria)
+    total = board_total(user, include_ineligible=include_ineligible, **criteria)
 
     # How many the gate is holding back under these same filters. R62 excludes
     # them by default and says the screen must state the number — "a filter
@@ -253,18 +456,18 @@ def board(
     # would have to issue a second query to work it out, and a number nobody
     # can be bothered to fetch is a number that stops being shown.
     hidden = 0 if include_ineligible else (
-        board_total(None, include_ineligible=True, **criteria) - total)
+        board_total(user, include_ineligible=True, **criteria) - total)
 
     # Shown, but not confirmed (A4): a requirement met by a question the
     # profile has not answered, or a posting that could not be read. Counted
     # under the same filters as `hidden`, for the same reason — each row
     # carries its own badge, and a badge you would have to page through to
     # tally is not a count.
-    unconfirmed = board_total(None, unconfirmed=True, **criteria)
+    unconfirmed = board_total(user, unconfirmed=True, **criteria)
 
     return {
         "jobs": [_without_jd(row)
-                 for row in board_jobs(None, sort=sort, limit=limit, offset=offset,
+                 for row in board_jobs(user, sort=sort, limit=limit, offset=offset,
                                        include_ineligible=include_ineligible,
                                        **criteria)],
         "total": total,
@@ -291,25 +494,25 @@ def _without_jd(row: dict) -> dict:
 
 
 @app.get("/api/board/stats")
-def stats() -> dict:
-    return board_stats(None)
+def stats(user: Optional[str] = Depends(_caller)) -> dict:
+    return board_stats(user)
 
 
 @app.get("/api/board/filters")
-def filters() -> dict:
+def filters(user: Optional[str] = Depends(_caller)) -> dict:
     """Companies and sources with counts, read from the store, not a list here."""
-    return board_filters(None)
+    return board_filters(user)
 
 
 @app.get("/api/board/bands")
-def bands() -> dict:
+def bands(user: Optional[str] = Depends(_caller)) -> dict:
     """Quartiles, so a screen can say where a job sits among yours (R67)."""
-    return score_bands(None)
+    return score_bands(user)
 
 
 @app.get("/api/board/ghosted")
-def ghosted(after_days: Optional[int] = None) -> list:
-    return ghosted_jobs(None, after_days=after_days)
+def ghosted(after_days: Optional[int] = None, user: Optional[str] = Depends(_caller)) -> list:
+    return ghosted_jobs(user, after_days=after_days)
 
 
 class GateRequest(BaseModel):
@@ -317,15 +520,16 @@ class GateRequest(BaseModel):
 
 
 @app.post("/api/board/gate")
-def gate(request: GateRequest) -> dict:
+def gate(request: GateRequest, user: Optional[str] = Depends(_caller)) -> dict:
     """Re-judge the stored rows against a profile. Returns how many moved."""
-    return {"rejudged": refresh_board_gate(None, request.profile)}
+    _own_profile(user, request.profile)
+    return {"rejudged": refresh_board_gate(user, request.profile)}
 
 
 # -------------------------------------------------------------- job ----
 
 @app.get("/api/job")
-def job(url: str) -> dict:
+def job(url: str, user: Optional[str] = Depends(_caller)) -> dict:
     """
     One job's detail: why it scored as it did, and everywhere it has been.
 
@@ -334,13 +538,13 @@ def job(url: str) -> dict:
     reached. The UI has to render that difference rather than showing an
     empty panel, because unknown is not the same as nothing to say.
     """
-    row = board_job(None, url)
+    row = board_job(user, url)
     if row is None:
         raise HTTPException(status_code=404, detail="No such job")
     return {
         "job": row,
-        "selection": job_selection(None, url),
-        "history": job_history(None, url),
+        "selection": job_selection(user, url),
+        "history": job_history(user, url),
     }
 
 
@@ -350,12 +554,15 @@ class StatusRequest(BaseModel):
 
 
 @app.post("/api/job/status")
-def update_status(request: StatusRequest) -> dict:
+def update_status(request: StatusRequest, user: Optional[str] = Depends(_caller)) -> dict:
     if request.status not in job_statuses():
         raise HTTPException(
             status_code=422,
             detail=f"{request.status!r} is not one of {list(job_statuses())}")
-    set_job_status(None, request.url, request.status)
+    # The same 404 `/api/job` gives: a job that is not on your board is not
+    # found, whether it is on nobody's or on somebody else's (A5).
+    if not set_job_status(user, request.url, request.status):
+        raise HTTPException(status_code=404, detail="No such job")
     return {"url": request.url, "status": request.status}
 
 
@@ -388,7 +595,7 @@ def _resolve_upload(user_id, filename: str) -> Path:
 
 
 @app.post("/api/resume/extract")
-async def resume_extract(file: UploadFile = File(...)) -> dict:
+async def resume_extract(file: UploadFile = File(...), user: Optional[str] = Depends(_caller)) -> dict:
     """
     Read an upload far enough to show it, without committing to anything.
 
@@ -398,7 +605,7 @@ async def resume_extract(file: UploadFile = File(...)) -> dict:
     own format — there is nothing a model guessed at.
     """
     try:
-        extracted = extract_resume(None, await file.read(), file.filename or "resume")
+        extracted = extract_resume(user, await file.read(), file.filename or "resume")
     except ValueError as exc:
         # A scanned image, or a PDF with no readable experience in it. The
         # message says which; it is written for the person, not the log.
@@ -429,7 +636,7 @@ class ProfileRequest(BaseModel):
 
 
 @app.post("/api/profile")
-def profile_create(request: ProfileRequest) -> dict:
+def profile_create(request: ProfileRequest, user: Optional[str] = Depends(_caller)) -> dict:
     """
     Build a profile from a confirmed resume.
 
@@ -438,11 +645,11 @@ def profile_create(request: ProfileRequest) -> dict:
     rebuild that discarded hand-tuned rules (R30). The 409 exists so the UI
     can ask rather than clobber.
     """
-    source = _resolve_upload(None, request.filename)
+    source = _resolve_upload(user, request.filename)
     resume_path = (save_extracted(request.schema_, source)
                    if request.schema_ else source)
     try:
-        return create_profile(None, resume_path, request.name, force=request.force)
+        return create_profile(user, resume_path, request.name, force=request.force)
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:  # surfaced, not swallowed
@@ -454,16 +661,16 @@ def profile_create(request: ProfileRequest) -> dict:
 # ------------------------------------------------------ setup: profile ----
 
 @app.get("/api/profile/{name}")
-def profile_read(name: str) -> dict:
+def profile_read(name: str, user: Optional[str] = Depends(_caller)) -> dict:
     """Everything the wizard's forms need, in the shape they need it."""
     try:
         return {
-            "personal": read_personal(None, name),
-            "preferences": read_preferences(None, name),
-            "components": read_component_rules(None, name),
+            "personal": read_personal(user, name),
+            "preferences": read_preferences(user, name),
+            "components": read_component_rules(user, name),
         }
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=NO_SUCH_PROFILE) from exc
 
 
 class ProfileUpdate(BaseModel):
@@ -471,7 +678,7 @@ class ProfileUpdate(BaseModel):
 
 
 @app.patch("/api/profile/{name}")
-def profile_update(name: str, request: ProfileUpdate) -> dict:
+def profile_update(name: str, request: ProfileUpdate, user: Optional[str] = Depends(_caller)) -> dict:
     """
     Save part of a profile without disturbing the rest.
 
@@ -482,9 +689,9 @@ def profile_update(name: str, request: ProfileUpdate) -> dict:
     not load. A form must not destroy what it never showed (R30).
     """
     try:
-        path = update_profile_fields(None, name, request.updates)
+        path = update_profile_fields(user, name, request.updates)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=NO_SUCH_PROFILE) from exc
     except ProfileInvalid as exc:
         # Nothing was written. A string detail, not FastAPI's error list, so
         # the screen can show it as it is (Q44).
@@ -500,7 +707,7 @@ def profile_update(name: str, request: ProfileUpdate) -> dict:
     # fingerprint changed are touched, and a failure logs rather than failing
     # the save.
     return {"saved": Path(path).name,
-            "rejudged": refresh_board_gate(None, name)}
+            "rejudged": refresh_board_gate(user, name)}
 
 
 class ComponentRules(BaseModel):
@@ -515,7 +722,8 @@ class ComponentRules(BaseModel):
 
 
 @app.put("/api/profile/{name}/components")
-def components_write(name: str, request: ComponentRules) -> dict:
+def components_write(name: str, request: ComponentRules,
+                     user: Optional[str] = Depends(_caller)) -> dict:
     """
     Save the tuning screen's edits.
 
@@ -525,10 +733,10 @@ def components_write(name: str, request: ComponentRules) -> dict:
     no longer has (R17); it now says that it kept one.
     """
     try:
-        saved = write_component_rules(None, name, request.importance, request.triggers,
+        saved = write_component_rules(user, name, request.importance, request.triggers,
                                       request.always, request.never)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail=NO_SUCH_PROFILE) from exc
     return {"saved": name, "id_problems": saved["id_problems"]}
 
 
@@ -550,7 +758,7 @@ class RunRequest(BaseModel):
 
 
 @app.post("/api/run")
-def run_start(request: RunRequest) -> dict:
+def run_start(request: RunRequest, user: Optional[str] = Depends(_caller)) -> dict:
     """
     Begin a run in the background and hand back its id at once (R51).
 
@@ -558,8 +766,9 @@ def run_start(request: RunRequest) -> dict:
     this response, because the browser that asked may be gone by the time it
     ends — which is the whole point: a reloaded page can find the run again.
     """
+    _own_profile(user, request.profile)
     run_id = start_run(
-        None,
+        user,
         request.profile,
         api_key=request.api_key,
         max_jobs=request.max_jobs,
@@ -571,7 +780,7 @@ def run_start(request: RunRequest) -> dict:
 
 
 @app.get("/api/run/{run_id}")
-def run_progress(run_id: str) -> dict:
+def run_progress(run_id: str, user: Optional[str] = Depends(_caller)) -> dict:
     """
     Where a run has got to, or 404 if there is no such run.
 
@@ -579,31 +788,31 @@ def run_progress(run_id: str) -> dict:
     progress yet" are different answers, and a UI given the second for the
     first would spin forever on a run that never started.
     """
-    status = run_status(None, run_id)
+    status = run_status(user, run_id)
     if status is None:
         raise HTTPException(status_code=404, detail="No such run")
     return status
 
 
 @app.get("/api/run")
-def runs_active() -> dict:
+def runs_active(user: Optional[str] = Depends(_caller)) -> dict:
     """
     What is still going, read from disk.
 
     A reloaded page has no memory of starting anything, so the answer cannot
     come from anything the browser holds.
     """
-    return {"active": active_runs(None)}
+    return {"active": active_runs(user)}
 
 
 @app.get("/api/runs")
-def runs(limit: int = Query(10, ge=1, le=50)) -> list:
+def runs(limit: int = Query(10, ge=1, le=50), user: Optional[str] = Depends(_caller)) -> list:
     """Past runs, because resumes outlive the session that made them."""
-    return previous_runs(None, limit=limit)
+    return previous_runs(user, limit=limit)
 
 
 @app.get("/api/file")
-def file(path: str):
+def file(path: str, user: Optional[str] = Depends(_caller)):
     """
     Serve a generated resume for download.
 
@@ -626,8 +835,8 @@ def file(path: str):
     # **Contained in the caller's root, not everybody's** (A3). The partition
     # and this guard are one change: partition first and a guard over the
     # shared root still permits cross-user download; tighten first and every
-    # download 404s. `None` until A5 has a caller to name.
-    root = user_outputs_root(None).resolve()
+    # download 404s. The caller is the session's since A5.
+    root = user_outputs_root(user).resolve()
     target = (root.parent / path).resolve()
     if root not in target.parents or not target.is_file():
         raise HTTPException(status_code=404, detail="No such generated file")

@@ -93,6 +93,9 @@ def resolvers(user_id) -> dict:
             user_id, f"data/master_resumes/{PROFILE}.tex"),
         "home": lambda: paths.user_home(user_id),
     }
+    # Not here, on purpose: `tools/accounts.py`'s `data/accounts.db`. It is
+    # global by design — it is how a request learns which user it is, so it
+    # cannot live under one — and this table lists user stores (A5).
 
 
 def snapshot(user_id=None) -> dict:

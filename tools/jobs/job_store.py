@@ -289,7 +289,7 @@ class JobStore:
              str(pdf_path) if pdf_path else None, url))
         self._db.commit()
 
-    def set_status(self, url: str, status: str) -> None:
+    def set_status(self, url: str, status: str) -> bool:
         """
         Record what the *user* decided, and when.
 
@@ -300,11 +300,20 @@ class JobStore:
         if status not in STATUSES:
             raise ValueError(f"Unknown status {status!r}; expected one of {STATUSES}")
 
-        self._db.execute("UPDATE jobs SET status = ? WHERE url = ?", (status, url))
+        # A URL that is not on this board is not a job whose status changed.
+        # This used to write a history row for it anyway and report nothing,
+        # so `POST /api/job/status` answered 200 for a job the caller did not
+        # have — and after A3, for a job that is someone else's (A5).
+        updated = self._db.execute(
+            "UPDATE jobs SET status = ? WHERE url = ?", (status, url)).rowcount
+        if not updated:
+            self._db.rollback()
+            return False
         self._db.execute(
             "INSERT INTO status_history (url, status, changed_at) VALUES (?,?,?)",
             (url, status, _now()))
         self._db.commit()
+        return True
 
     def history(self, url: str) -> list:
         """Every status this job has held, oldest first."""

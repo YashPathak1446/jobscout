@@ -8671,6 +8671,119 @@ Mutation-checked, each failing `test_years_bound`: no validation (5 fail),
 validating absolutely rather than by introduced error (1), Streamlit max back
 to 40 (1), no stored-value guard (2), React swallowing the failed lookup (1).
 
+## R95. Accounts, a session cookie, and every route serves its caller (pilot A5)
+
+**Decided 2026-09-22.** `tools/accounts.py` holds the accounts store, the
+session and the mode switch. `api/main.py` asks it who is calling through one
+dependency, `_caller`, and all 28 `None` call sites now pass that caller.
+
+**The store** is `data_home()/data/accounts.db`. It is global by design: it is
+how a request learns which user it is, so it cannot live under one. It holds
+`user_id`, `email`, the passphrase hash, `invite_code`, `created_at` and
+`deleted_at`. Passphrases use `hashlib.scrypt` (n=2^14, r=8, p=1, 16-byte
+salt), with the parameters stored beside each hash. Only the invite code's
+SHA-256 is stored. User ids are `secrets.token_hex(8)`. The redeem's
+UPDATE re-checks `email IS NULL`. Without that, two redeems of one code could
+both pass the SELECT, and the second would overwrite the first account's
+email and passphrase. This was found on review of the diff, and a test that
+injects the race fails without the re-check.
+*Chosen over* an id derived from the email: the id becomes a directory under
+`users/`, and an email in a path is personal data in every listing of the
+volume.
+
+**Invite-only.** `scripts/admin.py invite` prints a one-time code. The friend
+redeems it with `POST /api/account`, which creates the account and signs them
+in. A code that never existed, one already redeemed, and one whose account was
+deleted are the same 404. `reset-passphrase`, `list-users` and `delete-user`
+ship with A6.
+
+**The session cookie** is `user_id.expiry.HMAC-SHA256(user_id|expiry)` under
+`JOBSCOUT_SESSION_SECRET`, checked with `compare_digest`. It is HttpOnly,
+Secure, SameSite=Strict and lasts 14 days, fixed. SameSite=Strict is the CSRF
+defence. The account row is read on every request, so a deleted account stops
+working at once rather than when its cookie expires. Absent, tampered,
+expired, wrong-secret and deleted-account cookies all get one identical 401.
+
+**Two modes, and the flag fails closed.** An unset `JOBSCOUT_MODE` means
+`local`. Any other value that is not `local` or `hosted` refuses to boot.
+Hosted mode with a missing secret, or one under 32 bytes, refuses to boot.
+Losing the flag on a deploy would silently give an unauthenticated, unscoped
+instance, so three independent things stand in the way:
+
+1. `fly.toml` carries `JOBSCOUT_MODE = "hosted"` in `[env]`, committed rather
+   than set as a secret, and a test fails if it goes.
+2. Local mode refuses to boot while a hosting platform's own variable is set
+   (`FLY_APP_NAME` and five others).
+3. Local mode refuses every request whose peer (or `X-Forwarded-For` hop) is
+   not loopback, on every path including `/healthz`, with a 403 and an ERROR
+   line each time. It also logs ERROR at boot when uvicorn was started with a
+   non-loopback `--host`.
+
+Measured with real uvicorn: bound to `0.0.0.0` in local mode, loopback got
+200 and the container's own address got 403 plus the log line. With
+`FLY_APP_NAME` set, or hosted mode with no secret, the import raised
+`HostingMisconfigured` and uvicorn exited.
+*Rejected:* a switch to allow remote clients in local mode. Someone who wants
+the app reachable from another machine wants hosted mode, which has a door.
+
+**Authorization is by partition, and the tests hold it to "not found",
+indistinguishably.** No route checks ownership. Each route reads the caller's
+own stores, where nothing of anyone else's exists. `test_authorization`
+compares B's response for each of A's identifiers (job, status write, run,
+file, file by `../` traversal, profile read, update and components, upload,
+gate, run start) with the response for the same identifier after A's home is
+deleted, byte for byte. Each probe has a positive control signed in as A. A's
+tree is hashed before and after B's writes and must not change. Listings
+must not name A's things, and must equal an empty account's listings.
+
+**Three routes answered 200 about things the caller did not have.** None of
+them leaked anything, because a real absence got the same 200, but each one
+would have passed a lazy ownership test:
+
+- `JobStore.set_status` wrote a history row for a URL not on the board. It now
+  returns whether it updated anything, and the route returns 404 when it did
+  not. This changes the store's behaviour for the CLI as well.
+- `/api/board/gate` reported 0 re-judged for a missing profile.
+- `/api/run` started a thread for a missing profile, which failed later.
+
+The last two now check `available_profiles(caller)` first and 404. Profile
+404s carry a fixed detail, because the loader's message named the server
+directory it had looked in.
+
+**The Basic-auth gate is deleted** in the same change that proves the session
+gate. Its own docstring said it would be deleted the day accounts landed.
+`fly.toml`'s secrets line now names the session secret. It also no longer
+tells anyone to set `GOOGLE_API_KEY` (plan decision 4).
+
+**Closing tests (the R80 shape).** `test_every_api_route_names_its_caller`
+walks `app.routes`. It fails on any `/api` route outside `OPEN_ROUTES` that
+does not depend on `_caller`, and it proves itself against a toy app with one
+route that forgets. `test_hosted_mode_has_no_unscoped_call_site` is no longer
+an expected failure. Its runtime half now signs in and asserts that every
+facade call receives exactly that caller, which is stronger than "not
+`None`".
+
+**Mutation-checked.**
+- `STRANGER = A_EMAIL` fails all three ownership tests.
+- Removing the gate's profile check fails the `gate` probe.
+- Removing the status 404 fails the `job status` probe.
+- `USER_B = USER_A` in `test_two_users` turns the A2.4 pair red, and it is
+  green without the mutation. This is the recheck the plan deferred to A5.
+- Removing the boot check fails three tests.
+- Disabling the loopback refusal fails four.
+
+**Breaks if wrong / blast radius:**
+- A signing bug means forged identity. The mitigations are the tests above
+  and the account-row read on every request.
+- Rotating the secret signs everyone out.
+- A passphrase reset does not end existing sessions (Q45).
+- There is no rate limit on sign-in (Q46).
+- The React board now needs a session in hosted mode. Local mode is unchanged
+  and never shows sign-in.
+- `.gitignore` gains `/users/`. In a checkout the data home is the repo root,
+  so a hosted-mode run there would otherwise have left friends' trees
+  untracked but unignored.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

@@ -494,8 +494,11 @@ class TestTheChoiceReachesTheRun(unittest.TestCase):
             seen.update(kwargs)
             return "run-1"
 
-        with patch.object(main, "start_run", fake_start_run):
-            main.run_start(main.RunRequest(profile="p", backend="ollama"))
+        # Called as a function, so the caller is named here rather than by the
+        # session dependency, and "p" has to be a profile the caller has (A5).
+        with patch.object(main, "start_run", fake_start_run), \
+                patch.object(main, "available_profiles", lambda user_id: ["p"]):
+            main.run_start(main.RunRequest(profile="p", backend="ollama"), user=None)
         self.assertEqual(seen.get("backend"), "ollama")
 
     def test_an_empty_choice_reaches_the_run_as_no_opinion(self):
@@ -510,8 +513,9 @@ class TestTheChoiceReachesTheRun(unittest.TestCase):
 
         seen = {}
         with patch.object(main, "start_run",
-                          lambda user_id, profile, **kw: seen.update(kw) or "run-1"):
-            main.run_start(main.RunRequest(profile="p"))
+                          lambda user_id, profile, **kw: seen.update(kw) or "run-1"), \
+                patch.object(main, "available_profiles", lambda user_id: ["p"]):
+            main.run_start(main.RunRequest(profile="p"), user=None)
         self.assertIsNone(seen.get("backend"))
 
     def test_the_screen_sends_the_field(self):

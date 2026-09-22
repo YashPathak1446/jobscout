@@ -1,4 +1,4 @@
-# Fly config for the single-user deploy.
+# Fly config for the hosted, multi-user deploy (pilot plan A5).
 #
 # Rename `app` before the first `fly launch` — it is a global namespace.
 #
@@ -32,6 +32,14 @@ primary_region = "ord"
   # have survived a deploy as an empty board full of dead download links.
   JOBSCOUT_HOME = "/data"
   JOBSCOUT_WEB_DIST = "/app/web/dist"
+
+  # **The line that makes this instance have a door.** Without it the app is
+  # in local mode: no accounts, one unscoped user, every caller served one
+  # directory. Here rather than as a secret because a secret is a step a
+  # deploy can forget, and `test_hosted_boundary` fails if this line goes.
+  # Losing it anyway is not silent: local mode refuses to boot while
+  # FLY_APP_NAME is set, and refuses every non-loopback request if it does.
+  JOBSCOUT_MODE = "hosted"
 
 [[mounts]]
   source = "jobscout_data"
@@ -86,12 +94,19 @@ primary_region = "ord"
   size = "shared-cpu-1x"
   memory = "1gb"
 
-# Secrets are NOT set here. `fly secrets set GOOGLE_API_KEY=... JOBSCOUT_ACCESS_SECRET=...`
-# keeps them out of the repo and out of the image. A key in a committed file
-# is a key published to anyone who can read the repo, and this one is public.
+# Secrets are NOT set here. `fly secrets set JOBSCOUT_SESSION_SECRET=...` keeps
+# it out of the repo and out of the image; generate it with
+# `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Hosted mode
+# refuses to boot without it, or with fewer than 32 bytes. Rotating it signs
+# everyone out. A key in a committed file is a key published to anyone who can
+# read the repo, and this one is public.
 #
-# **`GOOGLE_API_KEY`, not `GEMINI_API_KEY`** — this line said the latter, which
-# nothing in the codebase reads (`config.py:173` is the only definition, and
-# `.env.example:2` had it right). Setting a secret nobody reads leaves the app
-# on local embeddings: R87's abstain path then reports NOT COMPARABLE and exits
-# 1, which is the gate working, but the deploy round trip is spent on a typo.
+# `JOBSCOUT_ACCESS_SECRET` is gone: the Basic-auth password it set was replaced
+# by accounts in A5, and a secret nothing reads is R89's shape. Unset it on an
+# existing app with `fly secrets unset JOBSCOUT_ACCESS_SECRET`.
+#
+# `GOOGLE_API_KEY` is deliberately not set either (pilot plan decision 4): each
+# friend brings their own key, which rides the request body and is never
+# stored. With no key the instance runs on the `none` rung, a complete product.
+# If one is ever set here, the name is `GOOGLE_API_KEY`, not `GEMINI_API_KEY`,
+# which nothing reads (R89).

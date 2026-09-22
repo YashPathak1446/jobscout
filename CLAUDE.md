@@ -214,11 +214,17 @@ vocabulary, component importance and JD triggers are *derived* from the resume
 (`tools/profile/derivation.py`), not hand-authored. A PDF or DOCX import is
 shown field by field for correction before anything is written (R33).
 
-**Hosting is in progress**, not done: `Dockerfile` and `fly.toml` exist, the API
-serves the built React from its own origin, and a shared secret gates it
-(`tests/test_hosted_boundary.py`). That gate is **authentication, not
-authorization** — no endpoint has a per-user check, and with one user the two
-coincide. `plan.md` tracks the rest.
+**Hosting is in progress**, not done: `Dockerfile` and `fly.toml` exist, and the
+API serves the built React from its own origin. `JOBSCOUT_MODE` picks one of
+two modes (`tools/accounts.py`, R95). **`local`**, the default, has no accounts
+and one unscoped user, and serves loopback clients only. **`hosted`** is
+invite-only accounts with a signed session cookie, and every `/api` route
+serves its caller's own partition. So another user's job, run or file is a
+404 identical to one that never existed (`tests/test_authorization.py`).
+Authorization is by partition, not by predicate: no route checks ownership,
+because nothing of anyone else's is in the stores a route reads. A new route
+must take `Depends(_caller)`, and `test_every_api_route_names_its_caller`
+fails on one that does not. `docs/pilot-plan.md` tracks the rest.
 
 ## The recurring bug in this codebase
 

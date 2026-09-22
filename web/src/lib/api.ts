@@ -142,6 +142,26 @@ export type BoardQuery = {
   include_ineligible?: boolean
 }
 
+/** Which mode the server runs in, and who is signed in (A5). */
+export type Session = {
+  mode: 'local' | 'hosted'
+  /** `null` is "nobody is signed in" — never "not asked yet". */
+  user: { email: string } | null
+}
+
+/**
+ * Fired when any call is answered 401: the session expired, was signed out
+ * elsewhere, or the account was deleted. `App` listens and shows sign-in, so
+ * no screen has to tell "signed out" apart from its own errors.
+ */
+export const SIGNED_OUT = 'jobscout:signed-out'
+
+function noticeSignedOut(response: Response): void {
+  if (response.status === 401) {
+    window.dispatchEvent(new Event(SIGNED_OUT))
+  }
+}
+
 async function get<T>(path: string, params?: Record<string, unknown>): Promise<T> {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(params ?? {})) {
@@ -151,6 +171,7 @@ async function get<T>(path: string, params?: Record<string, unknown>): Promise<T
   }
   const suffix = query.toString() ? `?${query}` : ''
   const response = await fetch(`/api${path}${suffix}`)
+  noticeSignedOut(response)
   if (!response.ok) {
     throw new Error(`${path} returned ${response.status}`)
   }
@@ -175,6 +196,7 @@ async function send<T>(method: string, path: string, body: unknown): Promise<T> 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
+  noticeSignedOut(response)
   if (!response.ok) {
     // A string `detail` is the server saying why in words — a profile save
     // refused because it would not load (Q44) — so it is the message. The
@@ -190,7 +212,35 @@ async function send<T>(method: string, path: string, body: unknown): Promise<T> 
   return response.json() as Promise<T>
 }
 
+/**
+ * The session calls. Separate from `send` because a 401 here is a wrong
+ * passphrase on the sign-in screen, not a session that ended — firing
+ * SIGNED_OUT for it would be the screen telling itself to appear.
+ */
+async function account(method: string, path: string, body: unknown): Promise<void> {
+  const response = await fetch(`/api${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}))
+    throw new Error(
+      typeof payload.detail === 'string'
+        ? payload.detail
+        : `${path} returned ${response.status}`,
+    )
+  }
+}
+
 export const api = {
+  session: () => get<Session>('/session'),
+  signIn: (email: string, passphrase: string) =>
+    account('POST', '/session', { email, passphrase }),
+  redeemInvite: (invite_code: string, email: string, passphrase: string) =>
+    account('POST', '/account', { invite_code, email, passphrase }),
+  signOut: () => account('DELETE', '/session', {}),
+
   health: () =>
     get<{
       profiles: string[]
@@ -227,6 +277,7 @@ export const api = {
     const form = new FormData()
     form.append('file', file)
     const response = await fetch('/api/resume/extract', { method: 'POST', body: form })
+    noticeSignedOut(response)
     if (!response.ok) {
       const body = await response.json().catch(() => ({}))
       throw new Error(body.detail ?? `Upload failed (${response.status})`)
@@ -245,6 +296,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
+    noticeSignedOut(response)
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}))
       // 409 is "that name is taken", which the screen turns into a question

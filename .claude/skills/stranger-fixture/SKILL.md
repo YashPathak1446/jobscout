@@ -39,8 +39,11 @@ python -m uvicorn api.main:app --reload --port 8000
 npm install --prefix web && npm run dev --prefix web        # 5173
 ```
 
-Leave `JOBSCOUT_ACCESS_SECRET` unset — the Basic-auth middleware at
-[api/main.py:109](api/main.py#L109) passes straight through when it is absent.
+Leave `JOBSCOUT_MODE` unset. That is local mode: no accounts and no sign-in
+screen, serving this machine only (`tools/accounts.py`). To walk the hosted
+sign-in as a stranger would, set `JOBSCOUT_MODE=hosted` and
+`JOBSCOUT_SESSION_SECRET` (32+ bytes), then run `python scripts/admin.py invite`
+and redeem the code on the sign-in screen.
 
 `python scripts/doctor.py` first if anything looks wrong. Most of what has gone
 wrong in this project was setup rather than logic.

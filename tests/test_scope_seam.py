@@ -438,9 +438,18 @@ _RETURNS = {"board_total": 0, "board_jobs": [], "board_stats": {},
             "active_runs": [], "previous_runs": [], "available_profiles": []}
 
 
-def _users_served_in_hosted_mode() -> dict:
-    """Route -> the user argument every facade call it made received."""
+def _users_served_in_hosted_mode() -> tuple:
+    """
+    (route -> the user argument every facade call it made received, and the
+    id of the account the probe was signed in as).
+
+    Hosted mode for real: a data home of its own, an account in it, and a
+    session cookie minted by signing in through the route. Each route is
+    probed once with that cookie, so the answer to "who was served" can be
+    compared with who asked.
+    """
     import api.main as main
+    from tests.signed_in import client, hosted, make_account
 
     served = {route: [] for route in _PROBES}
     current = {}
@@ -451,38 +460,37 @@ def _users_served_in_hosted_mode() -> dict:
             return _RETURNS[name]
         return call
 
-    patches = [mock.patch.object(main, name, recorder(name)) for name in _RETURNS]
-    # Not a scoped call, and on a Linux box without LaTeX `find_pdflatex`
-    # raises rather than returning None (logged as its own finding).
-    patches.append(mock.patch.object(main, "pdflatex_available", lambda: False))
-    patches.append(mock.patch.dict(os.environ, {"JOBSCOUT_MODE": "hosted"}))
-    for p in patches:
-        p.start()
-    try:
-        client = TestClient(main.app)
-        for route in _PROBES:
-            current["route"] = route
-            client.get(route)
-    finally:
-        for p in reversed(patches):
-            p.stop()
-    return served
+    with tempfile.TemporaryDirectory() as home, hosted(home):
+        caller = make_account("probe@example.com")
+        signed_in = client(main.app, email="probe@example.com")
+        patches = [mock.patch.object(main, name, recorder(name)) for name in _RETURNS]
+        # Not a scoped call, and on a Linux box without LaTeX `find_pdflatex`
+        # raises rather than returning None (logged as its own finding).
+        patches.append(mock.patch.object(main, "pdflatex_available", lambda: False))
+        for p in patches:
+            p.start()
+        try:
+            for route in _PROBES:
+                current["route"] = route
+                signed_in.get(route)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+    return served, caller
 
 
 @unittest.skipIf(TestClient is None, "fastapi not installed")
 class TestHostedModeNamesItsCaller(unittest.TestCase):
     """
-    `api/main.py` serves every caller as `None` — one directory for everybody —
-    because until A5/A6 there is no session to name a caller with. On
-    localhost that is correct. Hosted, it is the partition built and not used.
+    Until A5, `api/main.py` served every caller as `None` — one directory for
+    everybody — because there was no session to name a caller with. On
+    localhost that is correct. Hosted, it was the partition built and not used.
 
     Counted two ways, so neither can be satisfied by accident: statically (no
     call site passes a literal `None`, which is mode-blind by construction) and
     at runtime (with `JOBSCOUT_MODE=hosted`, no facade call a route makes
-    receives `None`). A5 is responsible for both. Its identity dependency
-    will still hand local mode `None` — that is not a literal at a call site —
-    and the probe requests below will need a session cookie, which is A5's to
-    add here.
+    receives anyone but the signed-in caller). Local mode still gets `None`,
+    out of `api.main._caller` rather than a literal at a call site.
     """
 
     def test_the_count_is_counting_something(self):
@@ -493,25 +501,24 @@ class TestHostedModeNamesItsCaller(unittest.TestCase):
         fails it.
         """
         self.assertIn("board_jobs", _scoped_callees())
-        served = _users_served_in_hosted_mode()
+        served, _ = _users_served_in_hosted_mode()
         silent = [route for route, calls in served.items() if not calls]
         self.assertEqual(silent, [], "these routes reached no facade call, so "
                                      "the hosted-mode probe says nothing about them")
 
-    # Flips at A5: the session names the caller, and every one of these
-    # becomes that caller's id. A green here before then means the count
-    # broke, not that the gap closed.
-    @unittest.expectedFailure
+    # Flipped at A5: the session names the caller. Stronger than "not None",
+    # which a route serving the wrong user would also pass — every call must
+    # be served as exactly the account that signed in.
     def test_hosted_mode_has_no_unscoped_call_site(self):
         self.assertEqual(_unscoped_call_sites(), [],
                          "api/main.py serves these calls as the unscoped user")
-        served = _users_served_in_hosted_mode()
-        unscoped = sorted({f"{route} -> {name}"
-                           for route, calls in served.items()
-                           for name, user in calls if user is None})
-        self.assertEqual(unscoped, [],
-                         "in hosted mode these routes serve every caller from "
-                         "one directory")
+        served, caller = _users_served_in_hosted_mode()
+        wrong = sorted({f"{route} -> {name}({user!r})"
+                        for route, calls in served.items()
+                        for name, user in calls if user != caller})
+        self.assertEqual(wrong, [],
+                         f"in hosted mode these routes serve someone other than "
+                         f"the caller ({caller!r})")
 
 
 # --------------------------------------------------------------------------

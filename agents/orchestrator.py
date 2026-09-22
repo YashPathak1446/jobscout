@@ -528,11 +528,16 @@ def board_stats(user_id) -> dict:
         store.close()
 
 
-def set_job_status(user_id, url: str, status: str) -> None:
-    """Record what the user decided about one job. Raises on a bad status."""
+def set_job_status(user_id, url: str, status: str) -> bool:
+    """
+    Record what the user decided about one job. Raises on a bad status.
+
+    False when the job is not on this user's board, and nothing is written —
+    the route turns that into the same 404 `/api/job` gives (A5).
+    """
     store = _board(user_id)
     try:
-        store.set_status(url, status)
+        return store.set_status(url, status)
     finally:
         store.close()
 
@@ -608,6 +613,72 @@ def backend_status(gemini_key: str = "", backend: str = None,
             "none": True,
         },
     }
+
+
+# ------------------------------------------------------------------------
+# Who is asking (pilot plan A5)
+#
+# The API may not import `tools.accounts`, so the door is opened through here
+# like everything else. The mode, the secret and the store all live in that
+# module; these only name what a view is allowed to ask of it.
+# ------------------------------------------------------------------------
+
+from tools.accounts import (  # noqa: E402, F401  re-exported for the view layer
+    SESSION_COOKIE,
+    SESSION_TTL_SECONDS,
+    EmailTaken,
+    HostingMisconfigured,
+    InviteRefused,
+    PassphraseRefused,
+)
+
+
+def hosting_mode() -> str:
+    """`local` (one unscoped user, no accounts) or `hosted`. Raises otherwise."""
+    from tools.accounts import hosting_mode as mode
+    return mode()
+
+
+def check_hosting() -> str:
+    """Refuse to boot an instance that cannot name its callers. Returns the mode."""
+    from tools.accounts import check_boot
+    return check_boot()
+
+
+def session_user(token: str):
+    """The user id a session cookie names, or None if it names nobody."""
+    from tools.accounts import session_user as resolve
+    return resolve(token)
+
+
+def sign_in(email: str, passphrase: str):
+    """A session cookie value for these credentials, or None."""
+    from tools.accounts import authenticate, issue_session
+    user_id = authenticate(email, passphrase)
+    return issue_session(user_id) if user_id else None
+
+
+def redeem_invite(code: str, email: str, passphrase: str) -> str:
+    """
+    Claim an invite and return a session cookie value for the new account.
+
+    Raises `InviteRefused`, `EmailTaken` or `PassphraseRefused` (a
+    `ValueError`, as is a malformed email), each with a message for the person.
+    """
+    from tools.accounts import issue_session, redeem
+    return issue_session(redeem(code, email, passphrase))
+
+
+def account_email(user_id) -> Optional[str]:
+    """The email an account signs in with, for the screen that says who you are."""
+    from tools.accounts import email_of
+    return email_of(user_id)
+
+
+def invite_account() -> tuple:
+    """A new unredeemed account: `(user_id, code)`. For `scripts/admin.py`."""
+    from tools.accounts import invite
+    return invite()
 
 
 class _CheckpointStop(Exception):

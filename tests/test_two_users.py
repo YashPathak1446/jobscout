@@ -95,21 +95,20 @@ USER_B = "rohan_deshmukh"
 
 def _as_the_api_serves(user):
     """
-    Whose data a request from `user` is served as, today.
+    Whose data a request from `user` is served as.
 
-    `None` for every caller until A5/A6: there is no session, so `api/main.py`
-    passes the unscoped user at every call site (and
-    `test_hosted_mode_has_no_unscoped_call_site` counts them). A5 replaces
-    this body with the caller's identity; the assertions below do not change.
+    `None` for every caller until A5: there was no session, so `api/main.py`
+    passed the unscoped user at every call site. Since A5 the session cookie
+    names the caller, and a request from `user` is served as `user` — so this
+    returns it, and the assertions below did not change.
 
-    It exists because after A3 a run recorded under A's *own* id lives in A's
-    own `runs.db`, which the API never reads — so the API tests would pass
-    against an unscoped API simply by reading an empty third home. That is a
-    green that proves nothing about the route, and the mutation check exists
-    to catch exactly that. Recording A's run the way the API records it keeps
-    those tests red for the reason they name.
+    It exists because after A3 a run recorded under A's *own* id lived in A's
+    own `runs.db`, which the unscoped API never read — so the API tests would
+    have passed against an unscoped API simply by reading an empty third home.
+    Recording A's run the way the API records it kept those tests red for the
+    reason they named, until the reason was gone.
     """
-    return None
+    return user
 
 
 class _Listing:
@@ -359,10 +358,9 @@ class TestOneUsersRunsDoNotCrossTheWireToAnother(_OneInstance):
       `{date, path, jobs, resumes}`. So the assertions below are written
       against the fields the two run listings actually carry: the run's
       `profile` on `GET /api/run`, and its directory on `GET /api/runs`.
-    * **"As B" cannot be expressed yet** -- there is no session, so there is no
-      B. That is not a gap in the test, it is the finding: every caller of
-      these routes today is every user at once, and the request below is B's
-      only in the sense that B is who would make it.
+    * **"As B" could not be expressed until A5** -- there was no session, so
+      there was no B, and every caller of these routes was every user at once.
+      Since A5 the client below signs in as B through `POST /api/session`.
 
     **Predicted failure:** `GET /api/run` lists A's run to a caller who did not
     start it, and `GET /api/runs` names the directory A wrote.
@@ -371,13 +369,26 @@ class TestOneUsersRunsDoNotCrossTheWireToAnother(_OneInstance):
     def setUp(self):
         super().setUp()
         import api.main
-        self.client = TestClient(api.main.app)
+        from tests.signed_in import client, hosted, make_account
 
-    # Expected to flip at A5/A6. A3 is necessary and not sufficient:
-    # partitioning `runs.db` gives the facade a user to scope to, but
-    # this route has no caller identity to hand it until the session
-    # cookie exists.
-    @unittest.expectedFailure
+        # Hosted, with both people holding accounts under the ids their data
+        # already lives at, and the client signed in as B (A5).
+        self._hosted = hosted(self.home)
+        self._hosted.__enter__()
+        # Keyed by id, so the mutation check (`USER_B = USER_A`) collapses the
+        # two into one account rather than failing on a duplicate id.
+        emails = {USER_A: "a@example.com", USER_B: "b@example.com"}
+        for user_id, email in emails.items():
+            make_account(email, user_id=user_id)
+        self.client = client(api.main.app, email=emails[USER_B])
+
+    def tearDown(self):
+        self._hosted.__exit__(None, None, None)
+        super().tearDown()
+
+    # Flipped at A5. A3 was necessary and not sufficient: partitioning
+    # `runs.db` gave the facade a user to scope to, and the session cookie
+    # gave the route a caller to hand it.
     def test_the_active_list_names_no_run_the_caller_did_not_start(self):
         from tools.jobs.run_registry import RunRegistry, db_path
 
@@ -394,8 +405,7 @@ class TestOneUsersRunsDoNotCrossTheWireToAnother(_OneInstance):
             "a caller who started nothing is told what another user is "
             "running, including the profile name they imported it under")
 
-    # Expected to flip at A5/A6, same reason as its sibling above.
-    @unittest.expectedFailure
+    # Flipped at A5, same reason as its sibling above.
     def test_the_past_list_names_no_directory_another_user_wrote(self):
         from agents.orchestrator import JobScoutOrchestrator
 
