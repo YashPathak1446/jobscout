@@ -253,7 +253,7 @@ Verified by mutation rather than by passing: importing `recent_runs` into
 `api/main.py` fails, dropping `board_job` fails, and the old assertion returns
 `True` for `{'anything','at','all'}` against `{'board_jobs'}`.
 
-### A2. Reproduce the two-user bugs (½ day, nothing ships)
+### A2. Reproduce the two-user bugs (½ day, nothing ships) — **DONE 2026-09-21**
 
 Add a second fixture user built from one of the anonymized stranger resumes in
 `tests/fixtures/` — **not** derived from Priya, because a fixture derived from
@@ -261,12 +261,46 @@ one you have is a fixture that agrees with you. The two profiles must differ in
 the fields `gate_fingerprint` hashes (`job_filter.py:775-800`) or the storm test
 cannot fire.
 
+`rohan_deshmukh`, imported through the real path from
+`resume_two_degrees_non_us.txt`. Chosen over `glued_runs`, which carries
+"low-latency" and "High-Performance" — the exact words three property tests
+walk every master for. The pair differ on `years_experience`: Priya answers 6,
+Rohan's is `None`, which is what a freshly imported profile actually holds.
+
+Delivered as `tests/test_two_users.py`, six assertions, every one
+`unittest.expectedFailure` with the stage named that should flip it. An
+expected failure that passes is an unexpected success and fails
+`wasSuccessful()`, so landing A3 produces a red build telling whoever did it to
+drop the decorator — rather than a green one nobody re-reads.
+
 1. `refresh_board_gate(A)`, `(B)`, `(A)` → the third call re-judges **zero**
    rows. Today it re-judges all of them.
 2. A scores 8 jobs ~40, B scores 8 ~90 → A's `score_bands()` does not move.
-3. Two runs on the same date → `previous_runs()` returns two entries and A's
-   `state.json` is intact.
-4. `GET /api/runs` as B → A's `output_dir` and `error` strings are absent.
+3. Two runs on the same date land in **two directories** and A's `state.json`
+   is intact. *This item used to say `previous_runs()` returns two entries,
+   which no partitioned world can satisfy* — once A3 scopes `outputs_root`,
+   A's listing holds A's one run and B's holds B's, and neither is ever two.
+   The durable claim is that the directories differ; the count was a symptom
+   of their being one.
+4. The run listings hand a caller no run of anyone else's. *This item used to
+   name `output_dir` and `error` on `GET /api/runs`, and both halves were
+   wrong.* Those are `runs.db` columns surfaced by `RunRegistry.recent()`, and
+   **no route serves `recent()`** — its facade wrapper `recent_runs` has no
+   caller in either UI, and A1's contract test fails the build if
+   `api/main.py` imports it. `GET /api/runs` is `previous_runs`, reading
+   `outputs/` off disk as `{date, path, jobs, resumes}`. So the assertions are
+   on what the two listings do carry: the run's `profile` on `GET /api/run`,
+   and its directory on `GET /api/runs`. And **"as B" cannot be written yet** —
+   there is no session, so there is no B; that is the finding, not a gap in
+   the test.
+
+**Found while doing it, fixed before it shipped (Q34).** The fixture has two
+roles at one employer, and a component ID was `exp_{slug(company)}` — so they
+collided, and seven consumers key a dict by that ID. `test_latex_round_trip`
+caught it the moment the resume landed in `data/master_resumes/`; it had
+asserted the right thing for six weeks against masters that happened not to
+have a repeat. Fixed in its own commit first, because A2 could not otherwise
+be committed green.
 
 ### A3. The scope seam and the threading — one commit (3–4 days)
 
@@ -311,6 +345,37 @@ not leave the constant reachable from a hosted path.
 **Closing move (the R80 shape):** `test_no_store_resolves_a_path_outside_paths`
 — AST-walk `tools/`, `agents/`, `config.py`; fail on any string literal bound to
 `*_DIR|*_DB|CACHE*` not produced by a `tools.paths` call. Fails on cache #5.
+
+#### Exit criteria
+
+1. Every `@unittest.expectedFailure` in `tests/test_two_users.py` that names A3
+   is gone, and its test passes. The suite tells you which: an expected failure
+   that passes is an unexpected success and fails `wasSuccessful()`, so A3 is
+   not done while the build is red for that reason.
+
+2. **The four non-discriminating tests pass the mutation check.** A2 measured
+   which of its six assertions fail because a *second person* exists, by
+   setting `USER_B = USER_A` and changing nothing else. Two did — the gate
+   storm and the overwritten `state.json`. The other four were red under the
+   mutation too, because the facade they call has no user to distinguish:
+   `score_bands()` cannot tell "B's scores moved A's bands" from "A scored
+   eight more jobs", `outputs_root(...) / date` already collapsed one person's
+   two runs in a day, and the two API assertions have no caller identity to be
+   the wrong one.
+
+   After A3 those four must be **red under the mutation and green without
+   it** — that is the difference between a partition and a coincidence. A run
+   where all six pass either way has not proved scoping; it has proved that
+   two calls with the same argument agree, which they did before A3 as well.
+
+   The API pair (A2.4) is the exception and stays red under the mutation until
+   A5/A6: A3 gives the facade a user to scope to, but the route has nothing to
+   hand it until the session cookie exists. Recheck them there, not here.
+
+3. `python -m agents.orchestrator --profile priya_raghunathan --max-jobs 5
+   --mock` still passes unscoped, and `baseline.py verify --all` is unmoved —
+   the checkout fork must not move, which is the hard constraint this stage
+   was designed around.
 
 ### A4. Work authorization (1–1½ days)
 
