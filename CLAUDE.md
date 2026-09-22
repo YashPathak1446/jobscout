@@ -132,8 +132,18 @@ emits progress and writes state to `outputs/<date>/`.
 
 - `discovery_agent` queries keyless ATS boards (`tools/search/ats_search.py` —
   Greenhouse, Ashby, Lever) plus optional keyed sources, then filters by profile.
-- `enrichment_agent` scrapes each posting's real JD. **A posting whose JD could
-  not be read is dropped, never scored** (R61).
+- `enrichment_agent` scrapes each posting's real JD. A posting it could not
+  scrape is **kept, scored, and skipped only for resume generation** — the
+  short description discovery found is thin, not false, so the job belongs on
+  the board (R61). `scraped_successfully: False` is written at
+  `enrichment_agent.py:159`, and its **only** reader is
+  `orchestrator._split_unreadable` (`:1087`), which runs at generation.
+  *This line used to say "dropped, never scored", which is wrong on both
+  verbs and inverted R61's own record.* The gate does not read the flag at
+  all: `_apply_body_gate` (`:992`) runs `body_disqualifiers` on the snippet,
+  that returns `[]` for thin text (`job_filter.py:544`), and the job is stored
+  `gate_reason = ""` — **eligible**. Fixing that is the pilot plan's A4; do
+  not read this line as saying it is already handled.
 - `analysis_agent` embeds resume components and JDs, then blends embedding
   score, keyword overlap, component importance and conditional triggers.
 - `generation_agent` — 2600 lines, the largest thing here — selects
