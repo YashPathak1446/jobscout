@@ -678,6 +678,43 @@ deletion paths is the twin-path bug pointed at the one thing that must be
 provably complete. Without this, the first friend who forgets their passphrase
 costs you hand-editing `accounts.db` over SSH.
 
+#### What shipped, and where it departed from the above (R96)
+
+As planned:
+
+- `DELETE /api/account` removes the caller's account row and their whole
+  `users/<id>/` tree, clears the cookie, and returns `account`, `files`,
+  `bytes` and `areas`.
+- `delete_user_data` is the only deletion path. `scripts/admin.py
+  delete-user` calls it, and a test spies on the call to prove it.
+- `test_no_byte_of_a_deleted_user_survives` is the walker test, and the walker
+  lives in `tests/residue.py` for A7 to import.
+
+The walker was mutation-checked. It goes red when the facade keeps the
+account row, keeps the tree, or runs without `secure_delete`.
+
+Departures and additions:
+
+- **The walker found a real defect.** SQLite left the deleted email in
+  `accounts.db`'s free pages. `secure_delete` is now on.
+- **There are no event-log rows to delete yet.** A8 has not been built. Its
+  table lives under `users/<id>/`, so the tree removal covers it, and the
+  walker fails if it does not.
+- **Refused while a run is live** (409). `delete-user --ignore-active-runs`
+  handles a run that a crash left marked `running`, since the registry never
+  clears one.
+- **Reset is a re-invite of the same account.** The friend chooses the new
+  passphrase through the existing redeem form, and the operator never knows
+  it. This fixes Q45 with a session epoch covered by every MAC.
+- **Q48 is fixed**: `.streamlit/config.toml` binds Streamlit to loopback.
+- **Streamlit's view does not get delete.** `delete_user_data` is `HTTP_ONLY`
+  in the UI contract, because Streamlit's user is the checkout and the facade
+  refuses `None`.
+
+**Run on the author's machine:** `baseline.py verify --all`. It reports
+MISSING here, as it did at A3 and A5. The 14 suite errors that need
+`yash_pathak.json` are unchanged.
+
 ### A7. Bring-your-own-key, built properly (1 day)
 
 Not a paste box. The full step:

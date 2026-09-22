@@ -116,6 +116,26 @@ class TestLocalModeServesThisMachineOnly(unittest.TestCase):
             "email": "a@example.com", "passphrase": "x" * 20}).status_code, 404)
 
 
+class TestStreamlitServesThisMachineOnly(unittest.TestCase):
+    """
+    The twin of the class above (Q48). Streamlit is the other local UI, with
+    no accounts and one unscoped user, and by default it serves every
+    interface. The committed config binds it to loopback before any code runs.
+
+    Measured with Streamlit 1.64 rather than asserted from its docs: without
+    this file the machine's LAN address answered 200; with it, loopback 200
+    and the LAN address refused the connection.
+    """
+
+    def test_the_committed_config_binds_loopback(self):
+        import tomllib
+        with open(ROOT / ".streamlit" / "config.toml", "rb") as handle:
+            config = tomllib.load(handle)
+        self.assertIn(config.get("server", {}).get("address"),
+                      ("localhost", "127.0.0.1", "::1"),
+                      "Streamlit would serve the local UI to the whole network")
+
+
 class TestHostedModeIsReachableThroughItsDoor(unittest.TestCase):
     """The loopback guard is local mode's; hosted has sessions instead."""
 

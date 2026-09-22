@@ -135,6 +135,40 @@ def user_home(user_id) -> Path:
     return data_home() / USERS_DIR / user_id
 
 
+def remove_user_home(user_id: str) -> dict:
+    """
+    Delete one scoped user's whole tree and say what went (pilot plan A6).
+
+    Returns `{"files": n, "bytes": n, "areas": {top-level entry: files}}`,
+    all zero when there was no tree: a deletion states its count, as a filter
+    does. Symlinks are removed, never followed, so nothing outside the tree is
+    touched or counted.
+
+    **Refuses `None`.** The unscoped home is `data_home()` itself — in a
+    checkout, the repository — and there is no reading of "delete the user"
+    under which that is the thing to remove. `user_home` refuses an id that is
+    not one, so a `..` cannot reach this either.
+    """
+    import shutil
+
+    if user_id is None:
+        raise ValueError("refusing to delete the unscoped data home")
+    home = user_home(user_id)
+    removed = {"files": 0, "bytes": 0, "areas": {}}
+    if not home.is_dir() or home.is_symlink():
+        return removed
+    for root, dirs, files in os.walk(home):
+        area = Path(root).relative_to(home).parts[:1]
+        for name in files + [d for d in dirs if os.path.islink(os.path.join(root, d))]:
+            path = Path(root, name)
+            key = area[0] if area else name
+            removed["files"] += 1
+            removed["bytes"] += path.lstat().st_size
+            removed["areas"][key] = removed["areas"].get(key, 0) + 1
+    shutil.rmtree(home)
+    return removed
+
+
 def user_path(*parts, user_id, create_parent: bool = False) -> Path:
     """
     A file or directory under `user_home(user_id)`.

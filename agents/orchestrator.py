@@ -681,6 +681,82 @@ def invite_account() -> tuple:
     return invite()
 
 
+def find_account(who: str) -> Optional[str]:
+    """The user id `who` names, a user id or an email, or None. For the operator."""
+    from tools.accounts import find
+    return find(who)
+
+
+def list_accounts() -> list:
+    """Every account: `user_id`, `email` (None until redeemed) and `created_at`."""
+    from tools.accounts import list_accounts as listing
+    return listing()
+
+
+def reset_passphrase(user_id: str) -> str:
+    """
+    A one-time code that re-invites this account, ending every session it has
+    (Q45). The friend redeems it as they did their invite. Raises `KeyError`
+    for an id with no account.
+    """
+    from tools.accounts import reset
+    return reset(user_id)
+
+
+class RunInProgress(RuntimeError):
+    """A deletion was refused because the user has a run the registry calls live."""
+
+
+def delete_user_data(user_id: str, *, ignore_active_runs: bool = False) -> dict:
+    """
+    Remove everything this instance holds for one user, and say what (A6).
+
+    The account row, which ends every session at once, and then the whole of
+    `users/<user_id>/`: profiles, master resumes, outputs, `jobs.db`,
+    `runs.db` and every cache. Not a soft delete. Returns
+    `{"user_id", "account": rows, "files", "bytes", "areas"}`, all zero for a
+    user with nothing here, so a caller can tell "deleted" from "was never
+    there" — the same rule as a filter that must say how many it removed.
+
+    **The one deletion path.** `DELETE /api/account` and `scripts/admin.py
+    delete-user` both call this; a second path would be the twin-path bug
+    pointed at the one thing that must be provably complete, and
+    `test_no_byte_of_a_deleted_user_survives` walks the data home after it.
+
+    **Refused while a run is live** (`RunInProgress`): a worker thread would
+    keep writing into the tree after it was removed and leave the residue this
+    exists to prevent. The registry never clears a run a crashed process left
+    `running`, so the operator can pass `ignore_active_runs` after checking
+    the server is not in fact running it. The API never does.
+
+    Order: the row first, so no new request is served as this user, then the
+    tree. If the tree fails half-way the error propagates and a second call
+    finishes it — both steps are idempotent. The A8 event log will live under
+    `users/<id>/`, so the tree is where its rows go too.
+
+    Not covered, and stated so "deleted" never means more than it does: Fly
+    volume snapshots and anything outside the data home (logs, Sentry).
+    `None` is refused: the unscoped home is the whole checkout.
+    """
+    from tools import paths
+    from tools.accounts import delete
+    from tools.jobs import run_registry
+
+    if user_id is None:
+        raise ValueError("refusing to delete the unscoped data home")
+    # Asked of the file only if it exists: opening the registry creates it,
+    # and a deletion that recreated the tree it came to remove is a bad joke.
+    if not ignore_active_runs and run_registry.db_path(user_id).is_file():
+        live = active_runs(user_id)
+        if live:
+            raise RunInProgress(
+                f"{len(live)} run(s) still in progress: "
+                + ", ".join(run["id"] for run in live))
+    account = delete(user_id)
+    removed = paths.remove_user_home(user_id)
+    return {"user_id": user_id, "account": account, **removed}
+
+
 class _CheckpointStop(Exception):
     """Raised when a checkpoint declines to continue. Caught inside run()."""
 

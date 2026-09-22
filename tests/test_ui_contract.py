@@ -45,10 +45,13 @@ PROJECT_PACKAGES = {"agents", "tools", "scripts", "config"}
 #   the session  Accounts exist only on a hosted instance, and the hosted
 #                product is the React build. Streamlit is the local UI: it
 #                has one unscoped user and nothing to sign in to (A5).
+#                Deleting an account is the same (A6): Streamlit's user is
+#                the checkout, which `delete_user_data` refuses to delete.
 HTTP_ONLY = {"board_job", "user_outputs_root"} | {
     "SESSION_COOKIE", "SESSION_TTL_SECONDS", "EmailTaken", "InviteRefused",
     "PassphraseRefused", "account_email", "check_hosting", "hosting_mode",
-    "redeem_invite", "session_user", "sign_in"}
+    "redeem_invite", "session_user", "sign_in",
+    "RunInProgress", "delete_user_data"}
 
 
 def _facade_imports(tree):

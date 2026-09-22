@@ -1,0 +1,7 @@
+# Streamlit is the local UI: no accounts, one unscoped user, the whole profile
+# and resume. Bound to loopback so it is not served to the network the laptop
+# is on, which is Streamlit's default (Q48). The API's twin of this is local
+# mode's loopback-only guard (R95). Read from the working directory, so it
+# applies to `streamlit run app.py` from the repository root.
+[server]
+address = "localhost"

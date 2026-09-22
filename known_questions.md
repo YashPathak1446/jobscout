@@ -8776,13 +8776,113 @@ facade call receives exactly that caller, which is stronger than "not
 - A signing bug means forged identity. The mitigations are the tests above
   and the account-row read on every request.
 - Rotating the secret signs everyone out.
-- A passphrase reset does not end existing sessions (Q45).
+- A passphrase reset does not end existing sessions (Q45, fixed by R96).
 - There is no rate limit on sign-in (Q46).
 - The React board now needs a session in hosted mode. Local mode is unchanged
   and never shows sign-in.
 - `.gitignore` gains `/users/`. In a checkout the data home is the repo root,
   so a hosted-mode run there would otherwise have left friends' trees
   untracked but unignored.
+
+## R96. Deleting an account, and the rest of the admin script (pilot A6, Q45, Q48)
+
+**Decided 2026-09-22.** `DELETE /api/account` and `scripts/admin.py
+delete-user` both call `agents.orchestrator.delete_user_data(user_id)`. There
+is one deletion path. It removes the account row, then the whole of
+`users/<id>/`, and returns what it removed: `account` (rows), `files`,
+`bytes`, and `areas` (files per top-level directory). A user with nothing
+there gets zeros, so "deleted" and "was never there" read differently.
+
+**The row is deleted, not marked.** It holds the email, and a tombstone keyed
+by the user id would be that id surviving the account. A5's `deleted_at`
+column was only ever written by a test. It is gone from the schema; an A5-era
+store keeps the column, and nothing reads it.
+
+**The residue walker found a real defect on its first run.** SQLite does not
+zero a deleted row. The email stayed in `accounts.db`'s free pages, where
+anyone with the file could read it. `_connect` now sets `PRAGMA secure_delete
+= ON`. Turning it off fails the walker and a store-level test.
+
+**The walker** is `tests/residue.py`. It reads names and bytes, not rows, so it
+covers a store nobody has written a query for. It is case-insensitive, and it
+searches the name in every spelling the pipeline writes (`Priya_Raghunathan`
+in filenames). A7 imports it unchanged. The closing test,
+`test_no_byte_of_a_deleted_user_survives`, runs these steps:
+
+1. Invite and redeem B.
+2. Start a `--mock` run through `POST /api/run`, with the real registry,
+   thread and output tree.
+3. Mark a job applied through the route.
+4. Delete B through the route.
+5. Walk the whole data home for B's id, email, profile name and profile
+   email.
+
+Before the delete, the walker must find B in `accounts.db` and in B's
+outputs. After it, the walker must find A. Otherwise an empty result proves
+nothing. A's tree is hashed before and after.
+
+**Order: the row first, then the tree.** Once the row is gone, no new request
+is served as that user. If the tree fails half-way, the error propagates, and
+a second call finishes the job. Both steps are idempotent, and `delete-user`
+passes an id through when no row matches it.
+
+**Refused while a run is live** (409, `RunInProgress`). A worker thread would
+keep writing into the tree after it was removed. The run registry never clears
+a run that a crashed process left `running`, so `delete-user
+--ignore-active-runs` exists for the operator. The API never passes it.
+*Rejected:* a staleness timeout on `updated_at`, which would turn "unknown"
+into a guess.
+
+**A passphrase reset is a re-invite of the same account (Q45).** `reset()`
+does three things: it clears the email and the passphrase, it stores a fresh
+one-time code, and it bumps `session_epoch`. The friend redeems the code
+through the existing invite form, with their email and a new passphrase they
+choose. The operator never learns the passphrase, and the sign-in screen
+needed nothing new.
+*Rejected:* the operator typing a passphrase, or the script printing one.
+Either way the operator knows the secret and sends it over chat, and nothing
+lets the friend change it afterwards.
+
+**The epoch is signed but not carried.** The MAC covers
+`user_id|epoch|expiry`, and the cookie stays `user_id.expiry.mac`. The server
+reads the epoch from the row it already reads on every request. Clearing the
+email ends sessions only until the redeem makes the row active again. The
+epoch is what keeps a cookie stolen before the reset dead after it, and
+`test_and_stays_ended_once_the_friend_redeems` fails if the epoch is left out
+of the MAC or never bumped. An A5-era store gains the column (`ALTER TABLE`)
+at epoch 0.
+
+**`list-users`** prints each account's id, creation time and email, or
+`(awaiting redeem)` while an invite or a reset is waiting. It never prints the
+hash, the code digest or the epoch. `reset-passphrase` and `delete-user`
+accept an id or an email. `delete-user` asks you to type the id, unless you
+pass `--yes` for `fly ssh console -C`.
+
+**Streamlit is bound to loopback (Q48).** The fix is a committed
+`.streamlit/config.toml` with `server.address = "localhost"`. Measured with
+Streamlit 1.64 in a scratch copy: without the file, the LAN address answered
+200. With it, loopback answered 200 and the LAN address refused the
+connection. `test_the_committed_config_binds_loopback` pins it.
+
+**Breaks if wrong / blast radius:**
+- **Every A5 session ends once.** The MAC payload changed, so every cookie
+  issued before this change fails. Nobody is deployed, so this costs one
+  sign-in per developer.
+- **Reset copy.** The friend redeems a reset through a form that says
+  "invite". The words are wrong and the flow is right.
+- **Streamlit.** Anyone who opened it from a phone on the same Wi-Fi loses
+  that. The config is read from the working directory, so `streamlit run`
+  started from outside the repository root is not covered.
+- **Deletion's stated limits.** It does not reach Fly volume snapshots, logs
+  or Sentry. Deleted files and freed SQLite journals may persist in disk
+  blocks below the filesystem.
+- **No re-authentication on delete.** A live cookie is enough to delete the
+  account, as the plan specified. SameSite=Strict blocks cross-site requests,
+  and the cookie is HttpOnly. What remains is someone at an unlocked,
+  signed-in browser.
+- **Stuck runs block self-deletion.** A friend whose run a restart left
+  `running` cannot delete their own account until the operator does it. This
+  is the registry's missing sweep, and it predates A6.
 
 ## Q31. The caches are cwd-relative and miss the volume
 
@@ -9237,8 +9337,12 @@ field with the same hole. Also align the two maxima (40 vs 60).
 
 ## Q45. A passphrase reset does not end the sessions it was meant to end
 
-**Status:** Open, deferred to A6 (decided 2026-09-22). A session is valid
-until its signed expiry, as long as the account row is active. Resetting a
+**Status:** Resolved 2026-09-22 by R96 (A6). `reset-passphrase` bumps a
+per-account `session_epoch` that every session's MAC covers, so a cookie from
+before the reset fails even after the friend redeems a new passphrase. The
+original entry follows.
+
+A session was valid until its signed expiry, as long as the account row is active. Resetting a
 passphrase changes neither, so a cookie issued before the reset still works
 for up to 14 days. That matters in exactly one case, a reset because the
 passphrase leaked, and in that case it is the whole point of the reset.
@@ -9285,7 +9389,10 @@ checking each field for a React reader first. `runs[].path` has one.
 
 ## Q48. Streamlit serves every interface by default, in local mode
 
-**Status:** Open, found 2026-09-22 while adding A5's loopback guard.
+**Status:** Resolved 2026-09-22 by R96, with the leaning below: a committed
+`.streamlit/config.toml` binding `server.address = "localhost"`, measured
+refusing the LAN address. The original entry follows.
+
 Measured: `streamlit run app.py` with default settings (Streamlit 1.64,
 `server.address` unset) answered 200 on the machine's non-loopback address,
 and printed "Network URL" and "External URL". Streamlit is the local UI,

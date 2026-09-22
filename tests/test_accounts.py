@@ -221,12 +221,100 @@ class TestSessions(_Home):
 
     def test_a_deleted_account_stops_at_once(self):
         """A valid signature is necessary, not sufficient (A6 relies on this)."""
-        db = sqlite3.connect(accounts.db_path())
-        db.execute("UPDATE accounts SET deleted_at = 'now' WHERE user_id = ?",
-                   (self.user,))
+        self.assertEqual(accounts.delete(self.user), 1)
+        self.assertIsNone(accounts.session_user(self.token))
+        self.assertEqual(accounts.delete(self.user), 0, "a second delete found a row")
+
+    def test_a_deleted_accounts_email_is_not_left_in_the_file(self):
+        """
+        SQLite leaves a deleted row's bytes in the free list unless told not
+        to; the residue walker reads bytes, so this is the store-level half.
+        """
+        accounts.delete(self.user)
+        self.assertNotIn(b"a@example.com", accounts.db_path().read_bytes())
+        self.assertNotIn(self.user.encode(), accounts.db_path().read_bytes())
+
+
+class TestAResetEndsEverySession(_Home):
+    """
+    Q45. A reset because a passphrase leaked is worthless if a cookie taken
+    with it keeps working, and it would have for up to 14 days.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = make_account("a@example.com")
+        self.stolen = accounts.issue_session(self.user)
+
+    def test_a_session_from_before_the_reset_names_nobody(self):
+        accounts.reset(self.user)
+        self.assertIsNone(accounts.session_user(self.stolen))
+
+    def test_and_stays_ended_once_the_friend_redeems(self):
+        """
+        The case the epoch exists for. Clearing the email alone ends the
+        session only until the redeem makes the row active again.
+        """
+        code = accounts.reset(self.user)
+        self.assertEqual(accounts.redeem(code, "a@example.com", "a new passphrase!"),
+                         self.user, "the reset code claimed a different account")
+        self.assertIsNone(accounts.session_user(self.stolen),
+                          "a cookie issued before the reset works again after it")
+        fresh = accounts.issue_session(self.user)
+        self.assertEqual(accounts.session_user(fresh), self.user)
+
+    def test_the_old_passphrase_stops_and_the_new_one_works(self):
+        code = accounts.reset(self.user)
+        self.assertIsNone(accounts.authenticate("a@example.com", PASSPHRASE))
+        accounts.redeem(code, "a@example.com", "a new passphrase!")
+        self.assertIsNone(accounts.authenticate("a@example.com", PASSPHRASE))
+        self.assertEqual(accounts.authenticate("a@example.com", "a new passphrase!"),
+                         self.user)
+
+    def test_the_old_invite_code_does_not_redeem_the_reset(self):
+        old = make_account("b@example.com")
+        code = accounts.reset(old)
+        accounts.reset(old)  # superseded
+        with self.assertRaises(accounts.InviteRefused):
+            accounts.redeem(code, "b@example.com", PASSPHRASE)
+
+    def test_resetting_nobody_is_an_error(self):
+        with self.assertRaises(KeyError):
+            accounts.reset("0000000000000000")
+
+    def test_other_accounts_keep_their_sessions(self):
+        other = make_account("b@example.com")
+        theirs = accounts.issue_session(other)
+        accounts.reset(self.user)
+        self.assertEqual(accounts.session_user(theirs), other)
+
+
+class TestAStoreFromA5(_Home):
+    """
+    `accounts.db` written before the epoch existed: no `session_epoch`, and a
+    `deleted_at` nothing writes any more. It must open, and its accounts sign
+    in at epoch 0.
+    """
+
+    def test_it_gains_the_epoch_and_keeps_its_accounts(self):
+        path = accounts.db_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(path)
+        db.execute("""CREATE TABLE accounts (
+            user_id TEXT PRIMARY KEY, email TEXT UNIQUE, passphrase_hash TEXT,
+            invite_code TEXT UNIQUE NOT NULL, created_at TEXT NOT NULL,
+            deleted_at TEXT)""")
+        db.execute("INSERT INTO accounts VALUES (?, ?, ?, ?, ?, NULL)",
+                   ("00000000000000aa", "old@example.com",
+                    accounts.hash_passphrase(PASSPHRASE), "digest", "then"))
         db.commit()
         db.close()
-        self.assertIsNone(accounts.session_user(self.token))
+        self.assertEqual(accounts.authenticate("old@example.com", PASSPHRASE),
+                         "00000000000000aa")
+        token = accounts.issue_session("00000000000000aa")
+        self.assertEqual(accounts.session_user(token), "00000000000000aa")
+        accounts.reset("00000000000000aa")
+        self.assertIsNone(accounts.session_user(token))
 
     def test_a_session_cannot_be_issued_for_an_id_that_is_not_one(self):
         with self.assertRaises(ValueError):
@@ -247,6 +335,96 @@ class TestTheAdminScriptInvites(_Home):
         code = out.getvalue().splitlines()[0].split(": ", 1)[1]
         accounts.redeem(code, "friend@example.com", PASSPHRASE)
         self.assertIsNotNone(accounts.authenticate("friend@example.com", PASSPHRASE))
+
+
+class TestTheAdminScriptResetsListsAndDeletes(_Home):
+    """The other three subcommands (A6), through `main` as the operator runs it."""
+
+    def _admin(self, *argv):
+        import contextlib
+        import io
+
+        from scripts import admin
+
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            status = admin.main(list(argv))
+        return status, out.getvalue(), err.getvalue()
+
+    def test_list_users_names_every_account_and_no_secret(self):
+        a = make_account("a@example.com")
+        pending, _ = accounts.invite()
+        status, out, _ = self._admin("list-users")
+        self.assertEqual(status, 0)
+        self.assertIn(f"{a}  ", out)
+        self.assertIn("a@example.com", out)
+        self.assertIn(f"{pending}  ", out)
+        self.assertIn("(awaiting redeem)", out)
+        self.assertIn("2 account(s)", out)
+        self.assertNotIn("scrypt", out)
+
+    def test_reset_passphrase_by_email_ends_the_session_and_prints_a_code(self):
+        a = make_account("a@example.com")
+        token = accounts.issue_session(a)
+        status, out, _ = self._admin("reset-passphrase", "a@example.com")
+        self.assertEqual(status, 0)
+        self.assertIsNone(accounts.session_user(token))
+        code = out.splitlines()[0].split(": ", 1)[1].strip()
+        accounts.redeem(code, "a@example.com", "a new passphrase!")
+        self.assertEqual(accounts.authenticate("a@example.com", "a new passphrase!"), a)
+
+    def test_an_unknown_account_is_said_and_nothing_changes(self):
+        make_account("a@example.com")
+        for argv in (("reset-passphrase", "nobody@example.com"),
+                     ("delete-user", "nobody@example.com", "--yes")):
+            with self.subTest(argv[0]):
+                status, _, err = self._admin(*argv)
+                self.assertEqual(status, 1)
+                self.assertIn("no account", err)
+        self.assertEqual(len(accounts.list_accounts()), 1)
+
+    def test_delete_user_goes_through_the_facade_the_api_uses(self):
+        """One deletion path: the script must not grow its own."""
+        a = make_account("a@example.com")
+        calls = []
+
+        def spy(user_id, **kwargs):
+            calls.append((user_id, kwargs))
+            return {"user_id": user_id, "account": 1, "files": 0, "bytes": 0,
+                    "areas": {}}
+
+        with mock.patch("agents.orchestrator.delete_user_data", spy):
+            status, out, _ = self._admin("delete-user", a, "--yes")
+        self.assertEqual(status, 0)
+        self.assertEqual(calls, [(a, {"ignore_active_runs": False})])
+        self.assertIn("account row 1", out)
+
+    def test_delete_user_finishes_a_deletion_that_lost_its_row(self):
+        from tools import paths
+
+        a = make_account("a@example.com")
+        (paths.user_home(a) / "outputs").mkdir(parents=True)
+        (paths.user_home(a) / "outputs" / "resume.tex").write_text("x")
+        accounts.delete(a)  # the row went; the tree did not
+        status, out, _ = self._admin("delete-user", a, "--yes")
+        self.assertEqual(status, 0)
+        self.assertIn("account row 0, 1 file(s)", out)
+        self.assertFalse(paths.user_home(a).exists())
+        status, _, err = self._admin("delete-user", a, "--yes")
+        self.assertEqual(status, 1)
+        self.assertIn("nothing was deleted", err)
+
+    def test_delete_user_asks_and_a_wrong_answer_deletes_nothing(self):
+        a = make_account("a@example.com")
+        with mock.patch("builtins.input", return_value="not the id"):
+            status, _, err = self._admin("delete-user", a)
+        self.assertEqual(status, 1)
+        self.assertTrue(accounts.active(a))
+        with mock.patch("builtins.input", return_value=a):
+            status, _, _ = self._admin("delete-user", a)
+        self.assertEqual(status, 0)
+        self.assertFalse(accounts.active(a))
+        self.assertIsNone(accounts.find(a))
 
 
 if __name__ == "__main__":

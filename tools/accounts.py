@@ -35,20 +35,31 @@ stores.
 
 Invite-only (plan decision 2). `invite()` makes a row with a fresh `user_id` and
 a one-time code; `redeem()` attaches an email and passphrase to it. There is no
-public signup and no password reset — `scripts/admin.py` is the reset flow.
+public signup and no self-service reset — `scripts/admin.py` is the reset flow.
 Only the code's SHA-256 is stored, so a copy of this file cannot claim an
 invite nobody has redeemed yet.
 
-**Sessions** are `user_id.expiry.mac`, where the MAC is HMAC-SHA256 over
-`user_id|expiry` under `JOBSCOUT_SESSION_SECRET`. The expiry is inside the
-signed payload, so it cannot be extended by editing the cookie. A valid
-signature is necessary and not sufficient: the account row is read on every
-request, so a deleted account (A6) stops working at once rather than when its
-cookie runs out.
+**A reset is a re-invite of the same account** (A6). `reset()` clears the
+email and passphrase, stores a fresh code and bumps the session epoch. The
+friend redeems the code exactly as they redeemed their invite, choosing the
+new passphrase themselves, so the operator never learns it and nothing new is
+needed on the sign-in screen. The data under `users/<id>/` is untouched.
 
-Not here, logged instead: invalidating sessions when a passphrase is reset
-(Q45 — needs a session epoch, which ships with A6's `reset-passphrase` so the
-field has a reader the day it exists), and sign-in rate limiting (Q46).
+**Deletion removes the row** (A6), rather than marking it: the row holds the
+email, and a tombstone keyed by the user id is that id surviving the account.
+The connection runs with `secure_delete`, so the freed page is zeroed and the
+email does not linger in the file's free list, where a byte walk finds it.
+
+**Sessions** are `user_id.expiry.mac`, where the MAC is HMAC-SHA256 over
+`user_id|epoch|expiry` under `JOBSCOUT_SESSION_SECRET`. The expiry is inside
+the signed payload, so it cannot be extended by editing the cookie. The
+account's `session_epoch` is signed but not carried: the server reads it from
+the row it already reads on every request, so a reset, which bumps it, makes
+every cookie issued before it fail its MAC (Q45). A valid signature is
+necessary and not sufficient: a deleted account stops working at once rather
+than when its cookie runs out.
+
+Not here, logged instead: sign-in rate limiting (Q46).
 """
 
 import hashlib
@@ -157,6 +168,9 @@ def db_path() -> Path:
     return paths.data_home() / "data" / "accounts.db"
 
 
+# A5 shipped a `deleted_at` column that only tests ever wrote. Deletion now
+# removes the row, so a store created from here on does not have it, and one
+# created before keeps a column nothing reads.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS accounts (
     user_id         TEXT PRIMARY KEY,
@@ -164,7 +178,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     passphrase_hash TEXT,
     invite_code     TEXT UNIQUE NOT NULL,
     created_at      TEXT NOT NULL,
-    deleted_at      TEXT
+    session_epoch   INTEGER NOT NULL DEFAULT 0
 )
 """
 
@@ -174,7 +188,17 @@ def _connect() -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path)
     db.row_factory = sqlite3.Row
+    # Zero freed pages: a deleted account's email must not survive in the
+    # file's free list (A6's residue walker reads the bytes, not the rows).
+    db.execute("PRAGMA secure_delete = ON")
     db.execute(_SCHEMA)
+    # A store written by A5 predates the epoch. `CREATE ... IF NOT EXISTS`
+    # does not add a column to a table that exists, so add it here.
+    columns = {row["name"] for row in db.execute("PRAGMA table_info(accounts)")}
+    if "session_epoch" not in columns:
+        db.execute("ALTER TABLE accounts ADD COLUMN session_epoch "
+                   "INTEGER NOT NULL DEFAULT 0")
+        db.commit()
     return db
 
 
@@ -261,7 +285,7 @@ def redeem(code: str, email: str, passphrase: str) -> str:
 
     A code that never existed, one already redeemed, and one whose account was
     deleted all raise the same `InviteRefused`: which of the three it was is a
-    fact about somebody else's invite.
+    fact about somebody else's invite. A reset code (`reset`) redeems here too.
     """
     email = _normalise_email(email)
     _check_passphrase(passphrase)
@@ -269,7 +293,7 @@ def redeem(code: str, email: str, passphrase: str) -> str:
     try:
         row = db.execute(
             "SELECT user_id FROM accounts WHERE invite_code = ? "
-            "AND email IS NULL AND deleted_at IS NULL",
+            "AND email IS NULL",
             (_code_digest(code or ""),)).fetchone()
         if row is None:
             raise InviteRefused("That invite code is not valid.")
@@ -283,7 +307,7 @@ def redeem(code: str, email: str, passphrase: str) -> str:
         try:
             claimed = db.execute(
                 "UPDATE accounts SET email = ?, passphrase_hash = ? "
-                "WHERE user_id = ? AND email IS NULL AND deleted_at IS NULL",
+                "WHERE user_id = ? AND email IS NULL",
                 (email, hash_passphrase(passphrase), row["user_id"])).rowcount
         except sqlite3.IntegrityError as exc:
             raise EmailTaken("An account already uses that email. "
@@ -306,7 +330,7 @@ def authenticate(email: str, passphrase: str) -> Optional[str]:
     try:
         row = db.execute(
             "SELECT user_id, passphrase_hash FROM accounts WHERE email = ? "
-            "AND deleted_at IS NULL AND passphrase_hash IS NOT NULL",
+            "AND passphrase_hash IS NOT NULL",
             (email,)).fetchone()
     finally:
         db.close()
@@ -319,25 +343,107 @@ def authenticate(email: str, passphrase: str) -> Optional[str]:
                                                  row["passphrase_hash"]) else None
 
 
-def active(user_id: str) -> bool:
-    """Redeemed and not deleted. Read on every request, not only at sign-in."""
+def _epoch(user_id: str) -> Optional[int]:
+    """
+    The session epoch of a redeemed account, or None if there is no such
+    account or it is awaiting a redeem. Read on every request, not only at
+    sign-in, so a deletion or a reset takes effect at once.
+    """
     db = _connect()
     try:
-        return db.execute(
-            "SELECT 1 FROM accounts WHERE user_id = ? AND email IS NOT NULL "
-            "AND deleted_at IS NULL", (user_id,)).fetchone() is not None
+        row = db.execute(
+            "SELECT session_epoch FROM accounts WHERE user_id = ? "
+            "AND email IS NOT NULL", (user_id,)).fetchone()
     finally:
         db.close()
+    return row["session_epoch"] if row else None
+
+
+def active(user_id: str) -> bool:
+    """Redeemed, not deleted, and not awaiting a reset."""
+    return _epoch(user_id) is not None
 
 
 def email_of(user_id: str) -> Optional[str]:
     db = _connect()
     try:
-        row = db.execute("SELECT email FROM accounts WHERE user_id = ? "
-                         "AND deleted_at IS NULL", (user_id,)).fetchone()
+        row = db.execute("SELECT email FROM accounts WHERE user_id = ?",
+                         (user_id,)).fetchone()
     finally:
         db.close()
     return row["email"] if row else None
+
+
+def find(who: str) -> Optional[str]:
+    """
+    The user id `who` names: a user id, or the email an account signs in with.
+    For the operator, who is told an email and reads ids off `list_accounts`.
+    """
+    who = (who or "").strip()
+    db = _connect()
+    try:
+        row = db.execute("SELECT user_id FROM accounts WHERE user_id = ? "
+                         "OR email = ?", (who, who.lower())).fetchone()
+    finally:
+        db.close()
+    return row["user_id"] if row else None
+
+
+def list_accounts() -> list:
+    """
+    Every account, oldest first: `user_id`, `email` (None until redeemed, and
+    again while a reset is waiting to be redeemed) and `created_at`. Never the
+    hash, the code digest or the epoch.
+    """
+    db = _connect()
+    try:
+        rows = db.execute("SELECT user_id, email, created_at FROM accounts "
+                          "ORDER BY created_at, user_id").fetchall()
+    finally:
+        db.close()
+    return [dict(row) for row in rows]
+
+
+def reset(user_id: str) -> str:
+    """
+    Send an account back to "invited": clear its email and passphrase, store a
+    fresh one-time code, and bump its session epoch. Returns the code.
+
+    The epoch is what ends the sessions (Q45). Clearing the email already
+    stops them while the reset waits, but it would not keep them stopped: the
+    moment the friend redeems, the row is active again and a cookie stolen
+    before the reset would verify. With the epoch in its MAC, it cannot.
+    Raises `KeyError` for an id with no account.
+    """
+    code = secrets.token_urlsafe(16)
+    db = _connect()
+    try:
+        changed = db.execute(
+            "UPDATE accounts SET email = NULL, passphrase_hash = NULL, "
+            "invite_code = ?, session_epoch = session_epoch + 1 "
+            "WHERE user_id = ?", (_code_digest(code), user_id)).rowcount
+        if not changed:
+            raise KeyError(user_id)
+        db.commit()
+    finally:
+        db.close()
+    return code
+
+
+def delete(user_id: str) -> int:
+    """
+    Remove the account row. Returns how many rows went: 1, or 0 if there was
+    none. Every session for it stops at once, because `session_user` reads the
+    row on each request. The user's files are `paths.remove_user_home`'s.
+    """
+    db = _connect()
+    try:
+        removed = db.execute("DELETE FROM accounts WHERE user_id = ?",
+                             (user_id,)).rowcount
+        db.commit()
+    finally:
+        db.close()
+    return removed
 
 
 # -------------------------------------------------------------- session ----
@@ -346,32 +452,48 @@ def _mac(payload: str, secret: bytes) -> str:
     return hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def _payload(user_id: str, epoch: int, expiry) -> str:
+    return f"{user_id}|{epoch}|{expiry}"
+
+
 def issue_session(user_id: str, *, now: Optional[float] = None) -> str:
-    """A cookie value naming `user_id` until the expiry signed into it."""
+    """
+    A cookie value naming `user_id` until the expiry signed into it, and until
+    the account's session epoch moves. Raises `KeyError` for an account that
+    cannot sign in: there is no epoch to sign.
+    """
     paths.user_home(user_id)  # the id is a directory name; refuse a bad one here
+    epoch = _epoch(user_id)
+    if epoch is None:
+        raise KeyError(user_id)
     expiry = int(now if now is not None else time.time()) + SESSION_TTL_SECONDS
-    payload = f"{user_id}|{expiry}"
-    return f"{user_id}.{expiry}.{_mac(payload, session_secret())}"
+    return f"{user_id}.{expiry}.{_mac(_payload(user_id, epoch, expiry), session_secret())}"
 
 
 def session_user(token: str, *, now: Optional[float] = None) -> Optional[str]:
     """
     The user a cookie names, or None if it names nobody.
 
-    None for: absent, malformed, a MAC that does not match (tampered, or signed
-    under another secret), expired, or an account that is no longer active.
-    Every one of those is the same answer to the caller — sign in — so none of
-    them is distinguished outside this function.
+    None for: absent, malformed, a MAC that does not match (tampered, signed
+    under another secret, or issued before a reset moved the epoch), expired,
+    or an account that is deleted or awaiting a reset. Every one of those is
+    the same answer to the caller — sign in — so none of them is distinguished
+    outside this function.
     """
     parts = (token or "").split(".")
     if len(parts) != 3:
         return None
     user_id, expiry, mac = parts
-    if not hmac.compare_digest(_mac(f"{user_id}|{expiry}", session_secret()), mac):
+    secret = session_secret()
+    epoch = _epoch(user_id)
+    # The MAC is computed either way, so an id with no account costs what a
+    # real one does; -1 is an epoch no account has.
+    expected = _mac(_payload(user_id, -1 if epoch is None else epoch, expiry), secret)
+    if not hmac.compare_digest(expected, mac) or epoch is None:
         return None
     try:
         if int(expiry) <= (now if now is not None else time.time()):
             return None
     except ValueError:
         return None
-    return user_id if active(user_id) else None
+    return user_id

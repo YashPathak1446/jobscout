@@ -62,6 +62,7 @@ from agents.orchestrator import (
     EmailTaken,
     InviteRefused,
     PassphraseRefused,
+    RunInProgress,
     account_email,
     active_runs,
     available_profiles,
@@ -73,6 +74,7 @@ from agents.orchestrator import (
     board_stats,
     board_total,
     check_hosting,
+    delete_user_data,
     derived_levels,
     ghosted_jobs,
     hosting_mode,
@@ -318,11 +320,15 @@ def session_create(request: SignIn, response: Response) -> dict:
     return {"signed_in": True}
 
 
+def _clear_session(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE, path="/", secure=True, httponly=True,
+                           samesite="strict")
+
+
 @app.delete("/api/session")
 def session_delete(response: Response) -> dict:
     """Sign out. Works without a valid session: forgetting one is always allowed."""
-    response.delete_cookie(SESSION_COOKIE, path="/", secure=True, httponly=True,
-                           samesite="strict")
+    _clear_session(response)
     return {"signed_in": False}
 
 
@@ -346,6 +352,31 @@ def account_create(request: Redeem, response: Response) -> dict:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _set_session(response, token)
     return {"signed_in": True}
+
+
+@app.delete("/api/account")
+def account_delete(response: Response,
+                   user: Optional[str] = Depends(_caller)) -> dict:
+    """
+    Delete the caller's account and everything under it (pilot plan A6), and
+    return what went: `{"account", "files", "bytes", "areas"}`. Not a soft
+    delete, and not undoable.
+
+    409 while a run is in progress — its worker would write into the tree
+    after it was removed. Local mode has no account to delete: its data is the
+    checkout, and this route will not touch it.
+    """
+    if hosting_mode() == "local":
+        _no_accounts_here()
+    try:
+        removed = delete_user_data(user)
+    except RunInProgress as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="A run is still in progress. Wait for it to finish, "
+                   "then delete your account.") from exc
+    _clear_session(response)
+    return {key: removed[key] for key in ("account", "files", "bytes", "areas")}
 
 
 # ------------------------------------------------------------- meta ----
