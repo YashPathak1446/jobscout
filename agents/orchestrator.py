@@ -1171,9 +1171,11 @@ class JobScoutOrchestrator:
 
         # A profile rule keyed to a component that no longer exists is ignored
         # silently at scoring time — it looks exactly like a rule that simply
-        # did not match. Say so once per run instead.
-        from tools.profile.validation import warn_unresolvable_ids
-        warn_unresolvable_ids(self.profile, gen_parser, context=self.profile_name)
+        # did not match. A rule keyed to a component ID that two components now
+        # share is worse: it fires, on whichever was parsed first (Q34). Say so
+        # once per run instead of neither.
+        from tools.profile.validation import warn_id_problems
+        warn_id_problems(self.profile, gen_parser, context=self.profile_name)
 
         agent = GenerationAgent(
             self.profile,

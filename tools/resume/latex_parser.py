@@ -9,6 +9,7 @@ when a .tex file is available.
 
 import re
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -337,6 +338,85 @@ def _slugify(text: str) -> str:
     return slug.strip("_")[:40]
 
 
+def _assign_ids(prefix: str, bases: list[str], distinguishers: list[str]) -> list[str]:
+    r"""
+    One ID per component, disambiguating only the bases that repeat (Q34).
+
+    A component ID used to be `prefix_slug(base)` and nothing else — the
+    company for an experience, the name for a project. Two roles at one
+    employer therefore produced **one ID for two components**, and every
+    consumer keys a dict by it: `derivation` builds trigger rules that way,
+    `embedding_scorer` stores vectors that way, `analysis_agent` labels the
+    selection breakdown that way. Seven such dicts, so the second role did not
+    error, it *replaced* the first. A promotion was enough to trigger it.
+
+    Two properties this has to hold at once:
+
+    * **A base that appears once keeps its ID byte-identical.** Every profile's
+      `conditional_inclusion` keys, every recorded baseline and every cached
+      embedding is keyed on the old spelling, and all of them are
+      single-occurrence today. Changing those would orphan live rules to fix a
+      bug none of them has.
+    * **Every occurrence of a repeated base is suffixed, including the first.**
+      Leaving the bare ID to whichever component the parser reached first makes
+      the mapping depend on document order, so reordering a resume would swap
+      two components' rules — the same silent misattribution this fixes,
+      moved one step sideways.
+
+    The suffix is the distinguisher (an experience's title, and for a project
+    nothing, because a project's name *is* its identity). It is preferred over
+    a positional `_2` because it survives reordering and because the component
+    editor shows these IDs: two rows reading `exp_vertex_technologies` are not
+    something a person can act on.
+
+    A positional bump is the fallback, for the three ways a suffix can fail to
+    separate two components: `_slugify` truncates at 40 characters, so two long
+    titles at one employer can slug the same; a suffixed ID can land on a
+    *different* component's single-occurrence ID, which must win because it is
+    the one something is already keyed to; and a repeated base may have no
+    distinguisher at all, which is the two-projects-of-one-name case.
+
+    That last case is numbered from 1 rather than left bare-then-`_2`, so no
+    component silently owns the un-suffixed spelling. It is the one case with
+    no order-independent answer available -- if two projects share a name,
+    position is the only thing telling them apart -- so it is positional and
+    says so, rather than looking stable and not being.
+    """
+    slugs = [_slugify(base) for base in bases]
+    counts = Counter(slugs)
+    repeated = {slug for slug, n in counts.items() if n > 1}
+
+    # Single-occurrence IDs are fixed points: claimed before anything is
+    # disambiguated, so a suffix can never be handed one of them.
+    taken = {f"{prefix}_{slug}" for slug in slugs if slug not in repeated}
+    seen = Counter()
+
+    ids = []
+    for slug, distinguisher in zip(slugs, distinguishers):
+        if slug not in repeated:
+            ids.append(f"{prefix}_{slug}")
+            continue
+
+        seen[slug] += 1
+        if distinguisher and _slugify(distinguisher) != slug:
+            stem = _slugify(f"{slug} {distinguisher}")
+            bump = 2
+        else:
+            # Nothing to distinguish them by; number every occurrence.
+            stem = f"{slug}_{seen[slug]}"
+            bump = seen[slug] + 1
+
+        candidate = f"{prefix}_{stem}"
+        while candidate in taken:
+            candidate = f"{prefix}_{stem}_{bump}"
+            bump += 1
+
+        taken.add(candidate)
+        ids.append(candidate)
+
+    return ids
+
+
 def parse_latex_resume(tex_path: str) -> LatexResume:
     """
     Parse a Jake's Resume LaTeX file into structured components.
@@ -444,7 +524,9 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
                     if cleaned:
                         bullets.append(cleaned)
 
-            exp_id = f"exp_{_slugify(company or title)}"
+            # Assigned in one pass over the whole pool below (Q34) -- whether
+            # this company repeats is not knowable from one entry.
+            exp_id = ""
             all_text = experience_keyword_text(title, company, bullets)
             keywords = _extract_keywords(all_text)
 
@@ -520,7 +602,7 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
                     if cleaned:
                         bullets.append(cleaned)
 
-            proj_id = f"proj_{_slugify(name_part)}"
+            proj_id = ""  # likewise, assigned in the pass below
             all_text = project_keyword_text(name_part, tech_part, bullets)
             keywords = _extract_keywords(all_text)
 
@@ -551,6 +633,21 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
             value = _clean_latex(m.group(2)).strip().rstrip("\\").strip()
             if label and value:
                 skills_categories[label] = value
+
+    # One pass per pool, now that every member is known. An experience is
+    # identified by its employer and told apart by its title; a project is
+    # identified by its name and has nothing else to be told apart by.
+    for component, assigned in zip(experiences, _assign_ids(
+            "exp",
+            [e.company or e.title for e in experiences],
+            [e.title for e in experiences])):
+        component.id = assigned
+
+    for component, assigned in zip(projects, _assign_ids(
+            "proj",
+            [pr.name for pr in projects],
+            ["" for _ in projects])):
+        component.id = assigned
 
     return LatexResume(
         name=name,

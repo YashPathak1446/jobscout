@@ -8423,6 +8423,70 @@ disagree with it. The same shape as R55's comment crediting a guard that
 never fired, and as the `fly.toml` comment that named a variable nothing read
 (R89) — a true-looking sentence with nothing on the other end of it.
 
+## Q34. Two roles at one company are one component id
+
+**Status:** Resolved 2026-09-21, found the same day while adding the second
+fixture user for the pilot plan's A2. Fixed before A2 ships rather than after,
+because A2's commit could not otherwise leave the suite green.
+
+`resume_two_degrees_non_us.txt` holds **two roles at Vertex Technologies** —
+AI/ML Intern, then Business Analyst Intern. `latex_parser` derives a component
+id from the company alone, so both parse as `exp_vertex_technologies`, and
+`test_latex_round_trip` fails the moment that resume is committed as a master:
+the second role's bullets replace the first's on the way through a dict keyed
+by id.
+
+The round-trip test is right and the parser is wrong. The blast radius is
+wider than one test — `conditional_inclusion` in a profile is keyed by
+component id (`resume_preferences.experiences`), and `generation_agent`
+selects by id, so **one of the two roles is unaddressable**: a trigger written
+for either fires for whichever the parser kept. Promotions and repeat
+employers are ordinary, so this is not a fixture artifact.
+
+Nobody found it before because no master in the repo had a repeated employer.
+The same shape as R70 and R69 — a fork where the author's own resume takes one
+side every time — and the same reason the rule is *keep a fixture nobody here
+authored*: it is the only thing that walks the other side. The round-trip test
+had asserted the right thing for six weeks; what it lacked was an input.
+
+**The fix.** `latex_parser._assign_ids` runs once per pool, after parsing,
+because whether a base repeats is not knowable from one entry. A base that
+appears once keeps `prefix_slug(base)` **byte-identical** — verified against
+the committed parser across all five masters in the checkout, drift zero
+outside the duplicate — because every profile key, every recorded baseline and
+every cached embedding is keyed on the old spelling and all of them are
+single-occurrence.
+
+Every occurrence of a repeated base is suffixed, **including the first**.
+Leaving the bare ID to whichever component the parser reached first would make
+the mapping depend on document order, so reordering a resume would move one
+role's rules onto another — the same silent misattribution, one step sideways.
+The suffix is the title, not a positional `_2`, so it survives a reshuffle and
+so the component editor shows something a person can act on. Positional
+numbering is the fallback for the three cases a title cannot separate:
+`_slugify`'s 40-character truncation, a suffix landing on a real
+single-occurrence ID, and a repeated project name, which has no second field.
+
+**And the fuzzy resolver hides the key this creates.** A pre-Q34 profile
+carrying `exp_vertex_technologies` does not become unresolvable — it
+*prefix-matches both* suffixed roles, and `get_experience_by_id` returns the
+first. `find_unresolvable_ids` reports nothing, deliberately, because it
+resolves through that same path. So `find_ambiguous_ids` was added beside it:
+an ID that exactly matches nothing and prefixes two or more components names
+the wrong number of things, and the remedy differs — *delete this rule* versus
+*say which one you meant*.
+
+**The check also had no caller on the path that matters.** Its only two were
+the `init_profile` CLI's `main()` and the orchestrator at generation, so a
+profile imported through either UI went unchecked until somebody started a
+run — and a title edit, which is what orphans a key under this scheme, goes
+through exactly that import path. `create_profile` now returns `id_problems`
+as data the way `needs_you` already is. A check that could not run returns a
+problem saying so rather than `[]`, since `[]` reads everywhere as "every rule
+names one component", which is the one thing a failed check does not know.
+
+---
+
 ---
 
 # Out of scope

@@ -28,8 +28,10 @@ from .derivation import (
     merge_importance,
 )
 from .validation import (
+    find_ambiguous_ids,
+    find_id_problems,
     find_unresolvable_ids,
-    warn_unresolvable_ids,
+    warn_id_problems,
 )
 
 __all__ = [
@@ -54,6 +56,8 @@ __all__ = [
     'merge_conditional_triggers',
     'merge_importance',
     # Validation
+    'find_ambiguous_ids',
+    'find_id_problems',
     'find_unresolvable_ids',
-    'warn_unresolvable_ids',
+    'warn_id_problems',
 ]

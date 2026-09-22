@@ -1,0 +1,201 @@
+%-------------------------
+% Resume in Latex
+% Base template: Jake Gutierrez - https://github.com/jakegut/resume
+% License : MIT
+%------------------------
+
+\documentclass[letterpaper,11pt]{article}
+
+% No \usepackage[T1]{fontenc} here, and that is deliberate (R69).
+%
+% T1 does fix the three glyphs OT1 gets wrong — `<`, `>` and a literal tilde —
+% and it was tried. It also breaks the ToUnicode mapping for the en-dash, so
+% every date range extracts from the PDF as a control character instead of
+% "2021 - 2025". For a resume that ATS software reads as text, trading every
+% date for three glyphs is the wrong way round. Measured by compiling both
+% ways and extracting the text, not assumed.
+%
+% The glyphs are handled where they arise instead: escaped in the two
+% renderers, with a tilde written as $\sim$ rather than \textasciitilde.
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+\input{glyphtounicode}
+
+
+%----------FONT OPTIONS----------
+% sans-serif
+% \usepackage[sfdefault]{FiraSans}
+% \usepackage[sfdefault]{roboto}
+% \usepackage[sfdefault]{noto-sans}
+% \usepackage[default]{sourcesanspro}
+
+% serif
+% \usepackage{CormorantGaramond}
+% \usepackage{charter}
+
+
+\pagestyle{fancy}
+\fancyhf{} % clear all header and footer fields
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Adjust margins
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-.5in}
+\addtolength{\textheight}{1.0in}
+
+\urlstyle{same}
+
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Sections formatting
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+% Ensure that generate pdf is machine readable/ATS parsable
+\pdfgentounicode=1
+
+%-------------------------
+% Custom commands
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-2pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubSubheading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \textit{\small#1} & \textit{\small #2} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubItem}[1]{\resumeItem{#1}\vspace{-4pt}}
+
+\renewcommand\labelitemii{$\vcenter{\hbox{\tiny$\bullet$}}$}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+%-------------------------------------------
+%%%%%%  RESUME STARTS HERE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\begin{document}
+
+%----------HEADING----------
+% \begin{tabular*}{\textwidth}{l@{\extracolsep{\fill}}r}
+%   \textbf{\href{http://johndoe.com/}{\John Doe}} & Email : \href{mailto:johndoe@gmail.com}{johndoe@gmail.com}\\
+%   \href{http://johndoe.com/}{http://www.johndoe.com} & Mobile : +1-123-456-7890 \\
+% \end{tabular*}
+
+\begin{center}
+    \textbf{\Huge \scshape Rohan Deshmukh (they/them)} \\ \vspace{1pt}
+    \small 413-555-0142 $|$ \href{mailto:deshmukhrohan@example.com}{\underline{deshmukhrohan@example.com}} $|$ \href{https://www.linkedin.com/in/rohandeshmukh}{\underline{LinkedIn}}
+\end{center}
+
+\section{Education}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {Riverside Institute}{Northfield Northfield, MN}
+      {Masters of Science in Computer Science}{Aug. 2025 – May 2027}
+    \resumeSubheading
+      {Deccan Institute Bangalore, India}{}
+      {Bachelor of Technology in Computer Science and Engineering}{Aug. 2021 – May 2025}
+  \resumeSubHeadingListEnd
+
+\section{Experience}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {AI/ML Intern}{Jan 2025 - April 2025}
+      {Vertex Technologies}{Bangalore, India}
+      \resumeItemListStart
+        \resumeItem{Built Multi Factor Authentication pipeline with behavioral biometrics and device fingerprinting.}
+        \resumeItem{Developed real-time fraud detection using mouse dynamics, InfluxDB, and Flask, mitigating fraud.}
+        \resumeItem{Integrated ORB/SIFT for signature verification and React dashboards.}
+      \resumeItemListEnd
+    \resumeSubheading
+      {Research Project Developer}{March 2024 - Nov 2024}
+      {Arcline Engineering}{Bangalore, India}
+      \resumeItemListStart
+        \resumeItem{Designed XAI-based cost estimation models for aerospace components.}
+        \resumeItem{Applied regression and clustering in Python to optimize supply chain workflows.}
+        \resumeItem{Delivered data driven recommendations to engineering teams.}
+      \resumeItemListEnd
+    \resumeSubheading
+      {Business Analyst Intern}{June 2023 - Aug 2023}
+      {Vertex Technologies}{Bangalore, India}
+      \resumeItemListStart
+        \resumeItem{Analyzed requirements and workflows for a decentralized crowdfunding platform.}
+        \resumeItem{Created wireframes, documentation, and process flows for dev-business collaboration.}
+      \resumeItemListEnd
+  \resumeSubHeadingListEnd
+
+\section{Projects}
+    \resumeSubHeadingListStart
+      \resumeProjectHeading
+        {\textbf{TrailSpecies} $|$ \emph{Next.js, React, PostgreSQL}}{Sep 2025 - Dec 2025}
+      \resumeItemListStart
+        \resumeItem{Built a full-stack ecology web app giving hikers wildlife data and species sightings by trail.}
+      \resumeItemListEnd
+      \resumeProjectHeading
+        {\textbf{Integrative Prediction of Post-Stroke Vascular Events} $|$ \emph{Python, GANs, SHAP, LIME}}{Jan 2025 - Aug 2025}
+      \resumeItemListStart
+        \resumeItem{Built a two-stage ML framework using GANs for augmentation and SHAP/LIME for interpretability.}
+        \resumeItem{Integrated clinical biomarkers with platelet function data for vascular event prediction.}
+      \resumeItemListEnd
+      \resumeProjectHeading
+        {\textbf{Cost Estimation in Aerospace Parts Manufacturing} $|$ \emph{Python, XAI}}{Jan 2024 - Dec 2024}
+      \resumeItemListStart
+        \resumeItem{Built an ML and XAI cost estimation tool for aerospace manufacturing from historical data.}
+      \resumeItemListEnd
+      \resumeProjectHeading
+        {\textbf{Youtube Viralomics} $|$ \emph{Python, statistical modelling}}{May 2024 - Dec 2024}
+      \resumeItemListStart
+        \resumeItem{Built a framework quantifying video virality through statistical analysis and feature selection.}
+      \resumeItemListEnd
+    \resumeSubHeadingListEnd
+
+\section{Technical Skills}
+  \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     \textbf{Languages}{: Python, JavaScript, C/C++, SQL (Postgres), HTML/CSS, R} \\
+     \textbf{F rameworks}{: React, Node.js, Flask, FastAPI} \\
+     \textbf{Developer T ools}{: Git, Docker, VS Code, Visual Studio, PyCharm} \\
+     \textbf{Libraries}{: NumPy, pandas, Matplotlib, PyTorch}
+    }}
+  \end{itemize}
+
+\end{document}

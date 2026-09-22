@@ -1,0 +1,152 @@
+{
+  "user_id": "rohan_deshmukh",
+  "created": "2026-09-21",
+  "description": "Profile for Rohan Deshmukh (they/them)",
+  "personal_info": {
+    "name": "Rohan Deshmukh (they/them)",
+    "email": "deshmukhrohan@example.com",
+    "phone": "413-555-0142",
+    "github_url": "",
+    "linkedin_url": "https://www.linkedin.com/in/rohandeshmukh",
+    "graduation_date": "May 2027",
+    "graduation_term": "Spring 2027",
+    "school": "Riverside Institute",
+    "location": "",
+    "degree": "Masters of Science in Computer Science",
+    "visa_status": "",
+    "us_citizen": false,
+    "permanent_resident": false,
+    "holds_security_clearance": false,
+    "_comment": [
+      "Blank means unknown, and unknown is what a template knows about someone",
+      "it has never met. These fields used to carry instructions as values \u2014",
+      "'Your Name', 'City, State', 'US Citizen | Green Card | F1 OPT | H1B' \u2014",
+      "and nothing downstream could tell an instruction from an answer. The",
+      "wizard pre-filled 'City, State' into the location box and left Continue",
+      "enabled, so agreeing with the form recorded a location that does not",
+      "exist. Everything a resume states is filled in by derive_personal_info();",
+      "what is left is what the About-you screen asks."
+    ]
+  },
+  "job_preferences": {
+    "target_roles": [
+      "Software Engineer",
+      "Backend Engineer"
+    ],
+    "seniority": [],
+    "employment_types": [
+      "full-time"
+    ],
+    "exclude_keywords": [
+      "PhD required",
+      "security clearance required"
+    ],
+    "locations": {
+      "countries": [
+        "United States"
+      ],
+      "exclude_countries": [],
+      "states_priority": [],
+      "states_acceptable": [],
+      "cities": [
+        "Remote"
+      ],
+      "remote_ok": true,
+      "willing_to_relocate": true
+    },
+    "years_experience": null
+  },
+  "resume_preferences": {
+    "master_resume_path": "data/master_resumes/rohan_deshmukh.tex",
+    "experiences": {
+      "always_include": [],
+      "conditional_inclusion": {
+        "exp_vertex_technologies_ai_ml_intern": {
+          "include_if_jd_contains": [
+            "ai",
+            "flask",
+            "ml",
+            "react"
+          ],
+          "description": "Auto-derived from tech stack and bullet keywords"
+        },
+        "exp_arcline_engineering": {
+          "include_if_jd_contains": [
+            "python"
+          ],
+          "description": "Auto-derived from tech stack and bullet keywords"
+        }
+      },
+      "never_include": []
+    },
+    "projects": {
+      "always_include": [],
+      "high_priority": [],
+      "conditional_inclusion": {
+        "proj_trailspecies": {
+          "include_if_jd_contains": [
+            "full-stack",
+            "next.js",
+            "postgresql",
+            "react"
+          ],
+          "description": "Auto-derived from tech stack and bullet keywords"
+        },
+        "proj_integrative_prediction_of_post_stroke_va": {
+          "include_if_jd_contains": [
+            "gans",
+            "lime",
+            "shap"
+          ],
+          "description": "Auto-derived from tech stack and bullet keywords"
+        },
+        "proj_cost_estimation_in_aerospace_parts_manuf": {
+          "include_if_jd_contains": [
+            "xai"
+          ],
+          "description": "Auto-derived from tech stack and bullet keywords"
+        },
+        "proj_youtube_viralomics": {
+          "include_if_jd_contains": [
+            "statistical modelling"
+          ],
+          "description": "Auto-derived from tech stack and bullet keywords"
+        }
+      },
+      "never_include": []
+    },
+    "formatting": {
+      "max_bullet_chars_experiences": 280,
+      "min_bullet_chars_experiences": 140,
+      "max_bullet_chars_projects": 140,
+      "min_bullet_chars_projects": 120,
+      "target_page_count": 1,
+      "max_skill_categories": 6,
+      "languages_category_first": true,
+      "template": "jakes_resume"
+    },
+    "component_importance": {
+      "experiences": {
+        "exp_vertex_technologies_ai_ml_intern": "high",
+        "exp_arcline_engineering": "high",
+        "exp_vertex_technologies_business_analyst_int": "medium"
+      },
+      "projects": {
+        "proj_trailspecies": "high",
+        "proj_integrative_prediction_of_post_stroke_va": "high",
+        "proj_cost_estimation_in_aerospace_parts_manuf": "medium",
+        "proj_youtube_viralomics": "medium"
+      }
+    }
+  },
+  "agent_preferences": {
+    "max_jobs_to_discover": 30,
+    "checkpoint_after_scoring": true,
+    "use_mock_embeddings": false,
+    "retry_on_validation_fail": true,
+    "max_retries": 2
+  },
+  "notes": {
+    "how_to_use": "1. Copy this file. 2. Rename to firstname_lastname.json. 3. Fill in all fields. 4. Place your resume.tex in data/master_resumes/. 5. Run: python main.py --profile firstname_lastname"
+  }
+}

@@ -253,6 +253,49 @@ def import_to_tex(source, destination=None, backend: str = None) -> Path:
     return save_extracted(extracted["schema"], extracted["source"], destination)
 
 
+def _id_problems(name: str, resume_path) -> list:
+    """
+    Rules in the profile just written whose component ID names no component, or
+    more than one.
+
+    **Here rather than in `load_profile`, which is what "check at load" would
+    literally mean.** The check needs the resume parsed to know which IDs
+    exist, and `ResumeParser(skip_embeddings=True)` measures 67 ms on this
+    machine. `refresh_board_gate` calls `load_profile` before *every* board
+    render, so that is 67 ms of waste per page view for an answer that changes
+    only when the profile or the resume does — and `load_profile` is also
+    called where no master resume exists, so it would have to degrade to
+    silence, which is the failure being fixed.
+
+    `create_profile` is where a profile is *adopted* rather than merely read,
+    it is the path both UIs use for an import or a correction, and it is where
+    a title edit lands — the edit that orphans a key under Q34's ID scheme. It
+    had no check at all before this: the validator's only two callers were the
+    `init_profile` CLI's `main()` and the orchestrator at generation, so a
+    profile imported through either UI went unchecked until a run started.
+
+    Returned as data the way `needs_you` is, so a UI can show it. Never
+    raises — a profile that was written must still be reported on.
+
+    A check that could not run returns **a problem saying so**, not `[]`. An
+    empty list is read by every caller as "every rule names one component",
+    which is the one thing a failed check does not know — unknown is never a
+    value, and a swallowed exception here would restore the silence this
+    function exists to end.
+    """
+    try:
+        from tools.profile import load_profile
+        from tools.profile.validation import find_id_problems
+        from tools.resume.resume_parser import ResumeParser
+
+        return find_id_problems(
+            load_profile(name),
+            ResumeParser(str(resume_path), skip_embeddings=True))
+    except Exception as exc:  # pragma: no cover - reporting must not fail
+        return [f"component IDs could not be checked ({exc}) — the rules in "
+                f"this profile may name components that do not exist"]
+
+
 def create_profile(resume_path, name: str, force: bool = False) -> dict:
     """
     Build, validate and write a profile in one call.
@@ -291,6 +334,7 @@ def create_profile(resume_path, name: str, force: bool = False) -> dict:
         "profile_path": out_path,
         "backup_path": backup,
         "derived": derived_info,
+        "id_problems": _id_problems(name, resume_path),
         "needs_you": {
             section: [f for f in fields if f not in derived_info]
             for section, fields in NEEDS_HUMAN.items()
@@ -581,24 +625,25 @@ def main():
     print()
     try:
         from tools.profile import load_profile
-        from tools.profile.validation import find_unresolvable_ids
+        from tools.profile.validation import find_id_problems
 
         loaded = load_profile(args.name)
         print("Profile validates against the schema.")
 
         # Schema validity is not the same as usability: a rule keyed to a
-        # component that does not exist loads fine and then never fires.
-        # The template used to ship five such IDs.
-        ghosts = find_unresolvable_ids(loaded, ResumeParser(str(resume_path),
-                                                            skip_embeddings=True))
+        # component that does not exist loads fine and then never fires, and a
+        # rule keyed to an ID two components now share fires on whichever was
+        # parsed first (Q34). The template used to ship five of the former.
+        ghosts = find_id_problems(loaded, ResumeParser(str(resume_path),
+                                                       skip_embeddings=True))
         if ghosts:
             print()
-            print(f"WARNING: {len(ghosts)} rule(s) reference components that "
-                  f"do not exist:")
+            print(f"WARNING: {len(ghosts)} rule(s) do not name one real "
+                  f"component:")
             for problem in ghosts:
                 print(f"    {problem}")
         else:
-            print("Every profile rule resolves to a real component.")
+            print("Every profile rule names exactly one real component.")
     except Exception as exc:
         print(f"WARNING: profile does not validate yet: {exc}")
         print("Fill the fields above and re-check.")
