@@ -9235,6 +9235,21 @@ failed levels fetch clear `derived` and say so, not keep the old list.
 survives a third client, and the input bound alone would leave the next
 field with the same hole. Also align the two maxima (40 vs 60).
 
+## Q45. A passphrase reset does not end the sessions it was meant to end
+
+**Status:** Open, deferred to A6 (decided 2026-09-22). A session is valid
+until its signed expiry, as long as the account row is active. Resetting a
+passphrase changes neither, so a cookie issued before the reset still works
+for up to 14 days. That matters in exactly one case, a reset because the
+passphrase leaked, and in that case it is the whole point of the reset.
+
+The fix is a per-account `session_epoch`, signed into the cookie and bumped
+by `reset-passphrase`. **It ships with A6's `scripts/admin.py
+reset-passphrase`, not before.** Added in A5, it would be a field nothing
+bumps, which is instance seven of the recurring bug. Until then the
+workaround is operational: rotating `JOBSCOUT_SESSION_SECRET` signs everyone
+out.
+
 ---
 
 # Out of scope
