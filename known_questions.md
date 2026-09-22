@@ -8919,6 +8919,14 @@ to `/lib/`, the only `lib` that packaging writes. **The files still have to
 be committed from the author's machine.** Anchoring makes them show up as
 untracked there, which is the prompt to add them.
 
+Two consequences already in the tree. `test_component_ids.py`'s check that
+`api.ts` names `id_problems` skips on every clone, so the half of that test
+aimed at the type has never run anywhere but one machine. And A4's React
+badge reads `gate_verdict`, `gate_reason` and `unconfirmed` defensively
+(`GateBadge.tsx`, `Board.tsx`) instead of through `Job` and the board
+response type, because those types are in the missing file. **When it is
+committed, declare the three fields there and drop the defensive reads.**
+
 ---
 
 # Out of scope

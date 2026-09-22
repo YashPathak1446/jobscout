@@ -1390,9 +1390,42 @@ def screen_board(has_latex):
     first = (int(page) - 1) * page_size + 1
     st.caption(f"Showing {first}–{first + len(rows) - 1} of {matching} job(s)")
 
+    # Shown but not confirmed (A4), under the same filters as the total. The
+    # row badge says which; this says how many, so a reader does not have to
+    # page through the board to learn that half of it rests on a question
+    # they skipped.
+    unconfirmed = board_total(None, unconfirmed=True, **criteria)
+    if unconfirmed:
+        st.info(
+            f"**{unconfirmed} of these job(s) are unconfirmed** — each has a "
+            f"requirement you have not answered, or a description that could "
+            f"not be read. Answering the work-authorization questions on "
+            f"*About you* settles the first kind.",
+            icon="❔",
+        )
+
     bands = score_bands(None)
     for row in rows:
         _board_row(row, statuses, has_latex, bands)
+
+
+def _gate_badge(where, row):
+    """
+    What the gate made of this row, when it is anything but a plain pass.
+
+    Branches on `gate_verdict`, never on whether `gate_reason` is set: since
+    A4 an undecidable job carries a reason too, and reading "has a reason" as
+    "rules you out" would put ⛔ on every job the gate could not decide.
+
+    A hidden row is only on screen when the user asked to see those, so it
+    explains rather than nags — and the reason is the posting's own words.
+    """
+    verdict = row.get("gate_verdict")
+    reason = _plain(row.get("gate_reason") or "")
+    if verdict == "hidden":
+        where.caption(f"⛔ Rules you out — {reason}")
+    elif verdict == "undecidable":
+        where.caption(f"❔ Unconfirmed — {reason}")
 
 
 def _count_for(entries, value):
@@ -1478,10 +1511,7 @@ def _board_row(row, statuses, has_latex, bands=None):
             meta.append("not scored yet")
         heading.caption("  ·  ".join(m for m in meta if m))
 
-        # Only reachable when the user asked to see these, so it explains
-        # rather than nags — and the reason is the posting's own words.
-        if row.get("gate_reason"):
-            heading.caption(f"⛔ Rules you out — {_plain(row['gate_reason'])}")
+        _gate_badge(heading, row)
 
         # Writing only on a real change keeps a render from re-recording the
         # status a row already has.

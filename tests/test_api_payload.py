@@ -35,7 +35,7 @@ ALLOWED_LIST_FIELDS = {
     "url", "job_id", "title", "company", "location", "source",
     "score", "status", "first_seen", "last_seen", "scored_at",
     "resume_tex", "resume_pdf", "run_date", "selection",
-    "gate_reason", "gate_checked", "has_jd",
+    "gate_reason", "gate_checked", "gate_verdict", "has_jd",
 }
 
 # Fields that exist on the row and are deliberately held back from lists.

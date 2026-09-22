@@ -108,13 +108,11 @@ CREATE INDEX IF NOT EXISTS idx_history_url ON status_history(url, changed_at);
 """
 
 
-# The verdict a row effectively has. `gate_verdict` arrived with A4; a row
-# judged before it has only `gate_reason`, where "" meant shown and anything
-# else hidden. Read through this rather than either column, so a row the gate
-# has not reached yet is neither lost nor promoted — and a never-judged row
-# (both NULL) is shown, because an unrun gate must not empty the board.
-_VERDICT = ("COALESCE(gate_verdict, CASE WHEN COALESCE(gate_reason, '') != ''"
-            " THEN 'hidden' ELSE 'shown' END)")
+# The verdict a row effectively has. NULL is a row no gate has judged yet,
+# and it is shown: an unrun gate must not empty the board (R62). Rows judged
+# before `gate_verdict` existed are backfilled once by `_migrate`, so this is
+# the only reading of NULL anywhere.
+_VERDICT = "COALESCE(gate_verdict, 'shown')"
 
 
 def _now() -> str:
@@ -203,6 +201,15 @@ class JobStore:
             if column not in existing:
                 self._db.execute(f"ALTER TABLE jobs ADD COLUMN {column} {kind}")
                 logger.info(f"Job store: added column {column}")
+
+        if "gate_verdict" not in existing:
+            # A4. Before the column, a stored reason meant hidden and "" meant
+            # shown. Carried over once, here, so no reader has to know the old
+            # encoding — and a hidden job is not briefly shown between the
+            # upgrade and the next refresh, which re-judges every row anyway.
+            self._db.execute(
+                "UPDATE jobs SET gate_verdict = CASE WHEN gate_reason != ''"
+                " THEN 'hidden' ELSE 'shown' END WHERE gate_reason IS NOT NULL")
 
     def set_score(self, url: str, score: float, selection=None) -> None:
         """

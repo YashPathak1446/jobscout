@@ -142,7 +142,7 @@ emits progress and writes state to `outputs/<date>/`.
   *This line used to say "dropped, never scored", which is wrong on both
   verbs and inverted R61's own record.* Since A4 the gate's verdict has three
   states — shown / hidden / **undecidable** — and an unreadable posting is
-  undecidable: kept, scored and counted, never silently eligible.
+  undecidable: kept, scored, badged and counted, never silently eligible.
   There are **two gates** sharing that judgement, one per run and one per
   board read, and they read different text for the same job (Q39, Q40).
 - `analysis_agent` embeds resume components and JDs, then blends embedding

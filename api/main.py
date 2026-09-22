@@ -253,6 +253,13 @@ def board(
     hidden = 0 if include_ineligible else (
         board_total(None, include_ineligible=True, **criteria) - total)
 
+    # Shown, but not confirmed (A4): a requirement met by a question the
+    # profile has not answered, or a posting that could not be read. Counted
+    # under the same filters as `hidden`, for the same reason — each row
+    # carries its own badge, and a badge you would have to page through to
+    # tally is not a count.
+    unconfirmed = board_total(None, unconfirmed=True, **criteria)
+
     return {
         "jobs": [_without_jd(row)
                  for row in board_jobs(None, sort=sort, limit=limit, offset=offset,
@@ -260,6 +267,7 @@ def board(
                                        **criteria)],
         "total": total,
         "hidden": hidden,
+        "unconfirmed": unconfirmed,
         "offset": offset,
         "limit": limit,
     }

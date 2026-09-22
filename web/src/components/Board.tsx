@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Building2,
+  CircleHelp,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -22,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { GateBadge } from '@/components/GateBadge'
 import { MatchBadge } from '@/components/MatchBadge'
 import { api, type Bands, type Filters, type Job, type Stats } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -51,6 +53,9 @@ export function Board() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [total, setTotal] = useState(0)
   const [hidden, setHidden] = useState(0)
+  // Null until the server has said. A count that has not arrived is not
+  // zero, and rendering it as zero would claim the board is all confirmed.
+  const [unconfirmed, setUnconfirmed] = useState<number | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
   const [bands, setBands] = useState<Bands | null>(null)
   const [filters, setFilters] = useState<Filters | null>(null)
@@ -117,6 +122,14 @@ export function Board() {
         setJobs(result.jobs)
         setTotal(result.total)
         setHidden(result.hidden)
+        // Read defensively until `lib/api.ts` is committed and names the
+        // field (Q41). A server that does not send it leaves the count
+        // unknown rather than zero.
+        setUnconfirmed(
+          'unconfirmed' in result && typeof result.unconfirmed === 'number'
+            ? result.unconfirmed
+            : null,
+        )
         setError(null)
       })
       .catch((e: Error) => setError(e.message))
@@ -312,6 +325,7 @@ export function Board() {
                     </span>
                     <span>seen {since(job.last_seen)}</span>
                   </div>
+                  <GateBadge job={job} />
                 </div>
 
                 <MatchBadge
@@ -379,6 +393,21 @@ export function Board() {
           >
             {showIneligible ? 'Hide them' : 'Show them'}
           </Button>
+        </div>
+      )}
+
+      {/* Shown but unconfirmed (A4): a requirement met by a question the
+          profile has not answered, or a posting that could not be read. Each
+          row carries its badge; this says how many, under the same filters,
+          so nobody has to page through the board to tally them. */}
+      {unconfirmed !== null && unconfirmed > 0 && (
+        <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+          <CircleHelp className="size-4 shrink-0" />
+          <span>
+            {`${unconfirmed} ${
+              unconfirmed === 1 ? 'job is' : 'jobs are'
+            } unconfirmed — a requirement you have not answered, or a description that could not be read. Answering the work-authorization questions in setup settles the first kind.`}
+          </span>
         </div>
       )}
 

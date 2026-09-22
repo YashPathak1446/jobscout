@@ -312,20 +312,39 @@ class TestTheBoardFilter(unittest.TestCase):
 
     def test_a_row_judged_before_the_verdict_column_keeps_its_verdict(self):
         """
-        A store from before A4 has `gate_reason` and no `gate_verdict`. Until
-        the refresh reaches it, a stored reason still means hidden and ""
-        still means shown — neither lost nor promoted.
+        A store from before A4 has `gate_reason` and no `gate_verdict`. The
+        upgrade carries the old encoding over — a reason meant hidden, ""
+        meant shown — so nothing is lost or promoted before the next refresh.
         """
-        self.store._db.execute(
-            "UPDATE jobs SET gate_verdict = NULL, gate_reason = 'old reason'"
-            " WHERE url = 'u-bad'")
-        self.store._db.execute(
-            "UPDATE jobs SET gate_verdict = NULL, gate_reason = ''"
-            " WHERE url = 'u-ok'")
-        self.assertEqual({r["url"] for r in self.store.query(eligible=False)},
-                         {"u-bad"})
-        self.assertIn("u-ok",
-                      {r["url"] for r in self.store.query(eligible=True)})
+        import sqlite3
+
+        path = Path(self.dir.name) / "old.db"
+        db = sqlite3.connect(str(path))
+        db.execute("CREATE TABLE jobs (url TEXT PRIMARY KEY, job_id TEXT,"
+                   " title TEXT, company TEXT, location TEXT, source TEXT,"
+                   " full_jd TEXT, score REAL, status TEXT NOT NULL DEFAULT 'new',"
+                   " first_seen TEXT NOT NULL, last_seen TEXT NOT NULL,"
+                   " scored_at TEXT, resume_tex TEXT, resume_pdf TEXT,"
+                   " run_date TEXT, selection TEXT, gate_reason TEXT,"
+                   " gate_checked TEXT)")
+        for url, reason in (("old-hidden", "asks for 8+ years"),
+                            ("old-shown", ""), ("old-unjudged", None)):
+            db.execute("INSERT INTO jobs (url, first_seen, last_seen,"
+                       " gate_reason) VALUES (?, 't', 't', ?)", (url, reason))
+        db.commit()
+        db.close()
+
+        store = JobStore(path)
+        try:
+            self.assertEqual({r["url"] for r in store.query(eligible=False)},
+                             {"old-hidden"})
+            self.assertEqual({r["url"] for r in store.query(eligible=True)},
+                             {"old-shown", "old-unjudged"})
+            self.assertEqual(store.get("old-hidden")["gate_verdict"], HIDDEN)
+            self.assertEqual(store.get("old-shown")["gate_verdict"], SHOWN)
+            self.assertIsNone(store.get("old-unjudged")["gate_verdict"])
+        finally:
+            store.close()
 
 
 class TestAgainstTheRealStore(unittest.TestCase):
