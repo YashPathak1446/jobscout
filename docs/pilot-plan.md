@@ -125,9 +125,11 @@ renders no user-submitted HTML. Re-evaluate at public signup.
 
 ---
 
-## Stage A — the pilot (~11–14 focused days)
+## Stage A — the pilot (~11–14 focused days, plus A9b)
 
-### A0. Fly egress probe — before anything else (½ day)
+A0 and A1 are done (2026-09-22). A9b was split out of A0 and adds 1–1½ days.
+
+### A0. Fly egress probe — before anything else (½ day) — **DONE 2026-09-22**
 
 If Greenhouse, Lever or Ashby block datacenter IPs, hosting on Fly is in
 question and everything built before finding out was built on sand.
@@ -140,10 +142,83 @@ Cloudflare HTML-200 alike, every reader turns that into `[]`, and Sentry sees no
 exception — so from a datacenter IP a block is indistinguishable from an empty
 board.
 
-Ships regardless of the result: carry per-status-code counts into the run result
-so "0 discovered" can say why.
+#### Result: Fly is not blocked. Proceed.
 
-### A1. Fix the facade parity test — first, because everything leans on it (1 hr)
+`scripts/egress_probe.py`, both legs, all 98 slugs the seed file actually
+carries (the 113 above counted the `_comment` key and the duplicate
+SmartRecruiters case variants — see the findings below).
+
+| | home control | Fly `ord` |
+|---|---|---|
+| taken (UTC) | 2026-09-22 02:26 | 2026-09-22 03:28 |
+| origin | residential | Fly datacenter |
+| 200 | 95 | 95 |
+| 404 | 3 | 3 |
+| blocked / challenged / unreachable | **0** | **0** |
+| roles returned | 11,965 | 11,936 |
+| served via Cloudflare | 35 | 35 |
+
+**98 of 98 slugs returned the identical verdict from both origins**, from two
+genuinely distinct public IPs, and no slug was probed on only one leg. The
+three 404s are the same three on both legs — `greenhouse:kickstarter`,
+`greenhouse:postman`, `workable:j` — which is companies that left the ATS, not
+an origin decision.
+
+**The subtle failure was checked for and cleared.** A block can hide behind a
+200 that returns fewer roles, which is the same "counts are not enough"
+reasoning pointed the other way. 16 slugs differ in role count, total delta
+−29 of 11,965 (0.24%), and the differences run **both directions**
+(`coinbase` returned one more from Fly). That is an hour of live board churn.
+A datacenter filter does not return 99.76% of a board.
+
+**Also measured, and this is the risk map for later:** 35 of 98 slugs are
+served through Cloudflare — all 23 Ashby, all 6 SmartRecruiters, all 6
+Workable. Greenhouse (57, 58% of the list) and Lever (6) are not. The
+Cloudflare count is *identical* on both legs, so the edge did not treat the
+datacenter differently. If this ever changes it will change on those three
+boards, and Greenhouse — the majority of discovery — degrades last.
+
+#### Two caveats. Neither is a reason to stop; both are reasons not to over-read this.
+
+1. **One low-volume snapshot, an hour wide.** 98 requests at 0.3s spacing from
+   one Fly machine in `ord`, once. These boards rate-limit by volume and
+   several sit behind an edge that scores reputation over time, so five friends
+   running discovery concurrently is a different traffic shape from this probe
+   and could be answered differently. It says the IP range is not blocklisted;
+   it does not say the app's steady-state volume is welcome. The plan already
+   re-runs the probe after deploy (Verification step 6) — that is the run
+   whose volume resembles production.
+
+2. **JD scraping was not probed at all.** This measured the five ATS *listing
+   APIs*. `enrichment_agent._real_scrape` fetches each posting's page through a
+   different path with different anti-bot exposure, and it is the stage that
+   would fail as an empty board with scored rows on it (R61's shape). A green
+   listing probe says nothing about it. Fold this into the post-deploy re-run
+   rather than a second probe now: `--input` replay means the scrape path can
+   be exercised against the hosted instance directly.
+
+**Raw records are deliberately not committed.** The home leg's record contains
+the author's residential public IP and this repository is public; committing
+one leg and not the other would leave a comparison nobody can check, so
+neither is committed (`.gitignore` carries `probe-*.json` as a pattern, per the
+ignore-by-pattern rule). The numbers above are the record. Re-derive with
+`python scripts/egress_probe.py --label <leg> --out probe-<leg>.json`.
+
+#### Findings logged, not fixed here
+
+- `tools/assets/ats_companies.json` carries `BoschGroup`/`boschgroup`,
+  `Experian`/`experian` and `SmartRecruiters`/`smartrecruiters` — six slugs,
+  three companies, each fetched twice per run.
+- `workable:j` is a one-letter slug that 404s from both origins, and
+  `harvest_slugs`' `([a-z0-9_-]+)` pattern will match a single character.
+- The "113 slugs" in this item was never 113.
+
+**The half of this item that has not shipped** — carrying per-status-code
+counts into the run result so "0 discovered" can say why — is **A9b** below.
+It was split out deliberately rather than done here: see that item for why
+doing it in A0 would have committed the bug it exists to fix.
+
+### A1. Fix the facade parity test — first, because everything leans on it (1 hr) — **DONE 2026-09-22**
 
 `tests/test_ui_contract.py:173-175` is `assertTrue((api_names & facade) <=
 facade)`. An intersection with `facade` is a subset of `facade` for **every
@@ -151,6 +226,32 @@ possible input** — the assertion is a tautology, and `only_api` is computed fo
 the failure message and never asserted on. The one test standing between
 Streamlit and React diverging asserts nothing, and `user_id` is about to enter
 every facade signature. Five lines.
+
+**It was worse than a tautology, and it took more than five lines.** Two
+separate defects:
+
+1. The failure message named a condition the mechanism *cannot* detect — "the
+   API calls something that is not on the facade", when intersecting *with* the
+   facade can only ever yield facade members. There was no non-tautological
+   reading of the assertion to recover; it had to be replaced, not repaired.
+2. It compared AST name scans, so `Optional` and `Path` registered as facade
+   divergence: both files name them from `typing`/`pathlib`, and both collide
+   with the orchestrator's module namespace. **16 of the 43 names `dir(orch)`
+   reports are incidental imports**, not facade — including `dataclass`,
+   `datetime` and the four agent classes.
+
+Both views reach the pipeline through a single `from agents.orchestrator import
+(...)`, which the sibling test already pins as the only way in, so the import
+list *is* each view's visible surface. Comparing lists instead of name scans
+drops the noise to zero and shows the real divergence: the API imports
+`board_job` and `outputs_root`; Streamlit does not. Both are correct — HTTP
+addresses resources by URL and an in-process view does not — so they sit in
+`HTTP_ONLY` with the reason, a third fails the build, and a companion assertion
+fails when an entry goes stale.
+
+Verified by mutation rather than by passing: importing `recent_runs` into
+`api/main.py` fails, dropping `board_job` fails, and the old assertion returns
+`True` for `{'anything','at','all'}` against `{'board_jobs'}`.
 
 ### A2. Reproduce the two-user bugs (½ day, nothing ships)
 
@@ -455,6 +556,86 @@ truncates exception values — `run_registry.fail(run_id, f"{type(exc).__name__}
 {exc}")` already puts scrape URLs and JD fragments into an error string Sentry
 would capture verbatim.
 
+### A9b. "0 discovered" has to say why — `_fetch` to both UIs (1–1½ days)
+
+The half of A0 that did not ship there. Numbered `b` rather than renumbering
+A10–A12, which the Verification section references by number.
+
+**Why it was not done inside A0.** The information dies at the bottom: every
+board reader does `if not payload: return []`, so a 403, a 429, a challenge page
+and a board with no open roles are already the same value before `search_ats`
+sees them. Threading a status out of `_fetch` and stopping at `search_ats`' log
+line would add a field that nothing above reads — instance seven of this
+project's signature bug, committed inside the change that exists to fix the
+observability gap. **Wire the consumer in the same change, or do not add it.**
+
+**Why after A3, not before.** `start_run` and `run_status` both gain `user_id`
+in A3. Plumbing a new field through those signatures first means writing them
+twice.
+
+#### What is wrong today, at the top of the stack
+
+`web/src/components/steps/RunStep.tsx:331` renders, when discovery returns
+nothing:
+
+> **No jobs found.** Discovery returned nothing at all. Widen your target
+> roles or the places you would work, on the Preferences screen.
+
+If every board 403s the datacenter, that sentence **blames the user's
+preferences for a network failure**, and sends them to edit a profile that was
+never the problem. This is the invariant in product clothing: `discovered == 0`
+is being rendered as a known fact ("nothing matched you") when it is an unknown
+("we could not tell"). A filter that removes things must say how many — and a
+discovery stage that reached nothing must say that it reached nothing.
+
+#### The seam, counted rather than paired
+
+The rule is *count them*, and the count here is higher than the pair in mind:
+
+| # | Consumer | Change |
+|---|---|---|
+| 1 | `ats_search._fetch` (`:88`) | return the outcome alongside the payload, not `None` |
+| 2–6 | `_greenhouse`, `_lever`, `_ashby`, `_workable`, `_smartrecruiters` | propagate instead of `return []` |
+| 7 | `_hydrate` (`:515`) — the sixth `_fetch` call site, and the one that is not a board reader | propagate |
+| 8 | `search_ats` (`:459`) | `if not found: failed += 1` merges unreachable with empty. Split them |
+| 9 | `discovery_agent._search_ats` (`:172`) | carry the tally up |
+| 10 | orchestrator discovery stage | put the tally in the run result |
+| 11 | `RunRegistry` | **no migration needed** — `result` is already a TEXT column holding JSON (`run_registry.py:52`). `_ADDED_COLUMNS` does not have to be touched |
+| 12 | `run_status` / the run result read by both UIs | expose it |
+| 13 | `RunStep.tsx:331` | three-valued: reached-and-empty vs. could-not-reach vs. unknown |
+| 14 | `app.py`'s run display | the same, or R70 fires again |
+
+Fourteen, from a change that reads as "add a counter". Both UIs are on the
+list on purpose: the author runs Streamlit and the friends get React, so this
+is exactly the pair where a fix lands on one.
+
+#### Constraints
+
+- **Do not reuse the probe's verdict vocabulary by copying it.** `verdict()` in
+  `scripts/egress_probe.py` already names ok / absent / blocked / challenged /
+  unparseable / unreachable, and two copies of that table will drift. Move it
+  to a module both import, and let `test_egress_probe.py`'s drift guard cover
+  the URL table only.
+- **`_fetch` must not gain module-level state.** A counter on the module is the
+  `_EMBEDDING_CACHE` shape from A3: one per process, shared across users,
+  silently wrong. Return it or pass a sink.
+- **Unknown is never a value.** A run replayed with `--input`, or a run from
+  before this field existed, has no tally — that is a third case, not a zero.
+  `RunStep` must not read a missing tally as "all boards reachable".
+- **No new status vocabulary in the UI copy.** A user does not need "429"; they
+  need "we could not reach 12 of 14 job boards — this is us, not you."
+
+#### Closing move
+
+`test_no_reader_collapses_a_failure_into_an_empty_list` — AST-walk
+`tools/search/`, fail on `return []` in a function that calls `_fetch`. Fails on
+board six, which Stage C (Workday) adds.
+
+And the test that would have caught the product defect: a mock where every
+board 403s must produce a run result that a UI can distinguish from a mock where
+every board returns `[]`. Today those two runs are byte-identical by the time
+they reach either front end.
+
 ### A10. Concurrency, reaper, machine size (½ day)
 
 - **One active run per user**, enforced server-side. Five simultaneous runs in
@@ -594,6 +775,13 @@ End-to-end, in order:
 5. Deploy; `scripts/acceptance.py` against the instance on the `none` row.
 6. Egress probe from Fly and from home, comparing status codes (this one runs
    first, at A0, and again after deploy).
+   `python scripts/egress_probe.py --label <leg> --out probe-<leg>.json`, then
+   `--compare probe-home.json probe-<leg>.json`; exit 1 means at least one slug
+   answers the control and refuses the test leg. **A0's leg passed 98/98 and
+   the post-deploy re-run is still required**, for the two reasons A0 records:
+   it was one low-volume snapshot, and it never touched the JD scrape path,
+   which is the one whose failure looks like an empty board with scored rows on
+   it. Probe the scrape path in this run, not in A0's.
 
 Bug-class tests, each written to fail on the *next* instance:
 

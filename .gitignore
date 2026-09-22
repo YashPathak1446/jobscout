@@ -112,6 +112,14 @@ applied_jobs.csv
 /enriched_jobs.json
 /test_outputs/
 
+# Egress probe records (pilot plan A0). A pattern and not two filenames,
+# because a third leg is exactly the file nobody remembers to add (R51).
+# These carry the `public_ip` of whatever machine ran them -- for the home
+# leg that is the author's residential address, and this repository is
+# public. The findings live in docs/pilot-plan.md; the records are
+# re-derivable with scripts/egress_probe.py.
+/probe-*.json
+
 # ADK
 .adk/
 
