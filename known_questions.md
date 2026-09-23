@@ -8884,6 +8884,83 @@ connection. `test_the_committed_config_binds_loopback` pins it.
   `running` cannot delete their own account until the operator does it. This
   is the registry's missing sweep, and it predates A6.
 
+## R97. An embedding failure says why, waits out a rate limit, and cannot cross vector spaces
+
+**Decided 2026-09-23.** Found by the pilot A7 comparison of Priya's top 10 on
+Gemini and on local potion. The Gemini column came back unusable: **34 of 40
+jobs unscored, with 34 logged errors**, and the 6 that scored sat at 33–40.
+With n=6, the rank correlation meant nothing, and the 0/10 top-10 overlap was
+an artifact of the failures, not a disagreement between models. The one thing
+the run could not say was *why*.
+
+**The reason was thrown away in the library, not in the script.**
+`embedding_scorer._get_embedding` was
+`except Exception: logger.error(...); return []`, with no retry and no
+classification. Every caller turns `[]` into "not scored", and
+`AnalysisAgent` dropped the job with a line that did not say why. Generation
+has had both `config.classify_api_error` and `retry_with_backoff` since R19.
+Embeddings had neither. That is the twin-path rule again: the fix existed on
+the path the author walks every run, because generation fails loudly, and not
+on the path that fails quietly.
+
+**What changed:**
+
+- **Every call that failed or needed a retry leaves one classified entry** in a
+  list the caller owns: `quota`, `transient`, `retired`, `fatal` or
+  `dimension`, with attempts and whether it recovered. It is a list the caller
+  passes in, not module state, because one process serves several users' runs.
+  `ResumeParser.embedding_report` collects the resume's calls and the jobs'.
+  `AnalysisAgent.scoring_summary` counts the unscored jobs and names the kinds.
+  The orchestrator puts that in `state.json`, the final console report and
+  `summary.md`: *"Jobs not scored: 34 (34 failed (34 quota))"*. The consumer
+  is wired in the same change.
+- **Quota and transient errors are retried**: 4 retries, exponential from
+  2 s, never shorter than a "retry in Ns" the API asks for.
+  `rate_limiter.backoff_delay` was split out of `retry_with_backoff`, so
+  embeddings wait exactly as generation does. A retry that succeeds is still
+  recorded, because a fix that erases its own diagnosis would leave the next
+  failure as unreadable as this one.
+- **A spent daily cap fails fast.** Backoff rescues a per-minute limit, but a
+  spent daily cap will not clear within a run, and each remaining job would
+  wait out the full backoff to fail anyway: about 20–40 minutes across 40
+  jobs. After two calls in one report have run out of retries on quota, that
+  run stops retrying. The count is per report, so it is per run and never
+  crosses users.
+- **Two vector spaces are refused, not blended.** `_cosine_similarity`
+  `zip`ped its inputs, which truncates to the shorter vector and returns a
+  plausible number. It now raises `DimensionMismatch`, and the job is
+  reported as `dimension` and left unscored.
+- **The resume cache names the model that wrote it.** `ResumeParser` labelled
+  `resume_embeddings.json` with `config.EMBEDDING_MODEL`, which is Gemini
+  whichever backend ran. So a potion run saved 256-wide vectors under
+  Gemini's name, and the next Gemini run in that checkout was handed them as
+  its own. With the truncation above, it scored without a sound. The label is
+  now `active_backend()`'s model. This is the cache-key lesson a fourth time
+  (R11, R45, R80): the key named a model, just not the one that wrote the
+  vectors, and `auto` widening "the embedding model" to two models is what
+  falsified it.
+
+**What this does not establish.** It does not show that the 34 were rate
+limits. They fit a 40-call burst on a free key with no spacing, but that is an
+inference. The re-run prints the classification, and the log gets the number
+then. Nor can it say whether the comparison's run was touched by the cache
+label. The author deleted `cache/resume_embeddings.json` before the re-run,
+so the re-run is clean either way.
+
+**What breaks if this is wrong.**
+- A per-minute limit that outlasts about 30 s of backoff shows up as `quota`
+  failures, not as silent ones. That is visible, and `EMBED_RETRIES` is the
+  knob.
+- A daily cap reached mid-run loses the jobs after it, and says so, instead of
+  hiding it behind half an hour of waiting.
+- Local potion errors are still not caught here. A model2vec exception is
+  raised, as it was before.
+
+Mutation-checked: the cache test fails with the label reverted to the
+constant, the retry tests fail with `EMBED_RETRIES = 0`, the dimension tests
+fail with the width check removed, the recovery test fails when a successful
+retry is not reported, and the breaker test fails with the threshold unset.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

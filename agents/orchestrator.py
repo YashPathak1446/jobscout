@@ -886,6 +886,8 @@ class JobScoutOrchestrator:
             'discovered_jobs': [],
             'enriched_jobs': [],
             'analysis_results': [],
+            # Jobs analysis could not score and why (R97); None until it runs.
+            'scoring': None,
             'generation_results': [],
         }
         
@@ -1275,6 +1277,7 @@ class JobScoutOrchestrator:
         )
         
         self.state['analysis_results'] = results
+        self.state['scoring'] = getattr(agent, "scoring", None)
         logger.info(f"✅ Analyzed {len(results)} jobs passing threshold")
 
         self._store_scores(results)
@@ -1630,6 +1633,8 @@ class JobScoutOrchestrator:
             f.write(f"**Jobs analyzed:** {len(self.state['enriched_jobs'])}\n")
             f.write(f"**Jobs passing threshold:** {len(results)}\n")
             f.write(f"**Threshold:** {self.profile.agent_preferences.scoring_threshold}%\n\n")
+            for line in self._scoring_lines():
+                f.write(f"> ⚠️  {line}\n")
             
             if results:
                 f.write("### Top Matches:\n\n")
@@ -1701,6 +1706,25 @@ class JobScoutOrchestrator:
         
         logger.info(f"✅ Summary saved: {summary_path}")
     
+    def _scoring_lines(self) -> list:
+        """
+        What the summary and the console say about jobs that went unscored.
+
+        Empty when every job was scored on real embeddings. Otherwise it says
+        how many were dropped and the failure kinds, because "34 not scored"
+        with no reason is what made the Gemini comparison unreadable (R97).
+        """
+        scoring = self.state.get('scoring') or {}
+        lines = []
+        if scoring.get('mock'):
+            lines.append("Scores use MOCK embeddings: the resume could not be embedded.")
+        if scoring.get('unscored'):
+            lines.append(f"Jobs not scored: {scoring['unscored']} "
+                         f"({scoring.get('description', 'reason unknown')})")
+        elif (scoring.get('embeddings') or {}).get('recovered'):
+            lines.append(f"Embeddings: {scoring.get('description')}")
+        return lines
+
     def _print_final_report(self):
         """Print final report to console."""
         _console_print("\n\n")
@@ -1715,6 +1739,8 @@ class JobScoutOrchestrator:
         _console_print(f"  Jobs discovered: {len(self.state['discovered_jobs'])}")
         _console_print(f"  Jobs enriched: {len(self.state['enriched_jobs'])}")
         _console_print(f"  Jobs analyzed: {len(self.state['analysis_results'])}")
+        for line in self._scoring_lines():
+            _console_print(f"  {line}")
         
         gen = self.state['generation_results']
         valid = sum(1 for r in gen if r.get('status') == 'valid')
