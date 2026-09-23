@@ -10742,6 +10742,32 @@ no-key path's counts depend on bullet length (Rohan's one-line bullets:
 explain 5 → 3 on the first role. They do not explain 2 → 1 projects or
 3 → 1 skills; the two findings above do.
 
+### Correction and verification, 2026-09-23
+
+**Skills: the author's read was wrong, and import was fine.** The master
+always had 3 skill categories. The "3 → 1" came from the generated PDF's
+skills block, which is generation's output, not import's. So the skills
+paragraph above is about the wrong stage for this resume:
+- The collapse modes it describes are real (the pattern reader's one-line
+  groups, fixed by R103; a model's skills list, R100's correction), and
+  their tests stand.
+- They were not what this run hit.
+- If a generated PDF shows fewer skill groups than its master holds, look at
+  `_build_skills_section`. It drops a category only past
+  `max_skill_categories` or when no skill fits `MAX_SKILL_LINE_CHARS`. Read
+  that resume's `.tex` before calling it fine.
+
+**The scholarship stays absent, accepted and not chased.** It was lost at
+import, before the master `.tex` was written, so R102's parser fix has
+nothing to recover. The paper survives.
+
+**Verified on the author's machine after R102–R104:**
+- `python -m unittest discover -s tests -q`: **1385 tests OK**. The 14
+  `yash_pathak` tests run there.
+- `python scripts/baseline.py verify --all`: **all three baselines match.**
+- Re-import of the real six-year resume: **3 experiences, 1 project, 3 skill
+  groups.**
+
 ## Q60. More than one free provider: what Groq or Cerebras on the `openai` rung would need (scope only)
 
 **Status:** Open, scoped 2026-09-23, not built. Planned as pilot item **A7b**.

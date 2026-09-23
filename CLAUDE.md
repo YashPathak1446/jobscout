@@ -69,7 +69,7 @@ me is not understanding.
 Both of these must pass before a commit:
 
 ```bash
-python -m unittest discover -s tests -q       # the suite (~1000 tests)
+python -m unittest discover -s tests -q       # the suite (~1400 tests)
 python scripts/baseline.py verify --all       # the frozen measurement baselines
 ```
 
@@ -135,8 +135,8 @@ emits progress and writes state to `outputs/<date>/`.
 - `enrichment_agent` scrapes each posting's real JD. A posting it could not
   scrape is **kept, scored, and skipped only for resume generation** — the
   short description discovery found is thin, not false, so the job belongs on
-  the board (R61). `scraped_successfully: False` is written at
-  `enrichment_agent.py:159`, and it is read in two places: `_apply_body_gate`
+  the board (R61). `scraped_successfully: False` is written in
+  `enrichment_agent`'s failed-scrape branch, and it is read in two places: `_apply_body_gate`
   passes it to `job_filter.judge_body` as `readable`, and
   `orchestrator._split_unreadable` skips the job at generation.
   *This line used to say "dropped, never scored", which is wrong on both
@@ -145,12 +145,22 @@ emits progress and writes state to `outputs/<date>/`.
   undecidable: kept, scored, badged and counted, never silently eligible.
   There are **two gates** sharing that judgement, one per run and one per
   board read, and they read different text for the same job (Q39, Q40).
-- `analysis_agent` embeds resume components and JDs, then blends embedding
-  score, keyword overlap, component importance and conditional triggers.
-- `generation_agent` — 2600 lines, the largest thing here — selects
+- `analysis_agent` embeds resume components and JDs. A **job's** score is
+  `0.7 × embedding + 0.3 × keyword overlap` (R67). Component importance and
+  conditional triggers drive **which components are selected**, not the job
+  score. **On the local (potion) backend the embedding half is pinned at
+  100**, because its calibration window was never fit on potion's own
+  similarities (R98) and the cheap refit failed its held-out check (R99). So
+  a keyless or hosted board is ordered by keyword count, deliberately, for
+  the pilot. Selection reads unclipped cosines and is unaffected. The fix is
+  Q53. Every run's summary reports how many jobs the window clipped.
+- `generation_agent` — 2700 lines, the largest thing here — selects
   components, rewrites bullets through an LLM rung, validates against the
   fabrication rules, repairs, then fits bullets to a one-page budget
-  deterministically. **The LLM writes, Python fits.**
+  deterministically. **The LLM writes, Python fits.** The budget is set for
+  the page first, then shared between the sections, and every component is
+  capped by what its own master holds (R104). A component with no master
+  bullets gets none, whatever a model writes (R102).
 
 **The UI facade is the architectural spine.** `agents/orchestrator.py` exposes
 roughly two dozen module-level functions — `board_jobs`, `board_total`, `start_run`,
@@ -167,11 +177,14 @@ a closed tab, another session or another process can still ask. A thread rather
 than a subprocess, deliberately — callers only ever see an id, so swapping it
 later changes nothing above.
 
-**Three SQLite stores, two of which look alike and are not.**
+**Four SQLite stores, two of which look alike and are not.**
 `tools/jobs/job_store.py` (`data/jobs.db`) is the durable board: every job ever
 discovered, and a user's `applied`/`rejected` status on it survives
 re-discovery. `tools/cache/job_cache.py` is a seven-day dedup tracker built to
-*forget*. `data/runs.db` is run progress.
+*forget*. `data/runs.db` is run progress. All three live in each user's
+partition (R90). The fourth, `tools/accounts.py`'s `data/accounts.db`, is the
+one **global** store (hosted mode only): it is how a request learns which
+user it is, so it cannot live under one.
 
 **Configuration is one file.** `config.py` holds the Gemini fallback chain, the
 embedding model and backend, and the cache settings. `resolve_backend` holds the
@@ -180,14 +193,20 @@ entire precedence chain for the LLM rung — `--backend` >
 `test_backend_selection.py` fails if anything outside `config.py` reads that
 constant. Model IDs live here because Google's retirement cadence is fast;
 `check_models.py` live-probes, because `models.list()` has reported full support
-for a model that 404s on real calls.
+for a model that 404s on real calls. **`config.gemini_client` is the only
+place a Gemini client is built** (R101). It refuses a key that cannot be sent
+as an HTTP header (non-ASCII, whitespace, quotes), and never checks a key's
+prefix or length, which Google has changed. A syntax-tree test fails on a
+second `genai.Client(`.
 
 **Four LLM rungs, one adapter.** `tools/generation/llm_backends.py`:
 `gemini` / `openai` / `ollama` / `none`. The middle two are the same
 `/chat/completions` client with a different base URL. **`none` is a complete
 product** — discovery, scoring, selection, one-page layout and PDF all work
-with no key at all; only the rewriting is skipped. Every measurement in
-`known_questions.md` was taken on Gemini.
+with no key at all; only the rewriting is skipped (its board is
+keyword-ordered, as above). Every measurement in `known_questions.md` was
+taken on Gemini, on `gemini-3.5-flash`, which on the free tier is 20
+requests a day per key (Q61); past that, generation drops to flash-lite.
 
 **Paths resolve two different ways on purpose.** `tools/paths.py`: assets
 (`tools/assets/`) resolve relative to the code because they ship in the wheel;
@@ -245,13 +264,20 @@ just made overridable is a config value with a new way to go unread.**
 
 ## A cache key encodes how much variation lives inside a category
 
-Three times, the same fix one level down, and each was correct when written:
+Four times, the same fix one level down, and each was correct when written:
 
 - **R11** — the embedding cache needed the *model* in its key
 - **R45** — the LLM cache needed the *rung*: three llama3.1 replies were
   served to a run pinned to Gemini and read as a Gemini regression
 - **R80** — the LLM cache needed the *model too*, because `llama3.1:8b` and
   `qwen2.5:7b` are both the `ollama` rung and shared one key
+- **R97** — the resume cache was labelled with `config.EMBEDDING_MODEL`
+  (Gemini) whichever backend wrote it, so potion vectors were served to Gemini
+  runs as Gemini's, and the reverse. It went unseen because the cosine
+  silently truncated vectors of different widths (it now refuses them). R98
+  is the cost: potion's calibration window was fit on the noise that mislabel
+  produced, and it scored every local run for a month. Same shape: correct
+  when "the embedding model" meant only Gemini, wrong once R36 made it two
 
 Nothing edited those decisions and none of them was wrong. What changed was
 **the meaning of the category underneath them**. "Provider" meant Gemini's

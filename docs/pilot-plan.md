@@ -130,58 +130,77 @@ renders no user-submitted HTML. Re-evaluate at public signup.
 A0–A6 are done (A0–A3 2026-09-22, A2 on 2026-09-21; A4 R92–R94; A5 R95; A6
 R96). A9b was split out of A0 and adds 1–1½ days.
 
-### The remaining order (revised 2026-09-23)
+**Scoring stays keyword-ordered for the pilot, deliberately. Do not reopen
+this before the invite.**
+- Hosted friends score on potion (Q52). Potion's window was never fit on its
+  own similarities (R98), and the cheap refit failed its pre-registered
+  held-out check on the author's own resume (R99). So the embedding half is
+  pinned, and the board orders by keyword count.
+- Keyword order is the half R67 found discriminates about 8× better than the
+  embedding, so it is not a random board.
+- The real fix, the null set (Q53), needs labels that only friends'
+  applied / rejected marks can supply. The pilot is how it gets them.
+- Friends are told plainly that ranking is keyword-based for now.
 
-The author's order after the A7 work turned up what friends would actually
-hit. **Scoring does not block the invite. The output friends judge does.**
-Local ranking is keyword order until Q53 (R98, R99), which friends are told
-plainly. Keyword order is the half R67 found discriminates about 8× better, so
-it is not a random board.
+### The remaining order (current 2026-09-23; a fresh session starts here)
+
+**Done:** Q59 (R102 parser, R103 import, R100's correction, R104 budget),
+verified on the author's machine: 1385 tests OK, all three baselines match,
+and a re-import reads 3 experiences / 1 project / 3 skill groups.
 
 **Before the invite, in order:**
 
-1. **Q59: the bullet budget for sparse resumes.** Three jobs and one project
-   get 2 bullets per job and about three-quarters of a page, and one project
-   costs every job a bullet. This is what every friend's PDF looks like.
-   Also check where the projects and skills went missing (Q59 names the
-   master `.tex` check).
-2. **Q55: remote postings bypass the country whitelist.** It must carry three
-   states (known in, known out, unknown), not flip a default.
-3. **Q54's label: a job below the threshold is shown as "Not scored".** Store
-   the score with a below-the-bar state.
-4. **Q58's copy: what changes between postings without a key.** It lives in
-   A7's key step.
-   - *Decided 2026-09-23:* the rest of A7 that is cheap and not about
-     scoring rides with it:
-     - the free-tier data-use sentence, which decision 4 relies on;
-     - `localStorage` for the key, without which every visit re-pastes it.
-
-     The test-this-key call and the step-by-step page wait. R101 already
-     checks a key's form at paste time, and Q61's numbers are now known
-     rather than guessed.
-5. **A8:** the event log and the success criterion.
-6. **A9:** Sentry.
-7. **A10:** concurrency, reaper and machine size. Q49's stale-run sweep is
-   part of it.
-8. **A11:** resume pre-flight on the friends' real resumes. After Q59, so it
-   reads the budget that will ship.
-9. **A11b: a clean clone runs green.** *Confirmed 2026-09-23, kept before A12
-   because A12 depends on it.* `docker build --target verify` runs the suite
-   from a clone, and the 14 `yash_pathak` errors would fail it.
-10. **A12:** deploy, acceptance, invite.
+1. **Q55: remote postings bypass the country whitelist.**
+   - `location_matcher.parse_location` drops the country from any remote
+     string.
+   - `job_filter.evaluate` accepts remote before the whitelist is checked.
+   - The fix must carry three states (known in, known out, unknown), not flip
+     a default. A bare "Remote" is unknown: kept, badged and counted, never
+     silently eligible.
+2. **Q54's label: a job below the threshold is shown as "Not scored".**
+   `_store_scores` writes back only the results that pass. Store every score,
+   with a below-the-bar state, in both UIs.
+3. **Q58's copy, with the cheap rest of A7:**
+   - A plain statement, next to the key field, of what changes between
+     postings without a key (which entries, which of your own bullets, skills
+     order) and what does not (the wording).
+   - The free-tier data-use sentence, from Google's current terms, read at
+     build time.
+   - The key in `localStorage`, sent only in POST bodies, with "forget key".
+4. **A8:** the per-user event log (including `reached_key_step` / `key_saved`)
+   and the success criterion.
+5. **A9:** Sentry, with the key scrubbed.
+6. **A10:** concurrency, the stale-run reaper (Q49: a startup sweep across
+   every partition, `queued` too) and machine size.
+7. **A11:** resume pre-flight on the friends' real resumes. Read the PDFs:
+   R104's 12-bullet page is not yet confirmed to fit one page for a real
+   senior's resume.
+8. **A11b: a clean clone runs green.** It stays before A12, because
+   `docker build --target verify` runs the suite from a clone, where the 14
+   `yash_pathak` tests error.
+9. **A12:** deploy, acceptance (gated on the `none` row), invite.
 
 **After the invite:**
-- **Q53, the null set.** R99's cheap window failed its held-out check. Friends'
-  applied / rejected marks become the labels its blind comparison needs.
-- **A7b, a second free provider (Q60).** Flash is 20 requests a day (Q61),
-  which is 3–6 tailored resumes per friend per day.
-- **Q61: quota-aware embedding backoff and token pacing.** Before any Gemini
-  embedding measurement is trusted again, and before Q53 runs on Gemini.
-- *Decided 2026-09-23:* **A9b** ("0 discovered" says why), with a trigger. A0
-  found no board blocking, and Q56 put scrape coverage at 15 of 20 from home,
-  so it is diagnostic rather than blocking. Pull it forward if the first
-  friend sees an empty board.
-- The rest of A7: the test-this-key call and the illustrated AI Studio page.
+- **Q53, the null set:** anchor each resume against a fixed set of unrelated
+  postings. Its triggers have fired (R99).
+- **A7b, a second free provider (Q60):**
+  - Flash is 20 requests a day per key (Q61), so a friend gets 3–6 tailored
+    resumes a day.
+  - Also fixes Q60's defect: a `GROQ_API_KEY` is sent to OpenAI's URL.
+- **Q61's backoff fix:** tell a minute limit from a day limit, stop R97's
+  breaker firing on a token-rate limit, and pace Gemini embeddings by tokens.
+  This comes before any Gemini-embedding measurement is trusted again.
+- **A9b ("0 discovered" says why):** pull it forward if the first friend sees
+  an empty board.
+- **The rest of A7:** the test-this-key call and the illustrated AI Studio
+  page.
+
+**Conventions a fresh session needs:**
+- Both gates before every commit: `python -m unittest discover -s tests -q`
+  and `python scripts/baseline.py verify --all`.
+- On a clean clone, 14 `yash_pathak` errors are expected (A11b), and the
+  baselines report MISSING. Both are clean on the author's machine.
+- Decisions live in `known_questions.md` as R/Q entries, one commit each.
 
 ### A0. Fly egress probe — before anything else (½ day) — **DONE 2026-09-22**
 
