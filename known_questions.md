@@ -10021,6 +10021,53 @@ re-derived:
 R99's blind comparison decides whether this is ever worth building: if
 potion's ordering loses, the null set would too.
 
+## Q54. On Gemini the threshold decides by a fifth of a point, and the jobs it drops are shown as never scored
+
+**Status:** Open, found 2026-09-23 on the real six-year resume (the one R99
+fits with; not committed), Gemini, 20 jobs. **Feeds R99's threshold
+re-measure; not fixed here.**
+
+**What happened.**
+- 19 of the 19 scored jobs landed at 29–40. One passed at **40.1**; its
+  identical twin posting at Samsara scored **39.9** and was dropped.
+- One resume was generated from 20 jobs.
+- The threshold is the same failure potion had, pointing the other way. On
+  potion it passed everything (every job ≥ 70, R98). Here it cuts through the
+  middle of a band where 0.2 points is text noise between two copies of one
+  posting. Either way, it is not grading anything.
+
+**Why it lands there.**
+- `overall = 0.7 × emb + 0.3 × kw`, and Gemini's embedding half is mapped
+  through `(0.30, 0.60)`.
+- That pair has no recorded measurement (R98: unverified, not void).
+- R24 and R49 already found Gemini scores packing into a narrow band. A hard
+  cut at a fixed number inside a narrow band is a coin flip for everything
+  near it.
+
+**The second defect, found while checking: the board says the dropped jobs
+were never scored.**
+- `_store_scores` writes back only the results that passed the threshold
+  (`orchestrator._store_scores`, fed by `analysis_results`, which
+  `AnalysisAgent` fills only above the bar).
+- So the Samsara twin, scored 39.9, has `score IS NULL` on the board.
+- `MatchBadge` then renders it **"Not scored"**, with the tooltip "analysis
+  has not scored it yet".
+- That is false: analysis scored it and discarded the number. It is the
+  unknown-is-never-a-value invariant broken in the other direction (a known
+  value shown as unknown), and a computed value that was never stored, the
+  recurring bug.
+
+**What R99's re-measure needs to take from this.**
+- A threshold is a claim about fit only on a scale that separates fit from
+  not-fit. The scale comes first.
+- Potion's comes from R99's refit. Gemini's is unverified and out of R99's
+  scope (potion only).
+- **So on Gemini the threshold stays arbitrary until its window is measured.**
+  That is a reason to show dropped jobs with their score rather than hide
+  them.
+- Whatever the threshold becomes, a job below it should be stored with its
+  score and a "below your bar" state, not as unscored.
+
 ---
 
 # Out of scope
