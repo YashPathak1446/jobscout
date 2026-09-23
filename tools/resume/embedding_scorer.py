@@ -114,6 +114,19 @@ def keyword_overlap(jd_text: str, parsed_resume) -> list:
     return sorted(t for t in resume_terms(parsed_resume) if term_matches(t, jd_lower))
 
 
+def scoring_window() -> tuple:
+    """
+    `(floor, ceiling)` of the raw window the active backend is mapped through.
+
+    A raw similarity at or past either edge is clipped to 0 or 100, and the
+    embedding half then cannot tell those jobs apart. The analysis agent
+    counts them per run and the run summary says so (R99's guard), because a
+    window nobody could see going stale is how R36's lasted a month.
+    """
+    floor, span = CALIBRATION.get(active_backend()[0], CALIBRATION["gemini"])
+    return floor, floor + span
+
+
 def _normalise(overall: float) -> float:
     """Map a raw blended similarity onto 0-100 for the active backend."""
     backend = active_backend()[0]

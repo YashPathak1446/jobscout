@@ -9078,6 +9078,91 @@ instrument's own calibration: nobody could re-derive R36's number because
 nothing recorded how it was made. **A calibration constant ships with the
 script that produced it, or it is a guess with a decimal point.**
 
+## R99. Refit the potion window from four profiles, with a guard, before building the null set
+
+**Decided 2026-09-23.** It replaces R98's void window. The rules below are
+recorded **before any fit is run**, so no number in them was chosen by looking
+at the result it produces. The measurements get appended here once they exist.
+
+### What is being done, and why not the null set first
+
+The structural fix is to anchor each resume against a fixed set of unrelated
+postings (Q53). That costs about 1.5 days plus a lot of labelling. The cheap
+version is one refit constant pair for potion. The two produce **nearly the
+same order within one board**: a window that does not clip keeps potion's
+own order, and they differ only in how much weight the embedding gets against
+keywords (about 15% across the three measured spreads).
+
+So the question the null set would also have to answer, whether potion's
+opinion improves a board at all, is answered in half a day by this. Nobody has
+ever read a potion-ordered board, because one never existed (R98). If potion
+loses, the null set would almost certainly have lost too, and the day is saved.
+
+**What this gives up**, stated so it is not rediscovered:
+- Scores are not comparable across people. Yash's floor sits about 0.13 raw
+  above Rohan's, a quarter of the window. In the pilot this only shows through
+  the threshold, since each friend sees only their own board.
+- A new kind of resume can clip again. The guard makes that visible; only the
+  null set prevents it.
+
+### The rules (pre-registered)
+
+In `scripts/calibration_probe.py`, as constants:
+
+- **Window** = the pooled observed raw range across the profiles, plus
+  `MARGIN` = 10% of that range at each end.
+- **At least `MIN_PROFILES` = 4 profiles**: yash, Priya, Rohan and one real
+  six-year resume nobody here wrote. `fit --write` refuses fewer.
+- **Leave one profile out.** Fit on the other three; the held-out profile may
+  have at most `LOO_MAX_CLIPPED` = 10% of its jobs clipped. If any profile
+  fails, the fit is not recorded and not shipped: a new resume would not fit
+  this window, which is exactly the failure being guarded against.
+- **Same model and same jobs.** The dumps must agree on model and on the
+  jobs' SHA-256, or the fit measures the difference between them.
+- **The constants ship with the script and its recorded output**
+  (`baselines/calibration/local-window.json`), per R98. A test will pin
+  `CALIBRATION["local"]` to that record.
+- **Blind comparison.** For each profile, today's board order (the void window,
+  which is keyword order) and the fitted window's order are shown unlabelled,
+  with no scores, in a random order. The key is kept in a separate file.
+  **It ships only if it wins or ties on 3 of 4, and never if it loses on the
+  real resume.** If potion loses, the write-up is "local stays keyword-ordered,
+  deliberately".
+- **Threshold.** Only the jobs a threshold of 40 would *newly* drop are
+  labelled fit or not a fit, after the comparison. The threshold stays 40 if
+  no job labelled fit falls below it. Otherwise it moves to the highest value
+  that drops none, and how many "not a fit" jobs it removes is reported.
+- **Potion only.** The Gemini window `(0.30, 0.60)` stays as it is,
+  unverified. Hosted friends never reach Gemini embeddings (Q52), so it cannot
+  be checked against the users who exist.
+
+### The guard (built with this entry)
+
+Every run counts the scored jobs whose raw similarity is at or past the floor
+or the ceiling. **Any clip is reported, with counts, in the run summary**
+(`summary.md` and the final console report), not only in the log.
+`AnalysisAgent` counts them, `scoring_summary()["window"]` carries the counts,
+and `_scoring_lines` prints them. Mock scores are exempt; they have their own
+scale.
+
+Until the fit lands, the guard fires on **every** local run ("40 of 40 at the
+ceiling"). That is true, and it is the first time a run has said so.
+
+**One known limit.** A hosted friend's run summary is not something the
+author reads. Carrying the guard to the operator belongs to A8's event log,
+which does not exist yet. It is logged as Q53's first trigger, not added as a
+field nothing reads.
+
+### A risk named before the data
+
+On a synthetic set shaped like the three measured ranges, **Rohan failed
+leave-one-out at 12%**. His minimum (0.1213) *is* the pooled minimum, so a
+window fit without him starts near 0.139 and clips his lowest jobs. Whether
+the real data fails depends on how many of Rohan's jobs sit below about 0.14.
+If it fails, that is the rule working, not a reason to widen the margin after
+seeing it. Any change to `MARGIN` or `LOO_MAX_CLIPPED` is made before the real
+fit runs, or not at all.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -9888,6 +9973,42 @@ answer per process to one per run:
   local-only for everyone. Scores stay comparable, and the key is honestly
   "for rewriting".
 - If it does not, thread the key through per run, as above.
+
+## Q53. The structural fix for the local scale: anchor each resume against a fixed set of unrelated postings
+
+**Status:** Open, deferred 2026-09-23 by R99, which ships the cheap version
+first. **Build it when either trigger fires, whichever comes first:**
+1. **The window guard fires on a new resume.** A run summary reports jobs at
+   the floor or the ceiling for a resume unlike the four the window was fit on.
+   The guard exists to make this visible (R99). On the hosted app the author
+   only sees it once A8's event log carries it, so A8 has to carry it before
+   this trigger can fire for friends.
+2. **The paid tier.** Paying users are comparable across people in ways a
+   pilot is not (support, thresholds, any shared ranking), and one fixed
+   window cannot give that.
+
+**The design**, planned in Q51's follow-up and kept here so it is not
+re-derived:
+- **The unrelated set:** about 60 USAJOBS announcements from series far from
+  tech, at most 4 per series. Federal works are public domain (17 U.S.C. §105).
+  Keep only the summary, duties and qualifications, to limit the federal
+  boilerplate. Fetched once by `scripts/build_null_set.py` with a USAJOBS API
+  key; `tools/assets/null_jds.json` is versioned by its SHA-256.
+- **μ and σ:** a robust median and 1.4826 × MAD. They are computed every run,
+  not cached, from the resume's vectors and the cached vectors of the
+  unrelated postings, through the same raw-score function as real jobs. No
+  cache, so no key to go stale.
+- **The scale:** `z = (raw − μ) / σ_eff`, with `σ_eff = max(σ, r·μ)` and the
+  floor reported whenever it binds. `emb% = clamp((z − Z_FLOOR) / (Z_TOP −
+  Z_FLOOR))`, where `Z_FLOOR = 0` by meaning and `Z_TOP` is fit once, then held
+  out one resume at a time.
+- **If fewer than 40 unrelated postings embed,** the baseline is unknown and
+  jobs are left unscored and counted (kind `anchor`), never scored against a
+  fallback.
+- **A `score_basis` column** marks stored scores from another scale.
+
+R99's blind comparison decides whether this is ever worth building: if
+potion's ordering loses, the null set would too.
 
 ---
 

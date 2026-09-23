@@ -1723,6 +1723,21 @@ class JobScoutOrchestrator:
                          f"({scoring.get('description', 'reason unknown')})")
         elif (scoring.get('embeddings') or {}).get('recovered'):
             lines.append(f"Embeddings: {scoring.get('description')}")
+
+        # The window guard (R99). Any clipped job is reported, with counts, so
+        # 1 of 40 reads differently from 40 of 40. It is the event that says
+        # the fitted window has gone stale for a new kind of resume (Q53).
+        window = scoring.get('window') or {}
+        clipped = window.get('at_floor', 0) + window.get('at_ceiling', 0)
+        if clipped:
+            lines.append(
+                f"Scoring window hit: {window['at_ceiling']} of {window['scored']} "
+                f"jobs at the ceiling and {window['at_floor']} at the floor "
+                f"({window['backend']}, {window['model']}, raw "
+                f"{window['floor']:.4f}-{window['ceiling']:.4f}). The embedding "
+                f"half cannot rank those jobs, so keyword count orders them. "
+                f"If this resume differs from the ones the window was fit on, "
+                f"the window needs refitting (Q53).")
         return lines
 
     def _print_final_report(self):
