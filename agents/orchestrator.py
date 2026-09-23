@@ -895,6 +895,8 @@ class JobScoutOrchestrator:
             'analysis_results': [],
             # Jobs analysis could not score and why (R97); None until it runs.
             'scoring': None,
+            # Scored under the bar, stored and marked on the board (R106).
+            'below_bar': [],
             'generation_results': [],
         }
         
@@ -1285,9 +1287,14 @@ class JobScoutOrchestrator:
         
         self.state['analysis_results'] = results
         self.state['scoring'] = getattr(agent, "scoring", None)
+        below_bar = getattr(agent, "below_bar", None) or []
+        self.state['below_bar'] = [
+            {"url": b["job"].get("apply_url"), "title": b["job"].get("title"),
+             "company": b["job"].get("company"), "score": b["score"]}
+            for b in below_bar]
         logger.info(f"✅ Analyzed {len(results)} jobs passing threshold")
 
-        self._store_scores(results)
+        self._store_scores(results, below_bar)
         
         # Save analysis results
         analysis_path = self.output_path / "analysis_results.json"
@@ -1523,20 +1530,31 @@ class JobScoutOrchestrator:
     # JOB STORE
     # =====================================================================
 
-    def _store_scores(self, results) -> None:
+    def _store_scores(self, results, below_bar=()) -> None:
         """
-        Write scores back to the durable store.
+        Write scores back to the durable store, with the bar they met or missed.
 
         Analysis is the only stage that forms an opinion about a job, and
         without this the board has nothing to rank by. Failing here must not
         cost the run — the scores are already in `state` and on disk.
+
+        Jobs under the bar are written too (R106). They used to be dropped, so
+        the board showed "Not scored" for a job analysis had scored 39.9, and
+        discovery treated it as unprocessed, re-analysing it every run in a
+        slot a new posting could have had.
         """
+        bar = getattr(getattr(self.profile, "agent_preferences", None),
+                      "scoring_threshold", None)
         self._update_store(
             lambda store: [
                 store.set_score(r["job"]["apply_url"], r["score"]["overall"],
-                                selection=r.get("selection_report"))
+                                selection=r.get("selection_report"), bar=bar)
                 for r in results or []
                 if r.get("job", {}).get("apply_url")
+            ] + [
+                store.set_score(b["job"]["apply_url"], b["score"], bar=bar)
+                for b in below_bar or ()
+                if b.get("job", {}).get("apply_url")
             ],
             "scores",
         )
@@ -1730,6 +1748,15 @@ class JobScoutOrchestrator:
                          f"({scoring.get('description', 'reason unknown')})")
         elif (scoring.get('embeddings') or {}).get('recovered'):
             lines.append(f"Embeddings: {scoring.get('description')}")
+
+        below = self.state.get('below_bar') or []
+        if below:
+            bar = getattr(getattr(getattr(self, "profile", None), "agent_preferences",
+                                  None), "scoring_threshold", None)
+            lines.append(
+                f"Below your bar{f' of {bar}' if bar is not None else ''}: "
+                f"{len(below)} job(s) scored under it. They are on your board, "
+                f"marked, with their scores, and no resume was written for them.")
 
         # The window guard (R99). Any clipped job is reported, with counts, so
         # 1 of 40 reads differently from 40 of 40. It is the event that says

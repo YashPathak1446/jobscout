@@ -323,6 +323,7 @@ export function Board() {
 
                 <MatchBadge
                   score={job.score}
+                  bar={job.bar}
                   bands={bands}
                   pending={!metaReady}
                 />

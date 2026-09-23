@@ -16,6 +16,10 @@ export type Job = {
   location: string
   source: string
   score: number | null
+  /** The threshold `score` was judged against (R106). A score under it was
+   *  set aside: no resume. `null` is a row scored before bars were stored,
+   *  which makes no claim either way. */
+  bar: number | null
   status: string
   first_seen: string | null
   last_seen: string | null

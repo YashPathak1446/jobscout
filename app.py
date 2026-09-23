@@ -1563,7 +1563,13 @@ def _board_row(row, statuses, has_latex, bands=None):
         heading, control = st.columns([4, 1])
 
         title = f"**{_plain(row.get('company')) or '?'} — {_plain(row.get('title')) or '?'}**"
-        if row.get("score") is not None:
+        bar = row.get("bar")
+        if row.get("score") is not None and bar is not None and row["score"] < bar:
+            # Scored and set aside (R106), not unscored and not "weak": its bar
+            # decided it, so it is not banded.
+            title += (f"  ·  {row['score']:.0f}% · below your bar of {bar:g}, "
+                      "no resume written")
+        elif row.get("score") is not None:
             title += f"  ·  {_match_label(row['score'], bands)}"
         heading.markdown(title)
 

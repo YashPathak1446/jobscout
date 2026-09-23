@@ -26,11 +26,13 @@ const STYLE = {
  */
 export function MatchBadge({
   score,
+  bar = null,
   bands,
   pending,
   className,
 }: {
   score: number | null
+  bar?: number | null
   bands: Bands | null
   pending?: boolean
   className?: string
@@ -49,6 +51,26 @@ export function MatchBadge({
           className,
         )}
       />
+    )
+  }
+
+  // Scored and set aside (R106). This used to fall through to "Not scored",
+  // because the score was never stored: a claim that analysis had not looked
+  // at a job it had scored 39.9 and dropped. It gets its own label, with the
+  // number, and is never banded: its bar, not its quartile, is what decided it.
+  if (score !== null && score !== undefined && bar !== null && score < bar) {
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5',
+          'text-xs font-medium tabular-nums text-muted-foreground',
+          className,
+        )}
+        title={`Scored ${score.toFixed(1)}, under your bar of ${bar}, so no resume was written for it. It stays on your board.`}
+      >
+        Below your bar
+        <span className="opacity-60">{score.toFixed(0)}</span>
+      </span>
     )
   }
 

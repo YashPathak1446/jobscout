@@ -156,9 +156,9 @@ board, and a capture of real remote strings.
 **Before the invite, in order:**
 
 1. ~~Q55~~, done (R105).
-2. **Q54's label: a job below the threshold is shown as "Not scored".**
-   `_store_scores` writes back only the results that pass. Store every score,
-   with a below-the-bar state, in both UIs.
+2. ~~Q54's label~~, done (R106): every score is stored with its bar, and
+   both UIs label a job under it "below your bar" with its score. Jobs under
+   the bar no longer take a slot in every run.
 3. **Q58's copy, with the cheap rest of A7:**
    - A plain statement, next to the key field, of what changes between
      postings without a key (which entries, which of your own bullets, skills

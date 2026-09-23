@@ -9611,6 +9611,58 @@ by the ATS APIs (403 at the egress proxy). Apart from the two strings seen,
 every test string is a common format written here. That is the fixture that
 agrees with you. Q62 holds the capture that should replace it.
 
+## R106. A job scored under the bar is stored and labelled as that, never "Not scored"
+
+**Decided 2026-09-23.** It resolves Q54's label, the part of Q54 that its
+correction left standing as a fact about the code.
+
+**The defect.** `AnalysisAgent` scored every job it was given, then dropped
+the ones under `scoring_threshold` before anything was written. So:
+- the board read `score NULL` and said **"Not scored"** ("analysis has not
+  scored it yet") about a job analysis had scored 39.9 and set aside. That is
+  a known value shown as unknown: the invariant, pointed the other way from
+  its usual instances;
+- **a pipeline cost nobody had seen:** discovery works only on
+  `unprocessed_urls()` (`score IS NULL`), so every job under the bar was
+  re-enriched, re-scored and re-dropped on every run. Each took a slot in the
+  run's job limit (20 on a UI run) that a new posting could have had.
+
+**The change.**
+- **Every score is stored, with the bar it was judged against.**
+  `AnalysisAgent.below_bar` keeps what it sets aside. `_store_scores` writes
+  passing and set-aside jobs with `bar`, a new additive column.
+  - **A bar, not a pass/fail flag.** The label can say *which* bar ("below
+    your bar of 40"), and the claim stays true if the profile's threshold
+    later changes.
+  - Rejected: reading the current profile's threshold at display time. A
+    board row is not tied to one profile, and the threshold can change after
+    scoring.
+  - A row scored before this has `bar NULL` and makes no claim either way.
+- **Both UIs label it.** React's `MatchBadge` shows **"Below your bar"** with
+  the score, decided before banding, since its bar and not its quartile is
+  what set it aside. Streamlit's board row shows "below your bar of 40, no
+  resume written".
+- **Match bands are computed over jobs that met their bar** (and pre-bar
+  rows): exactly the set that had scores before. Letting set-aside jobs into
+  the quartiles would only move everyone else's labels down.
+- **The run summary counts them:** "Below your bar of 40: N job(s) scored
+  under it. They are on your board, marked, with their scores, and no resume
+  was written for them."
+
+**Blast radius, stated.** A job under the bar is now *processed*. It is not
+re-analysed on later runs, exactly like a job that passed. The cost is the
+same one passing jobs already carry: a job under the bar is not re-scored
+after a resume or threshold change until something re-scores the board. Jobs
+that failed to score (R97) keep `score NULL` and are retried as before.
+`stats()["scored"]` now counts them too, which is true.
+
+**Not changed:** the threshold itself (Q54: arbitrary on Gemini until its
+window is measured; inert on potion until Q53), and what counts for
+generation. Only jobs that passed get resumes.
+
+The old store fails 5 of the 10 new tests, and the old analysis and
+orchestrator fail 3.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -10462,7 +10514,7 @@ potion's ordering loses, the null set would too.
 
 ## Q54. On Gemini the threshold decides by a fifth of a point, and the jobs it drops are shown as never scored
 
-**Status:** Open, found 2026-09-23 on the real six-year resume (the one R99
+**Status:** The label is resolved by R106 (2026-09-23). The threshold's arbitrariness on Gemini stays open. Originally open, found 2026-09-23 on the real six-year resume (the one R99
 fits with; not committed), Gemini, 20 jobs. **Feeds R99's threshold
 re-measure; not fixed here.**
 

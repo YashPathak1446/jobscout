@@ -95,6 +95,9 @@ class AnalysisAgent:
         
         results = []
         unscored = 0
+        # Scored, and under the bar (R106). Kept, not discarded: the board
+        # stores their scores and says why no resume was written for them.
+        self.below_bar = []
         # The window guard (R99): how many scored jobs the raw window clipped.
         # Mock vectors have their own fixed scale and are not counted.
         window = self._window_guard()
@@ -136,6 +139,7 @@ class AnalysisAgent:
                 # Check threshold
                 if score.overall_score < threshold:
                     logger.info(f"   ⬇️  Below threshold ({threshold}%), skipping")
+                    self.below_bar.append({"job": job, "score": score.overall_score})
                     continue
                 
                 # Select components using profile rules
