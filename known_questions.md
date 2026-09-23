@@ -10142,6 +10142,42 @@ path, the way A0's 98-slug table was for listings.
 - One run of 20 is a small sample. The per-company pattern (3/3, 2/2) is
   stronger evidence than the 75%.
 
+## Q57. `gemini-3.5-flash` answered 503 to every call of a run; the fallback chain carried it
+
+**Status:** Open, observed 2026-09-23 on one run (the real six-year resume, 20
+jobs). No failure reached the user. It is recorded because it is the first
+time the chain's head has been dead for a whole run.
+
+**What happened.** Every generation call to `GENERATION_MODELS[0]`,
+`gemini-3.5-flash`, returned 503. Each call fell through to the next model and
+succeeded, so the run completed.
+
+**What the code does with a 503, checked:**
+- `classify_api_error` calls 503 / `UNAVAILABLE` / "high demand" `transient`.
+  Its docstring says "retry, then fall through".
+- **Generation does not retry a transient error.**
+  - `retry_with_backoff` retries only quota-shaped errors and re-raises
+    anything else at once.
+  - So `_call_gemini` goes straight to the next model on a 503.
+  - Every call in this run paid one failed request to the head before doing
+    real work.
+- The docstring and the behaviour disagree. Harmless here (falling through
+  was the right move), but a docstring promising a retry that never happens
+  is a comment crediting a guard that never fires, which is R55's note.
+
+**What to check before assuming anything:**
+1. **Which model wrote the resume.** If the 503 persisted, the bullets came
+   from `gemini-3.1-flash-lite`, not flash. R79 records the *rung*, not the
+   model, so whether the run said so is worth checking in `state.json`
+   (`last_model_used`) before judging this run's bullets as flash output.
+2. **Whether it is overload or retirement.** A 503 "high demand" clears on
+   its own; a model on its way out tends to 404 (`retired`) later.
+   `scripts/check_models.py` live-probes the chain; run it again on another
+   day before changing `GENERATION_MODELS`.
+
+**Leaning:** nothing to change until it recurs. If it does, demote the head
+of the chain rather than add retries to a model that is not answering.
+
 ---
 
 # Out of scope
