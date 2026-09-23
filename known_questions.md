@@ -10433,6 +10433,82 @@ author's 5 jobs and 13 projects, not a friend's 3 and 1).
 And what does not: **the wording of any bullet.** Say it next to the key
 field, where the choice is made.
 
+## Q59. Sparse resumes get three-quarters of a page, and a single project costs every job a bullet
+
+**Status:** Open, found 2026-09-23 from the SDE II profile's PDFs. The budget
+is measured below; nothing is proposed yet. **R74's shape:** that R fixed a
+section that is *absent*, and this is a section that is *sparse*.
+
+### The author's read, checked
+
+The observations: the master's first role had 5 bullets and the output 3;
+ACADEMIC PROJECTS held a paper and a scholarship and the output 1 project; 3
+skill categories came out as 1. The read was that the bullet budget did this
+before any model call, so Gemini would produce the same items, reworded.
+
+- **Bullets per role: right about the count, wrong about "the same items".**
+  - `_compute_bullet_budgets` caps every experience at `exp_max = 3` before
+    any model call, so a 5-bullet role can never show more than 3, however
+    much page is left.
+  - Gemini is then asked for exactly that count. But its prompt carries all
+    five master bullets (`_build_selected_experience_text`), so it can fold
+    content from all five into three.
+  - The no-key path keeps whole master bullets in master order until the line
+    budget is spent (`_bullets_within_lines`).
+  - So the count is identical on both paths and the content is not.
+- **Projects 2 → 1: not the budget, and not selection.**
+  - Selection takes up to `max_count = 4` projects, and `_decide_project_count`
+    only trims when there are 4 or more.
+  - A two-project master cannot come out with one by either path. So the
+    parsed master had one project: the import read the paper and the
+    scholarship as one entry, or dropped one.
+- **Skills 3 → 1: not the budget either.**
+  - `max_skill_categories` is 6, and a category is dropped only if none of its
+    skills fit the line.
+  - So one category in the output means one category in the master `.tex`
+    the import wrote, or two came through empty.
+- **To tell which:** count what the imported master actually holds. That is
+  the `\resumeProjectHeading` lines and the `\textbf{…}{: …}` lines in the
+  skills section of the `.tex` under `data/master_resumes/` in that data home.
+  If the master holds 2 projects and 3 categories, this entry is wrong and
+  generation lost them. If it holds 1 and 1, the loss is in import, and R100
+  is the place to look.
+
+### What the budget does at sparse inputs (measured, not proposed)
+
+`_compute_bullet_budgets` and `_fit_budgets_to_lines`, run on the committed
+fixtures (model path; no-key path after the line fit):
+
+    shape                          model path              no-key path
+    Priya     3 exp, 0 proj        [3,3,3]      = 9        [3,3,2]           = 8
+    Rohan     3 exp, 4 proj        [2,2,2]+[2,2,2,1] = 13  [3,3,2]+[1,2,1,1] = 13
+    3 exp + 1 proj (senior_real)   [2,2,2]+[3]  = 9        [3,3,2]+[1]       = 9
+
+- **Tables measured on the author's shape.** `exp_budget_table` gives 3 jobs
+  6 bullets, and the project table gives 1 project 3. They were measured on
+  resumes with both sections (Q3: 3 + 3 = 12 bullets is a page with two to
+  spare). Each half assumes the other half is full.
+- **R74 fixed zero projects only.** With 0 projects, the job side gets the
+  whole page (3 × 3 = 9). With **1** project it does not: the job side keeps
+  its half-page 6, and the project side holds one project of at most 3.
+- **So adding a one-line project costs every job a bullet:** 3,3,3 becomes
+  2,2,2 on the model path.
+- **Both sparse shapes total 9 bullets against the page's 12.** That is about
+  three-quarters of a page, with the per-role cap of 3 preventing the lead
+  role from using the rest.
+- **The author's shape (5 jobs, 13 projects) saturates every table,** which
+  is why this never showed on his resume. Friends' resumes will look like
+  Priya's and senior_real's.
+
+The no-key path partly hides it for short bullets. Rohan's one-line bullets
+buy 3,3,2 from a 2,2,2 budget. Long bullets (two lines or more) get exactly
+the model path's count.
+
+**Not proposed yet**, per the author. The shape of a fix is visible, though:
+budget the page, not each half. That means an unused project half flows to
+the jobs the way R74 lets an absent one, and `exp_max` is bounded by what the
+page and the master hold rather than by a constant.
+
 ---
 
 # Out of scope
