@@ -10395,6 +10395,44 @@ succeeded, so the run completed.
 **Leaning:** nothing to change until it recurs. If it does, demote the head
 of the chain rather than add retries to a model that is not answering.
 
+## Q58. Without a key, two resumes for two postings differ only in skills order
+
+**Status:** Open, found 2026-09-23 on the SDE II profile's Samsara and Sigma
+resumes, `none` rung. **Belongs to A7's copy.** It is correct behaviour and
+needs saying, not fixing.
+
+**What was seen.** The two PDFs have identical bullets. The only difference is
+the order of skills within their lines.
+
+**Why that is correct on `none`.** Without a model nothing is reworded (R37's
+floor). What can change per posting:
+- which components are selected;
+- how many bullets each gets (the budget);
+- which master bullets fit that budget (`_bullets_within_lines`);
+- the order and choice of skills (`_select_skills_for_jd`).
+
+For a resume with three jobs and one project, selection always takes all of
+them (the caps are 3 and 4), so the first item never varies. The budget
+depends on counts and importance, not on the posting, so for most pairs of
+postings the second and third do not vary either. Skills order is all that
+is left.
+
+**Why it matters for the pilot.** A keyless friend running twenty postings
+gets twenty near-identical PDFs, and will reasonably conclude the tool does
+nothing. The honest description of `none` is narrower than the current copy
+("a real resume tailored *by selection*", pilot-plan A7): **for a resume with
+few components, `none` tailors almost nothing but the skills line.** Selection
+starts to matter only once there are more components than slots (the
+author's 5 jobs and 13 projects, not a friend's 3 and 1).
+
+**For A7's copy**, say plainly what changes between postings without a key:
+- which experiences and projects appear, if you have more than fit;
+- which of your own bullets are kept;
+- the order of your skills.
+
+And what does not: **the wording of any bullet.** Say it next to the key
+field, where the choice is made.
+
 ---
 
 # Out of scope
