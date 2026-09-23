@@ -779,6 +779,26 @@ through the mock rung, then reuse A6's walker over the data home **plus a
 captured log handler**. A runtime walk, not a grep of the source — so it fails
 when a sixth call site starts logging the config it resolved.
 
+### A7b. More than one free provider (≈1 day, scoped in Q60, not started)
+
+One free Gemini key per friend is one daily cap per friend, and testing
+exhausts it. Groq and Cerebras free tiers serve OpenAI-compatible endpoints,
+which the `openai` rung already speaks. Needed, in order:
+
+1. **Route the key to its provider.** Today `GROQ_API_KEY` is accepted and
+   sent to OpenAI's URL (Q60's defect).
+2. **Put the provider in the LLM cache key and the per-resume record** (R45,
+   R80, R79).
+3. **Give `_chat_tailor` the one repair attempt `_gemini_tailor` has.**
+4. **Extend A7's key page to a provider choice,** with a per-provider test
+   call, R101's key check and a data-use sentence per provider, each read
+   from that provider's terms at build time.
+5. **Cross-provider fallback on quota,** second, because it is a new
+   behaviour with its own attribution question.
+
+Each provider that becomes supported is an explicit new row in
+`acceptance.py`, not a quiet addition to the frozen list.
+
 ### A8. The feedback loop and what counts as success (½ day)
 
 The pilot's purpose is feedback and nothing currently collects any.

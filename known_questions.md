@@ -10509,6 +10509,70 @@ budget the page, not each half. That means an unused project half flows to
 the jobs the way R74 lets an absent one, and `exp_max` is bounded by what the
 page and the master hold rather than by a constant.
 
+## Q60. More than one free provider: what Groq or Cerebras on the `openai` rung would need (scope only)
+
+**Status:** Open, scoped 2026-09-23, not built. Planned as pilot item **A7b**.
+The reason: the author will run out of Gemini free quota testing, and so will
+friends. One provider's daily cap is then the pilot's ceiling.
+
+**What is already there.** `tools/generation/llm_backends.py` has one
+`/chat/completions` client, and the `openai` and `ollama` rungs are that
+client with different base URLs. Groq and Cerebras both serve
+OpenAI-compatible endpoints, so the transport is done.
+
+**A defect found while scoping.** `env_openai_key()` accepts `OPENAI_API_KEY`,
+`GROQ_API_KEY`, `OPENROUTER_API_KEY`, `TOGETHER_API_KEY` or
+`DEEPSEEK_API_KEY`. But `OPENAI_BASE_URL` (`https://api.openai.com/v1`) and
+`OPENAI_MODEL` (`gpt-4o-mini`) are hardcoded literals. **A Groq key alone is
+sent to OpenAI's URL asking for OpenAI's model**, and fails. The five names
+are read and the provider they imply is not: a key list with no routing.
+Fixing this is the first line of the work below.
+
+**What it would need:**
+
+1. **A provider inside the `openai` rung, not five new rungs.** A small table
+   maps provider to base URL, default model and key variable
+   (`openai / groq / cerebras / openrouter / …`), and the key's provider picks
+   the row. `LADDER` stays four rungs. Whatever records what wrote a resume
+   (R79's `rung`, `backend.used`) must record `provider:model`, or two
+   providers become one label.
+2. **The cache key (R45 / R80).** `LLMCache` keys on `backend|model|prompt`,
+   and for this rung `model` is `OPENAI_MODEL`. Two providers serving the same
+   model name (Llama 3.3 70B is on both Groq and Cerebras, with different
+   serving stacks) would share entries: R80 exactly, one level down again.
+   **The provider goes in the key.** Ask the CLAUDE.md question at build time:
+   what does the key assume is interchangeable, and is that still true?
+3. **Falling back across providers on quota.** Today a spent Gemini quota
+   falls to the verbatim floor. It never tries another rung. "Use Groq when
+   Gemini is out" is new behaviour: a cross-rung fallback with its own
+   attribution per resume, and a decision about whether one run may mix
+   writers.
+4. **The key UI.** A7's single Gemini field becomes a provider choice plus a
+   key.
+   - One key per provider in `localStorage`, sent only in POST bodies.
+   - A7's test-this-key call generalised to a one-token chat completion per
+     provider.
+   - **A data-use sentence per provider**, from each provider's current terms,
+     read at build time. Free tiers differ on training use, so one sentence
+     for all would be false for some.
+   - R101's `gemini_key_problem` generalises to every provider's key.
+5. **The repair loop.** `_chat_tailor` returns whatever the model sent: no
+   validation-repair attempt, unlike `_gemini_tailor`. Found on Ollama and
+   still true. Faster free models on this path would ship their first draft.
+   It needs the same one narrow repair before these providers carry real
+   output.
+6. **Measurement.** Every quality number in this log was taken on Gemini.
+   `acceptance.py` runs "both supported rungs". A provider that becomes
+   supported is a new row, and adding it is an explicit decision about the
+   frozen list, not a quiet addition.
+
+**Not affected:** scoring. Embeddings are potion or Gemini (Q52), and these
+providers do not change that.
+
+**Rough size:** about a day, including the routing fix, provider-aware cache
+key, UI and repair loop, plus a measurement pass per provider. Cross-provider
+fallback (item 3) is the part that could double it, and can ship second.
+
 ---
 
 # Out of scope
