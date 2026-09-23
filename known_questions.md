@@ -9614,6 +9614,104 @@ python scripts/calibration_probe.py --input outputs/<date>/enriched_jobs.json
   the display), or no clip at all above 100.
 - Each moves the threshold, so each is measured against the baseline first.
 
+### Measured 2026-09-23: 40 of 40 at the ceiling
+
+`scripts/calibration_probe.py` was run by the author on Priya against the same
+40 real jobs as the first comparison, on potion:
+
+- **40 of 40 jobs at or above the 0.10 ceiling.** Raw ranges from
+  **0.1994 to 0.4864**, against a window fit on 0.00–0.08.
+- **So the embedding half is 100 for every job, and the board is ordered by
+  keyword count alone.** The share is all of them, not most, which
+  generalises the seven ties at 77.5 above.
+- The highest raw similarity, Dropbox (Metadata), ranks **6th**.
+
+**Caveat before anyone reads "6th" as the bug.** Calling that order wrong
+assumes potion's raw order is right, and nobody has measured that. R67 found
+the embedding order *worse* than keyword order on Gemini. Unclipping would
+hand the ranking back to an embedding nobody has checked. Whatever fix
+follows is judged by reading a top 10, not by agreement with raw order.
+
+### Where the window came from
+
+- **A hand-entered constant.** `CALIBRATION["local"] = (0.00, 0.10)` in
+  `tools/resume/embedding_scorer.py`. Nothing derives it.
+- **Recorded by R36** against `minishlab/potion-base-8M`, on the frozen 20-JD
+  baseline (`baselines/2026-08-21-pre-step7`: the author's resume and 20
+  enriched jobs; the contents are gitignored and only the manifest is
+  committed).
+- **No artifact of the measurement exists.** There is no script, no output
+  and no raw values, only the sentence "raw overall ran from about 0.00 to
+  0.08".
+- The Gemini pair `(0.30, 0.60)` is labelled "the original calibration" and
+  has no record at all.
+
+### Hypothesis, unconfirmed: the window was fit on noise from two vector spaces
+
+R97's defect was live when R36 measured, and it predicts R36's number exactly.
+
+1. The resume cache was labelled `config.EMBEDDING_MODEL`, which is
+   `gemini-embedding-001`, whichever backend ran. The author always had a key,
+   so his cache held **768-wide Gemini vectors** for an unchanged resume.
+2. A `local` run hit that cache: same file hash, same label. The job
+   descriptions were embedded fresh by potion at 256 wide. The JD cache has
+   R28's width guard; the resume cache had none.
+3. `_cosine_similarity` `zip`ped the two, so it took a dot product of Gemini's
+   first 256 dimensions with a potion vector, divided by both full norms. Two
+   unrelated coordinate systems give a cosine of about 0 ± 1/√256 ≈ ±0.06.
+   Top-k averages of the best of those land at small positive values:
+   **about 0.00–0.08**.
+
+R36's explanation ("static vectors dilute across length") would then be a
+rationalisation of noise. The old arithmetic that divided by the cap does not
+enter into it: the author's resume (five jobs, thirteen projects) saturates
+both caps, the one shape for which that arithmetic was right.
+
+**Resume structure cannot explain the gap.** Raw is a weighted average of
+per-component cosines (`_weighted` over `_section_average`s, plus the skills
+cosine), so it never exceeds the largest single component cosine. A missing
+projects section or shorter text moves raw *within* the range of the
+component cosines. It cannot lift every component from ≤0.08 to 0.2–0.49.
+The 40 job descriptions are the same ones. So the 2.5–6× shift is in the
+vectors, not in Priya being invented, half a page long, or without projects.
+
+**The test** (scratchpad script, run by the author, with a key):
+1. Embed the author's resume on Gemini and the job descriptions on potion.
+2. Score with the old truncating cosine, on the frozen 20 if they survive,
+   else on the 40.
+3. Compare with a clean potion-on-potion probe of `yash_pathak` and
+   `rohan_deshmukh` on the same 40, plus a real six-year resume imported under
+   a `JOBSCOUT_HOME` outside the checkout.
+
+How to read it:
+- Reproducing about 0.00–0.08 **and** a clean yash near Priya's 0.2–0.5
+  confirms it. The window is then stale for everyone, not just senior
+  profiles.
+- A clean yash at 0.00–0.08 falsifies it.
+
+**If confirmed, these are suspect and the R must void them explicitly**, not
+leave them standing as numbers that look authoritative:
+- **R36's table.** Local's 88.7-point spread against Gemini's 13.9, and the
+  13/20 experience and 7/20 project agreement with Gemini. These are local
+  selections made on noise, if the resume cache was hit.
+- **V3's "R36 — local embeddings are a fallback, not an upgrade"**
+  (2026-08-23). Local dropped Computer Networking for an embedded C++ role and
+  led with tutoring. It was one configuration, read once. If its resume
+  vectors were Gemini's, it judged noise, and the product conclusion drawn
+  from it ("it costs real quality") is unmeasured, not refuted.
+- **The local window itself**, and every local score and threshold decision
+  since.
+
+Two local results are probably **not** void:
+- R86's container runs (`6 / 81.2%, 85.0%, 77.5%`, and the `NOT COMPARABLE`
+  row). The container had no key and no Gemini cache, so they were potion
+  against potion. They look saturated because they are real.
+- Priya's probe above: the cache was deleted beforehand, and R97's label
+  would have missed anyway.
+
+Whether each earlier run actually hit the cache is not recorded anywhere,
+which is why "suspect" is the honest word until the reproduction runs.
+
 ## Q52. A key pasted in the UI never switches embeddings to Gemini
 
 **Status:** Open, found 2026-09-23 while planning pilot A7. Whether to fix it
