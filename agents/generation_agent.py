@@ -618,6 +618,12 @@ class GenerationAgent:
                     if component.get(field) != truth:
                         component[field] = truth
                         restored += 1
+                # An entry the master gives no bullets gets none here either
+                # (R102). Whatever a model wrote under "Merit Scholarship" had
+                # no source, so it is invention by construction.
+                if not source.bullets and component.get("bullets"):
+                    component["bullets"] = []
+                    restored += 1
 
         if restored:
             logger.info(f"   🔒 Restored {restored} factual field(s) from your resume")
@@ -1055,8 +1061,11 @@ class GenerationAgent:
             jd_score = scores.get(cid, 0.0)
             return imp_weight + jd_score
 
-        # Start everyone at 1
-        allocation = {cid: 1 for cid in component_ids}
+        # Start everyone at 1, except an entry the master gives no bullets to
+        # (a scholarship, an award). It gets 0 and keeps it: a budget of 1
+        # there is an instruction to write a bullet from nothing (R102).
+        empty = {cid for cid in component_ids if self._master_bullet_count(cid) == 0}
+        allocation = {cid: (0 if cid in empty else 1) for cid in component_ids}
 
         # Low-importance components are frozen at 1 — no extras
         eligible = [
@@ -1064,8 +1073,9 @@ class GenerationAgent:
             if importance.get(cid, "medium") != "low"
         ]
 
-        # Remaining budget after giving 1 to everyone
-        remaining = total_budget - len(component_ids)
+        # Remaining budget after giving 1 to everyone who can have one
+        remaining = total_budget - sum(allocation.values())
+        eligible = [cid for cid in eligible if cid not in empty]
 
         # Sort eligible by blended priority
         ranked_eligible = sorted(eligible, key=blended_priority, reverse=True)
@@ -1084,6 +1094,20 @@ class GenerationAgent:
                 break  # All eligible at max
 
         return allocation
+
+    def _master_bullet_count(self, component_id: str):
+        """
+        How many bullets the master resume gives this component, or None when
+        the id is unknown (unknown is not zero: it is left to validation).
+        """
+        parser = getattr(self, "resume_parser", None)
+        if parser is None:
+            return None
+        component = (parser.get_experience_by_id(component_id)
+                     or parser.get_project_by_id(component_id))
+        if component is None:
+            return None
+        return len(component.bullets or [])
 
     def _resolve_to_canonical_exp(self, exp_id: str) -> str:
         """Resolve an experience ID alias to its canonical parser ID."""

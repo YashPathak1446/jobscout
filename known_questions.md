@@ -9373,6 +9373,57 @@ check that refuses every new key. So:
   of that era it meant about 37 extra characters. Read it as "longer than the
   key", not as a statement about key length.
 
+## R102. An entry with no bullets is its own entry, and never takes the next one's
+
+**Decided 2026-09-23.** Q59's first finding, fixed first because it put wrong
+content on a resume someone sends to an employer.
+
+**The defect.** `latex_parser` read experiences and projects with one
+expression each: a heading, then a `\resumeItemListStart … End` block. An
+entry with no bullet list (a scholarship, an award, a volunteer role) could
+not match on its own, and `tex_renderer` writes exactly that shape, heading
+only, because an empty list is a LaTeX error:
+
+- **Projects:** the heading's first argument was matched lazily across
+  newlines. A bullet-less project listed first ran on to the *next*
+  project's list. "Merit Scholarship" then a paper parsed as **one project,
+  named for the scholarship and carrying the paper's bullet**, and the paper
+  was gone. Listed last, it was dropped.
+- **Experiences:** the list had to follow the heading directly, so a
+  bullet-less role was dropped in any position, without stealing.
+
+Every stage after the parse (selection, budget, generation, skills evidence)
+sees only what the parser returned.
+
+**The fix.**
+- Each section is cut at its headings (`_entries`), and an entry's bullets
+  are looked for only inside its own span (`_span_bullets`).
+- A project heading's two arguments are read by **balancing braces**
+  (`_braced`). The first nests (`\textbf{\href{url}{\underline{Name}}} $|$
+  \emph{tech}`), and the first draft of this fix used a lazy pattern within
+  the span, which stopped at the `}{` inside the link and returned an empty
+  name. The pattern it replaced only worked because the following list forced
+  the match onward. A test with a linked heading caught it.
+- **Downstream, an entry with no source bullets gets none:**
+  - `_allocate_with_importance` gives it 0, and its share goes to entries
+    that can use it. A budget of 1 is an instruction to write a bullet from
+    nothing.
+  - `_restore_factual_fields` removes anything a model wrote under it,
+    because it had no source.
+
+**Tested per section, per position**, because the defect depended on order:
+bullet-less first, last and in the middle, for projects and for experiences.
+Experience positions are set by dates, since `tex_renderer` writes them
+newest first; the first draft's tests had silently rendered the same order
+every time. The committed masters (Priya 3/3/2; Rohan 3/3/2 with projects
+1/2/1/1) parse exactly as before. The old parser fails 11 of the 12 new
+tests, and removing the source guard fails its own.
+
+**Still open in Q59:** skills collapsing in import, R100's list-typed skills
+regression (a separate commit), and the budget. The zero budget here is the
+zero case of the budget change's cap by master count, pulled forward because
+this fix is what lets bullet-less entries reach the budget at all.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

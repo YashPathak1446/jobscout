@@ -93,6 +93,67 @@ def experience_keyword_text(title: str, company: str, bullets: list[str]) -> str
     return f"{title} {company} {' '.join(bullets)}"
 
 
+def _entries(section: str, marker: str) -> list:
+    """
+    A section cut at each `marker`: one span per entry, heading first (R102).
+
+    An entry's bullets are looked for **inside its own span only.** Both entry
+    patterns used to run heading-then-list as one regular expression. So an
+    entry with no bullet list (a scholarship, an award, a volunteer role) could
+    not match at all, and the project pattern's lazy `.*?` heading ran on to
+    the *next* entry's list instead. `Merit Scholarship` followed by a paper
+    parsed as one project, named for the scholarship and carrying the paper's
+    bullet, and the paper was gone. Every stage after this one saw only that.
+    """
+    starts = [m.start() for m in re.finditer(re.escape(marker), section)]
+    return [section[a:b] for a, b in zip(starts, starts[1:] + [len(section)])]
+
+
+def _braced(text: str, start: int):
+    """
+    The `{...}` argument opening at `text[start]`, braces balanced.
+
+    Returns (content, index just past the closing brace), or None. A project
+    heading's first argument nests braces (`\\textbf{\\href{url}{\\underline
+    {Name}}} $|$ \\emph{tech}`), so no single regular expression reads it: a
+    lazy one stops at the first `}{`, which is inside the link.
+    """
+    if start >= len(text) or text[start] != "{":
+        return None
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1:i], i + 1
+    return None
+
+
+def _span_bullets(span: str) -> list:
+    """The bullets of one entry's own `\\resumeItemListStart` block, or []."""
+    block = re.search(r"\\resumeItemListStart(.*?)\\resumeItemListEnd", span, re.DOTALL)
+    if not block:
+        return []
+    bullets_raw = block.group(1)
+    bullets = []
+    # Lookahead, not a consuming group. The consuming form ate the next
+    # bullet's opening token, so every second bullet vanished: 18 in the
+    # master .tex parsed as 10.
+    for b in re.findall(r"\\resumeItem\{(.*?)\}(?=\s*\\resumeItem|\s*$)",
+                        bullets_raw + "\n\\resumeItem", re.DOTALL):
+        cleaned = _clean_latex(b).strip()
+        if cleaned:
+            bullets.append(cleaned)
+    if not bullets:
+        for b in re.findall(r"\\resumeItem\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}", bullets_raw):
+            cleaned = _clean_latex(b).strip()
+            if cleaned:
+                bullets.append(cleaned)
+    return bullets
+
+
 def project_keyword_text(name: str, tech: str, bullets: list[str]) -> str:
     """Text a project's keywords are extracted from."""
     return f"{name} {tech} {' '.join(bullets)}"
@@ -490,39 +551,21 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
     if exp_section_match:
         exp_section = exp_section_match.group(1)
 
-        # Find all resumeSubheading entries
-        subheading_pattern = re.compile(
-            r"\\resumeSubheading\s*\{([^}]*)\}\{([^}]*)\}\s*\{([^}]*)\}\{([^}]*)\}\s*"
-            r"\\resumeItemListStart(.*?)\\resumeItemListEnd",
-            re.DOTALL
+        # One span per entry, so an entry with no bullets is kept as an entry
+        # with no bullets, and never borrows the next one's (R102).
+        heading_pattern = re.compile(
+            r"\\resumeSubheading\s*\{([^}]*)\}\{([^}]*)\}\s*\{([^}]*)\}\{([^}]*)\}"
         )
 
-        for match in subheading_pattern.finditer(exp_section):
+        for span in _entries(exp_section, "\\resumeSubheading"):
+            match = heading_pattern.match(span)
+            if not match:
+                continue
             title = _clean_latex(match.group(1))
             dates = _clean_latex(match.group(2))
             company = _clean_latex(match.group(3))
             location = _clean_latex(match.group(4))
-            bullets_raw = match.group(5)
-
-            # Extract bullet items
-            bullets = []
-            # Lookahead, not a consuming group. The consuming form ate the
-            # next bullet's opening token, so every second bullet vanished:
-            # 18 in the master .tex parsed as 10. Silent, and it truncated
-            # what scoring, keyword extraction and every prompt ever saw.
-            # The projects path below always used the lookahead form.
-            bullet_matches = re.findall(r"\\resumeItem\{(.*?)\}(?=\s*\\resumeItem|\s*$)", bullets_raw + "\n\\resumeItem", re.DOTALL)
-            for b in bullet_matches:
-                cleaned = _clean_latex(b).strip()
-                if cleaned:
-                    bullets.append(cleaned)
-
-            if not bullets:
-                # Fallback: simpler extraction
-                for b in re.findall(r"\\resumeItem\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}", bullets_raw):
-                    cleaned = _clean_latex(b).strip()
-                    if cleaned:
-                        bullets.append(cleaned)
+            bullets = _span_bullets(span[match.end():])
 
             # Assigned in one pass over the whole pool below (Q34) -- whether
             # this company repeats is not knowable from one entry.
@@ -551,16 +594,23 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
     if proj_section_match:
         proj_section = proj_section_match.group(1)
 
-        proj_pattern = re.compile(
-            r"\\resumeProjectHeading\s*\{(.*?)\}\{([^}]*)\}\s*"
-            r"\\resumeItemListStart(.*?)\\resumeItemListEnd",
-            re.DOTALL
-        )
-
-        for match in proj_pattern.finditer(proj_section):
-            heading_raw = match.group(1)
-            dates = _clean_latex(match.group(2))
-            bullets_raw = match.group(3)
+        # One span per entry (R102). The heading's arguments are read by
+        # balancing braces, not by a lazy pattern: the first one nests
+        # (`\\textbf{\\href{url}{\\underline{Name}}} $|$ \\emph{tech}`), and a
+        # lazy match stops at the `}{` inside the link.
+        for span in _entries(proj_section, "\\resumeProjectHeading"):
+            at = len("\\resumeProjectHeading")
+            while at < len(span) and span[at].isspace():
+                at += 1
+            first = _braced(span, at)
+            if not first:
+                continue
+            heading_raw, at = first
+            second = _braced(span, at)
+            if not second:
+                continue
+            dates_raw, heading_end = second
+            dates = _clean_latex(dates_raw)
 
             # Extract URL from heading before cleaning
             url = _extract_url_from_href(heading_raw)
@@ -588,19 +638,7 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
             if tech_match:
                 tech_part = _clean_latex(tech_match.group(1))
 
-            # Extract bullets
-            bullets = []
-            for b in re.findall(r"\\resumeItem\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}", bullets_raw):
-                cleaned = _clean_latex(b).strip()
-                if cleaned:
-                    bullets.append(cleaned)
-
-            if not bullets:
-                bullet_matches = re.findall(r"\\resumeItem\{(.*?)\}(?=\s*\\resumeItem|\s*$)", bullets_raw + "\n\\resumeItem", re.DOTALL)
-                for b in bullet_matches:
-                    cleaned = _clean_latex(b).strip()
-                    if cleaned:
-                        bullets.append(cleaned)
+            bullets = _span_bullets(span[heading_end:])
 
             proj_id = ""  # likewise, assigned in the pass below
             all_text = project_keyword_text(name_part, tech_part, bullets)
