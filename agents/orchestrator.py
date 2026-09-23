@@ -1294,7 +1294,8 @@ class JobScoutOrchestrator:
             for b in below_bar]
         logger.info(f"✅ Analyzed {len(results)} jobs passing threshold")
 
-        self._store_scores(results, below_bar)
+        self._store_scores(results, below_bar,
+                           bar=(self.state['scoring'] or {}).get('bar'))
         
         # Save analysis results
         analysis_path = self.output_path / "analysis_results.json"
@@ -1530,7 +1531,7 @@ class JobScoutOrchestrator:
     # JOB STORE
     # =====================================================================
 
-    def _store_scores(self, results, below_bar=()) -> None:
+    def _store_scores(self, results, below_bar=(), bar=None) -> None:
         """
         Write scores back to the durable store, with the bar they met or missed.
 
@@ -1542,9 +1543,11 @@ class JobScoutOrchestrator:
         the board showed "Not scored" for a job analysis had scored 39.9, and
         discovery treated it as unprocessed, re-analysing it every run in a
         slot a new posting could have had.
+
+        `bar` is the threshold analysis applied, passed in from its result,
+        not read from the profile: the profile holds the *current* threshold,
+        and a store row records what the job was judged against.
         """
-        bar = getattr(getattr(self.profile, "agent_preferences", None),
-                      "scoring_threshold", None)
         self._update_store(
             lambda store: [
                 store.set_score(r["job"]["apply_url"], r["score"]["overall"],
@@ -1751,8 +1754,9 @@ class JobScoutOrchestrator:
 
         below = self.state.get('below_bar') or []
         if below:
-            bar = getattr(getattr(getattr(self, "profile", None), "agent_preferences",
-                                  None), "scoring_threshold", None)
+            # The bar analysis applied, from its own result, not the profile's
+            # current threshold (R106).
+            bar = scoring.get('bar')
             lines.append(
                 f"Below your bar{f' of {bar}' if bar is not None else ''}: "
                 f"{len(below)} job(s) scored under it. They are on your board, "

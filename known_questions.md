@@ -9660,8 +9660,35 @@ that failed to score (R97) keep `score NULL` and are retried as before.
 window is measured; inert on potion until Q53), and what counts for
 generation. Only jobs that passed get resumes.
 
-The old store fails 5 of the 10 new tests, and the old analysis and
-orchestrator fail 3.
+### Corrections after review, 2026-09-23
+
+- **The bar comes from what analysis applied, not the profile.** The first
+  version read `self.profile...scoring_threshold` in both `_store_scores` and
+  the summary line. That is the *current* threshold, the very distinction the
+  board's `bar` column exists to keep. `scoring_summary` now carries `bar`
+  (the threshold that run applied), and `_run_analysis` passes it to
+  `_store_scores` and the summary. The defensive "no profile" branch is
+  gone; the tests build an orchestrator with no profile at all and supply
+  the applied bar. A test sets the profile to 50 after a run judged at 40 and
+  requires 40, end to end through `_run_analysis`.
+- **React shows the bar's number** ("Below your bar of 40"), as Streamlit
+  does.
+- **Tests: counts corrected.**
+  - Against the complete pre-change code, 11 of the 12 tests fail. The one
+    that passes, `test_a_row_scored_before_bars_is_still_banded`, guards the
+    new band query's `bar IS NULL OR`. Rows scored before bars existed must
+    still be banded. It passes on the old code by construction, and fails
+    when that clause is dropped.
+  - The first report's "5 and 3" came from two partial reverts, each leaving
+    the other half passing, so the numbers could not be subtracted from the
+    total.
+- **The count reconciled.** 1412 collected before R106, 1422 after (+10),
+  none removed, now 1424. A clean clone's "Ran" line reads 5 lower because
+  `test_api_payload.TestTheBoardPayload` skips in `setUpClass` on an empty
+  board, which unittest counts as one skip, not five runs.
+- **No frontend test runner exists** (`web/package.json` has no
+  vitest/jest/jsdom). The React badge is checked by a source test.
+  Adding a runner is a dependency decision for the author.
 
 ## Q31. The caches are cwd-relative and miss the volume
 

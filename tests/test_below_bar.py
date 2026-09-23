@@ -46,8 +46,7 @@ class TestTheStore(_Store):
     def test_a_score_under_its_bar_is_stored_with_the_bar(self):
         self.store.record([listing("u1")])
         self.store.set_score("u1", 39.9, bar=40)
-        row = self.store.get("u1") if hasattr(self.store, "get") else None
-        row = row or next(r for r in self.store.query(limit=10) if r["url"] == "u1")
+        row = next(r for r in self.store.query(limit=10) if r["url"] == "u1")
         self.assertEqual((row["score"], row["bar"]), (39.9, 40.0))
         self.assertIsNotNone(row["scored_at"])
 
@@ -111,10 +110,9 @@ class TestAnalysisKeepsWhatItSetsAside(unittest.TestCase):
 class TestTheRunStoresItAndSaysSo(_Store):
 
     def _orch(self):
+        """No profile: the bar must come from what analysis applied."""
         from agents.orchestrator import JobScoutOrchestrator
         orch = JobScoutOrchestrator.__new__(JobScoutOrchestrator)
-        orch.profile = mock.Mock()
-        orch.profile.agent_preferences.scoring_threshold = 40
         orch._update_store = lambda write, what: write(self.store)
         return orch
 
@@ -122,17 +120,57 @@ class TestTheRunStoresItAndSaysSo(_Store):
         self.store.record([listing("pass"), listing("under")])
         self._orch()._store_scores(
             [{"job": {"apply_url": "pass"}, "score": {"overall": 71.0}}],
-            [{"job": {"apply_url": "under"}, "score": 39.9}])
+            [{"job": {"apply_url": "under"}, "score": 39.9}], bar=40)
         rows = {r["url"]: r for r in self.store.query(limit=10)}
         self.assertEqual((rows["pass"]["score"], rows["pass"]["bar"]), (71.0, 40.0))
         self.assertEqual((rows["under"]["score"], rows["under"]["bar"]), (39.9, 40.0))
 
     def test_the_summary_counts_them(self):
         orch = self._orch()
-        orch.state = {"below_bar": [{"url": "u", "score": 39.9}]}
+        orch.state = {"below_bar": [{"url": "u", "score": 39.9}], "scoring": {"bar": 40}}
         lines = orch._scoring_lines()
         self.assertEqual(len(lines), 1)
         self.assertIn("Below your bar of 40: 1 job(s)", lines[0])
+
+    def test_the_applied_bar_wins_over_the_profiles_current_threshold(self):
+        """Judged against 40, then the profile moved to 50: the record says 40."""
+        orch = self._orch()
+        orch.profile = mock.Mock()
+        orch.profile.agent_preferences.scoring_threshold = 50
+        orch.state = {"below_bar": [{"url": "u", "score": 39.9}], "scoring": {"bar": 40}}
+        self.assertIn("of 40:", orch._scoring_lines()[0])
+
+    def test_the_run_threads_the_applied_bar_from_analysis(self):
+        """End to end through `_run_analysis`: store and summary both get it."""
+        from agents import orchestrator as orch_mod
+
+        self.store.record([listing("under")])
+        orch = self._orch()
+        orch.profile = mock.Mock()
+        orch.profile.agent_preferences.scoring_threshold = 55   # current, not applied
+        orch.state = {"enriched_jobs": [{"apply_url": "under"}]}
+        orch.resume_path, orch.mock_embeddings, orch.api_key = "r.tex", True, None
+        orch.user_id, orch.checkpoint = None, False
+        orch.output_path = Path(self._tmp.name)
+        orch._apply_body_gate = lambda jobs: jobs
+        orch._emit = lambda *a, **k: None
+        orch._save_state = lambda: None
+
+        class FakeAgent:
+            def __init__(self, *a, **k):
+                self.scoring = {"bar": 40, "unscored": 0, "embeddings": {},
+                                "mock": False, "description": "", "window": None}
+                self.below_bar = [{"job": {"apply_url": "under"}, "score": 39.9}]
+
+            def analyze_jobs(self, jobs, on_progress=None):
+                return []
+
+        with mock.patch.object(orch_mod, "AnalysisAgent", FakeAgent):
+            orch._run_analysis()
+
+        row = next(r for r in self.store.query(limit=10) if r["url"] == "under")
+        self.assertEqual(row["bar"], 40.0)
+        self.assertIn("of 40:", orch._scoring_lines()[0])
 
 
 class TestBothUIsLabelIt(unittest.TestCase):
@@ -140,7 +178,7 @@ class TestBothUIsLabelIt(unittest.TestCase):
 
     def test_the_react_badge_has_a_below_bar_state_before_banding(self):
         src = (ROOT / "web/src/components/MatchBadge.tsx").read_text(encoding="utf-8")
-        self.assertIn("Below your bar", src)
+        self.assertIn("Below your bar of {bar}", src, "the bar's number, as Streamlit shows it")
         self.assertLess(src.index("Below your bar"), src.index("const tier = band("),
                         "the bar must decide before the quartile does")
         board = (ROOT / "web/src/components/Board.tsx").read_text(encoding="utf-8")

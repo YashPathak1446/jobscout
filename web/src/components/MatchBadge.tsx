@@ -68,7 +68,8 @@ export function MatchBadge({
         )}
         title={`Scored ${score.toFixed(1)}, under your bar of ${bar}, so no resume was written for it. It stays on your board.`}
       >
-        Below your bar
+        {/* The bar's number on the badge, as Streamlit's row shows it. */}
+        Below your bar of {bar}
         <span className="opacity-60">{score.toFixed(0)}</span>
       </span>
     )
