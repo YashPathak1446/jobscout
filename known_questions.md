@@ -10074,8 +10074,16 @@ were never scored.**
 profile was shown **"Argentina Remote"** and **"Remote - Ireland"**. R55's
 shape, one branch over. Not fixed here.
 
-**The mechanism: two defects, stacked** (checked in the code, not inferred
-from the log):
+**What was observed, and what was not.** Both postings were seen **on the
+board**, as `Argentina Remote` and `Remote - Ireland`, for a profile whose
+countries are the United States only. Neither was logged individually: the
+discovery log prints its per-job location line only for the first three jobs.
+The `(unparsed)` first reported here was a misattribution. It came from
+entries at the top of the log for other companies, not from these two.
+**Everything below comes from the code**, reproduced with these two strings,
+not read from any log line.
+
+**The mechanism: two defects, stacked:**
 1. **`location_matcher.parse_location` throws the country away from any
    remote string.** Measured:
    - `"Argentina Remote"`, `"Remote - Ireland"`, `"Remote - US"` and
@@ -10091,11 +10099,12 @@ So "remote, country unknown" reads as "remote and acceptable". R55 was a
 country that never parsed and read as a mismatch; this is a country that
 never parsed and reads as a match.
 
-**One detail does not reproduce.** The log showed both as `(unparsed)`. On
-current code these strings parse to a truthy `LocationResult` that prints as
-`Remote`, and the discovery log line prints only for the first three jobs.
-The `(unparsed)` text came from another line, or another version, and should
-be pasted before anyone reasons from it.
+**On the log itself.** For these strings the current code would log
+`Remote`, not `(unparsed)`: they parse to a truthy `LocationResult`. The only
+text `(unparsed)` is ever printed for is an empty result. An error whose
+country is invisible in the log is invisible to anyone reading only the log,
+which is one more reason the per-job line is worth printing for every
+excluded or unknown location, not just the first three jobs.
 
 **Count the paths:** `is_remote` is read for gating in exactly one place
 (`job_filter.py`). `posting_facts` reads it for display only. So there is one
@@ -10167,9 +10176,14 @@ succeeded, so the run completed.
 
 **What to check before assuming anything:**
 1. **Which model wrote the resume.** If the 503 persisted, the bullets came
-   from `gemini-3.1-flash-lite`, not flash. R79 records the *rung*, not the
-   model, so whether the run said so is worth checking in `state.json`
-   (`last_model_used`) before judging this run's bullets as flash output.
+   from `gemini-3.1-flash-lite`, not flash. The run does record it. Each
+   generation result's `rung` is the model that answered
+   (`_rung_used`, fed by `last_model_used`), and the orchestrator totals
+   them into `state.json` as `backend.used`, e.g.
+   `{"gemini-3.1-flash-lite": 1}`. The console prints the same as
+   `Rungs used:`. *(Corrected the same day: this line first said the model
+   was not recorded and pointed at `last_model_used`, which is never written
+   anywhere under that name.)*
 2. **Whether it is overload or retirement.** A 503 "high demand" clears on
    its own; a model on its way out tends to 404 (`retired`) later.
    `scripts/check_models.py` live-probes the chain; run it again on another
