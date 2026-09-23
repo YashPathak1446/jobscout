@@ -10532,6 +10532,59 @@ budget the page, not each half. That means an unused project half flows to
 the jobs the way R74 lets an absent one, and `exp_max` is bounded by what the
 page and the master hold rather than by a constant.
 
+### Findings, 2026-09-23: where the projects and skills went
+
+These were measured by rendering a synthetic master through `tex_renderer`,
+parsing it back with `latex_parser`, and running `_build_skills_section`. The
+author's resume was not used; it is private and not here.
+
+**Projects: lost in the parse of the master, not in import or the budget.**
+The renderer writes a bullet-less entry (a scholarship, an award) as a heading
+with no `\resumeItemListStart` block. The parser's project pattern requires
+that block after every heading. So:
+
+- **Bullet-less project last: it is dropped.** Paper then scholarship parses
+  to one project, the paper.
+- **Bullet-less project first: it steals the next project's bullets.** The
+  pattern runs on to the next list. Scholarship then paper parses to **one
+  project named "Merit Scholarship" carrying the paper's bullet**, and the
+  paper is gone. That is not a loss, it is a misattribution on the page a
+  friend sends out.
+- **A bullet-less experience is dropped** (a volunteer role with no bullets
+  vanished), without stealing anything.
+
+Every stage after the parse (selection, budget, generation) sees only what
+the parser returned, so no later fix can recover these.
+
+**Skills: lost in import. Generation keeps what the master has.**
+A three-category master comes out of `_build_skills_section` as three lines.
+The collapse happens before the master is written:
+
+- **Pattern reader:** skill lines without a `Label:` become one `Skills`
+  category. `Languages: … | Cloud: … | Data: …` on one line keeps only
+  `Languages`, with the other two folded into its value.
+- **Model path:** a reply with skills under one `Skills` key gives one
+  category. **A reply with skills as a list gives none.** That is a
+  regression from R100: `_unwrap` drops a wrong-typed section, which for a
+  list of skills throws the content away rather than keeping it as one
+  category.
+
+**Which of these the author's run hit** is readable from that data home's
+master `.tex` (under `data/master_resumes/`):
+- how many `\resumeProjectHeading` lines, and what names;
+- how many `\textbf{…}{: …}` lines in the skills section;
+- whether the surviving project's name matches its bullets.
+
+The R33 confirmation screen's "Skill groups" count at import time also says
+it.
+
+**The budget, restated with what it does not explain.** Model path: 3 jobs +
+1 project gives [2,2,2] + [3] = 9. 3 jobs + 0 projects gives [3,3,3] = 9. The
+no-key path's counts depend on bullet length (Rohan's one-line bullets:
+[3,3,2] + [1]). The per-job cap of 3 (`exp_max`) and the half-page tables
+explain 5 → 3 on the first role. They do not explain 2 → 1 projects or
+3 → 1 skills; the two findings above do.
+
 ## Q60. More than one free provider: what Groq or Cerebras on the `openai` rung would need (scope only)
 
 **Status:** Open, scoped 2026-09-23, not built. Planned as pilot item **A7b**.
