@@ -890,6 +890,11 @@ they reach either front end.
 - **Stale-run reaper**: `state='running' AND updated_at < now - N min →
   'failed'`. One restart with in-flight threads leaves permanent spinners, and
   that is the first thing a friend sees. None exists today.
+  **Weightier than a spinner — see Q49.** A stale row also parks both UIs'
+  run screen (Run *and* Back disabled) and makes `DELETE /api/account` 409
+  indefinitely. The reaper has to walk every `users/<id>/data/runs.db`, not
+  one registry. It has to cover `queued` as well as `running`. And it wants a
+  startup sweep, because with one process at boot every active row is dead.
 - **Auto-stop must stay off, and that needs a test.** `fly.toml:60-62` is
   already correct — `auto_stop_machines = "off"`, `auto_start_machines = true`,
   `min_machines_running = 1`. So this is not a change, it is a **guard**: Fly

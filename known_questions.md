@@ -9411,6 +9411,76 @@ before any code runs. **Blast radius:** anyone who opens Streamlit from a
 phone on the same Wi-Fi loses that. It is the author's workflow to decide,
 so it is not done inside A5.
 
+## Q49. A run a dead process left `running` is never cleared, and it blocks more than a spinner
+
+**Status:** Open, found 2026-09-23. Belongs to pilot plan **A10**'s stale-run
+reaper, and it makes that item heavier than the plan implies. A10 lists the
+reaper as removing "permanent spinners". A stale row does more than spin: it
+blocks the owner from running again and from deleting their account.
+
+**How a row gets stuck.** `start_run` writes `queued`, and its worker thread
+moves the row on through `registry.progress`, `finish` or `fail`. If the
+process dies (a deploy, a crash, an out-of-memory kill on a 512 MB machine),
+the thread dies with it and nothing ever writes the row again. The row stays
+`queued`/`running` forever. Nothing reaps it: there is no reaper, no startup
+sweep, and no code that reads `updated_at` other than to write it.
+
+**What it blocks, checked in the code, not assumed:**
+
+1. **A new run, through both UIs.** Neither UI can start one while it sees the
+   row. The server does not refuse (`start_run` checks nothing, and
+   "one active run per user" is itself unbuilt A10 work); the block is in the
+   screens. On load, React's `RunStep` adopts any active run for the current
+   profile (`api.activeRuns()`), then shows **Run** *and* **Back** disabled
+   for as long as the row says running. Streamlit's `_adopt_running` does
+   the same and renders progress with only a Refresh button. So the user is
+   parked on a progress bar that never moves, with no action that clears it.
+   Only a call to `POST /api/run` from outside the UI gets past it.
+2. **Deleting the account (A6).** `delete_user_data` raises `RunInProgress`
+   on any `queued`/`running` row, and `DELETE /api/account` turns that into a
+   409: "wait for it to finish". A stuck run never finishes. The only override is
+   the operator's `admin.py delete-user --ignore-active-runs`, which the API
+   never passes, by design. So a user's own right to delete their account
+   depends on the author noticing and running a command over SSH.
+
+The second is the one that matters most. Deletion was built to be the one path
+that is provably complete, and a stale row turns it into a request the user
+has to make to a person.
+
+**What the reaper has to get right, beyond the plan's one-line query:**
+
+- **Per user, not per instance.** Since A3, `runs.db` lives under every
+  `users/<id>/`, plus the unscoped one. The plan's
+  `state='running' AND updated_at < now - N` is a query per registry, so the
+  reaper walks every partition. A reaper that opens one `data/runs.db` looks
+  finished and clears nobody's run.
+- **`queued` too.** Both blocks above read `state IN ('queued','running')`, and
+  the plan's query names only `running`.
+- **N must exceed the longest silence of a live run.** `updated_at` only moves
+  on a progress tick, and discovery ticks once at its start and once at its end
+  (`orchestrator.py`'s two `_emit("discovery", …)`). Across ~100 ATS boards
+  that gap can be minutes. A threshold set below it fails live runs. None of
+  `progress`, `finish` or `fail` checks the current state (each is
+  `UPDATE … WHERE id=?`, and `progress` writes `state='running'`), so a live
+  run reaped too early flips back to running on its next tick. The user sees
+  "failed", then "running" again. The two options are to measure the longest
+  gap on a real run, or to tick per board, and either way the writes should
+  refuse to move a row out of a terminal state.
+- **A startup sweep is the exact case, and a timeout is only the fallback.**
+  One process runs every thread (`--workers 1`), so at boot no run can be live
+  in this process. Every `queued`/`running` row at startup is a dead one, and
+  it can be failed immediately with a reason that says so ("the server
+  restarted during this run"). A timeout is still needed for a thread that
+  hangs without dying.
+- **A reaped run must say why.** `fail(run_id, error)` puts its reason on the
+  failed screen both UIs already render. "Interrupted by a server restart" is
+  a result the user can act on (run again); a bare `failed` is not.
+
+**Leaning:** a startup sweep across every partition, plus a timeout sized from
+a measured gap. Both belong to A10 and should land before the pilot, because a
+deploy is exactly what creates these rows, and the first deploy is the day the
+friends arrive.
+
 ---
 
 # Out of scope
