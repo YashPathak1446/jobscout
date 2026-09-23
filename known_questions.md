@@ -9171,6 +9171,76 @@ the rule to the data. If any profile fails, the fixed window cannot do this
 job, nothing ships from R99, and the null set (Q53) is required before potion
 scoring is used.
 
+## R100. A model's reply to a resume is kept for what it holds, and the import says who read it
+
+**Decided 2026-09-23.** Found importing the real six-year resume with a
+working key. The log read:
+
+    gemini-3.5-flash       -> 503
+    gemini-3.1-flash-lite  -> 200
+    WARNING: Extraction returned no contact block; reading the resume by pattern instead
+
+The result was **0 experiences, 0 projects, 0 skill groups**. The confirmation
+screen then said the text could not be split "most likely because no model
+was available to read it". **A model had answered.** The same file imported
+cleanly on an earlier run, when flash was up.
+
+### What was wrong
+
+- **One missing block discarded the whole reply.** `to_schema` kept a reply
+  only if `parsed.get("contact")` was truthy. Anything else (no contact
+  block, an empty one, a one-item list, a wrapper object, capitalised keys)
+  went to the pattern reader. That reader cannot split roles apart by design,
+  and on this resume found nothing at all. Experiences, projects and skills
+  do not depend on contact details. Gating them on it threw away exactly the
+  part the model is needed for, to keep the part the pattern reader does
+  best.
+- **The screen stated a cause nobody had checked.** Both UIs printed "most
+  likely because no model was available" whenever the pattern reader left
+  unsplit text. That covers three different events with one false sentence:
+  no model configured, the model unreachable, and the model answered but its
+  reply was rejected. It is the unknown-is-never-a-value rule applied to an
+  explanation: a guessed cause displayed as a known one.
+- **Nothing recorded what the reply looked like,** so the question "did
+  flash-lite answer in a different shape from flash?" could not be answered
+  from the run.
+
+### What changed
+
+- **A reply is judged section by section.** `_unwrap` undoes *structure*
+  only: a one-item list, a single-key wrapper such as `{"resume": {...}}`,
+  and capitalised section names. It never guesses content, per the pattern
+  reader's rule. A section of the wrong type (`contact` as a string) is
+  dropped, not fatal. A reply is discarded only when it holds **no** section
+  the prompt asked for.
+- **A missing or empty contact block is read by pattern and flagged.**
+  Contact is the one section the pattern reader is reliable at, and R33's
+  confirmation screen shows every field for correction.
+- **Every import records `_extraction: {read_by, why}`.** `why` names what
+  happened: no model configured, the call failed (with its error), or the
+  model answered and its reply held nothing usable (with its **shape**:
+  types, key names and counts, never values, since the values are someone's
+  resume). Both UIs show `why` instead of the guess, in `ImportConfirm.tsx`
+  and `app.py` (the twin-path rule). The renderer ignores the key, so it
+  never reaches a `.tex`.
+- **A usable reply is judged outside the `try`.** If a malformed section
+  raises during normalisation, that is no longer reported as "the model could
+  not be reached".
+
+### What is not known
+
+**Whether flash-lite's reply differs structurally from flash's.** The reply
+was not recorded, and it cannot be reproduced where this was written: no key,
+and the egress policy blocks Gemini. The next import logs the shape whenever
+a reply is rejected, and says it on the screen, so the same run that fails
+next will answer this. If flash-lite puts contact details under another name
+(`personal_info`, say), this change still keeps its experiences. The contact
+fields are then read by pattern and flagged, rather than lost.
+
+**Not checked here:** whether any other consumer of a model reply gates the
+whole reply on one key. The generation path validates per bullet, which is a
+different shape, but nobody has counted.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

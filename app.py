@@ -372,11 +372,16 @@ def _render_confirm():
     # not read this part", which are very different things to be told.
     unparsed = schema.get("_unparsed") or {}
     leftovers = {k: v for k, v in unparsed.items() if v}
+    # The recorded cause (R100), not a guessed one. This said "most likely
+    # because no model was available" even when a model had answered.
+    why = (schema.get("_extraction") or {}).get("why")
+    if why and not leftovers:
+        st.info(why, icon="ℹ️")
     if leftovers:
         st.warning(
-            "Some of your resume could not be split into separate entries — "
-            "most likely because no model was available to read it. It is "
-            "shown below; use **Add an experience** or **Add a project** "
+            (why + " " if why else "")
+            + "Some of your resume could not be split into separate entries. "
+            "It is shown below; use **Add an experience** or **Add a project** "
             "further down to enter what you want kept.",
             icon="⚠️",
         )
