@@ -171,7 +171,9 @@ board, and a capture of real remote strings.
 5. **A9:** Sentry, with the key scrubbed.
 6. **A10:** concurrency, the stale-run reaper (Q49: a startup sweep across
    every partition, `queued` too) and machine size.
-7. **A11:** resume pre-flight on the friends' real resumes. Read the PDFs:
+7. **A11:** resume pre-flight on the friends' real resumes. **Decide Q63
+   first:** a re-import changes the resume every stored score was computed
+   against, and since R106 nothing re-scores a stored job in normal use. Read the PDFs:
    R104's 12-bullet page is not yet confirmed to fit one page for a real
    senior's resume.
 8. **A11b: a clean clone runs green.** It stays before A12, because

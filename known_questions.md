@@ -11083,6 +11083,86 @@ shorter than a "retry in Ns" the error states (R97).
 before any Gemini-embedding measurement is trusted again, and before Q53's
 null set embeds 60 more descriptions per resume on Gemini.
 
+## Q63. Below-bar scores are permanent: a resume re-parse (A11) or a lowered threshold leaves stale exclusions
+
+**Status:** Open, found 2026-09-23 reviewing R106. **Decide before A11**,
+which re-imports friends' resumes and so changes every resume their stored
+scores were computed against.
+
+### What re-scores a stored job today (checked in the code)
+
+- **Nothing in normal use.** Discovery passes on only
+  `JobStore.unprocessed_urls()`, the rows with `score IS NULL`. Once a job
+  has a score it is never analysed again by a run: `start_run`, the CLI, and
+  both UIs' run buttons all go through discovery.
+- **The CLI replay is the one path** (`--input <enriched_jobs.json>`). It
+  runs analysis on the jobs in that file and `set_score` overwrites their
+  score and bar. It needs an old run's `outputs/<date>/enriched_jobs.json`.
+  No UI offers it.
+- **`scripts/purge_fabricated.py`** sets `score` back to NULL for jobs whose
+  job description was invented (R61), which puts them back in
+  `unprocessed_urls()`. It is the only reset, and it is for one defect.
+- **No UI path re-scores anything.** There is no "re-score my board" control.
+
+### What a re-score would have to read
+
+**The store does not hold the job description that was scored.**
+`jobs.full_jd` is what *discovery* recorded (often a short description), and
+enrichment never writes the scraped text back (Q40, open). So a re-score from
+the store would score a different, thinner text than the original. A real
+re-score needs one of:
+- the JD cache (`tools/cache/job_cache.py`), which enrichment reads first;
+  it holds scraped text for **7 days** and then forgets by design;
+- the run's `outputs/<date>/enriched_jobs.json` (what the CLI replay uses);
+- a fresh scrape.
+
+Fixing Q40 (write the scraped JD back to the store) would make a re-score
+cheap and scrape-free, and it is a prerequisite for doing this well.
+
+### What goes stale, and what R106 changed
+
+- **A resume change** (A11's re-import, or any edit to the master) leaves
+  every stored score computed against the old resume. That was already true
+  of passing jobs. **R106 extends it to jobs under the bar,** which before
+  were accidentally re-analysed on every run (at the cost of a slot each) and
+  so did pick up a new resume.
+- **A lowered threshold** never reaches a job stored under the old bar. Its
+  label ("below your bar of 40") stays true as history, but the job never
+  becomes eligible for a resume. Before R106 it would have been re-analysed
+  and passed. **A raised threshold** leaves passing jobs marked as passing
+  under a bar they no longer meet. The generation cap limits the damage, but
+  the board's claim is out of date.
+
+So R106 traded an expensive, accidental self-healing for correctness of the
+label and the slot. The trade is right, but it needs a deliberate way to
+re-score.
+
+### Options (not decided)
+
+1. **A resume fingerprint stored with the score.** A hash of the parsed
+   master's components, plus the embedding model and the scoring code's
+   version. A score whose fingerprint differs from the current one is
+   **stale**, which is a third state, not "not scored": shown with its old
+   number and marked. Re-scored on the next run, or on demand.
+   - This is `refresh_gate`'s shape (R62): a stored fingerprint covering the
+     code and the profile fields the gate reads, re-judged when it changes.
+     The precedent already works.
+   - Needs Q40 (or the JD cache while it lasts) to avoid a re-scrape.
+   - Cost: one column, and a re-score pass whose embedding calls count
+     against a key's quota (Q61).
+2. **Re-evaluate the bar without re-scoring.** When the threshold changes,
+   compare stored scores to the new bar. This is free, and exact as long as
+   the resume and model are unchanged. It handles the lowered-threshold case
+   only; a resume change still needs option 1.
+3. **A "re-score my board" action.** Explicit, user-triggered, and it does
+   the work option 1 detects. Needs a facade function and both UIs.
+
+**Leaning:** 1 with 2 folded in. The fingerprint decides *when* a score is
+stale; a threshold change needs no re-score, only the comparison. Q40 comes
+first, or alongside, so re-scoring reads what was originally scored. **Decide
+before A11**, because A11 is the first time friends' resumes change after
+their boards fill.
+
 ---
 
 # Out of scope
