@@ -224,12 +224,25 @@ def _unwrap(reply):
         if isinstance(only, dict) and not any(k.lower() in SECTIONS for k in reply):
             reply = only
     lowered = {str(k).lower(): v for k, v in reply.items()}
+
+    # Skills as a plain list of strings is the same content in the other
+    # container, and becomes one category. R100 dropped it as the wrong type,
+    # which threw away every skill a model returned that way.
+    skills = lowered.get("skills")
+    if isinstance(skills, list) and skills and all(isinstance(x, str) for x in skills):
+        lowered["skills"] = {"Skills": ", ".join(x.strip() for x in skills if x.strip())}
+
     # A section of the wrong type is dropped, not trusted and not fatal: a
     # string where the prompt asked for a list would fail in `_normalise`.
+    # But never silently: every one dropped is named, and the import says so.
     kept = {k: lowered[k] for k in SECTIONS
             if k in lowered and isinstance(lowered[k], SECTION_TYPES[k])}
+    dropped = [k for k in SECTIONS
+               if k in lowered and lowered[k] and k not in kept]
     if not any(kept.values()):
         return None
+    if dropped:
+        kept["_dropped"] = dropped
     return kept
 
 
@@ -300,8 +313,15 @@ def to_schema(text: str, agent=None) -> dict:
 
 def _from_model(schema: dict, text: str) -> dict:
     """A usable reply, with any missing contact block read by pattern."""
+    dropped = schema.pop("_dropped", [])
     out = _normalise(schema)
     notes = []
+    if dropped:
+        notes.append("The model's reply had " + ", ".join(dropped) + " in a shape "
+                     "that could not be read, so " + ("it was" if len(dropped) == 1
+                     else "they were") + " not imported. Add "
+                     + ("it" if len(dropped) == 1 else "them") + " below.")
+        logger.warning(f"Extraction reply sections in an unreadable shape: {dropped}")
     if not any((out["contact"] or {}).values()):
         floor = heuristic_schema(text).get("contact") or {}
         out["contact"] = dict(floor)

@@ -9279,6 +9279,28 @@ fields are then read by pattern and flagged, rather than lost.
 whole reply on one key. The generation path validates per bullet, which is a
 different shape, but nobody has counted.
 
+### Correction, 2026-09-23: R100 dropped a list of skills, and dropped sections silently
+
+Found while tracing Q59's skills loss. `_unwrap` drops a section whose type
+does not match the prompt, which is right for `contact` as a string. But for
+`skills`, a **list of strings** is the same content in the other container,
+and dropping it threw away every skill a model returned that way. It said
+nothing, so the confirmation screen showed "Skill groups: 0" with no reason.
+The regression was R100's own, introduced while fixing a whole-reply discard.
+
+- **A list of skill strings now becomes one `Skills` category.** The
+  confirmation screen shows it for splitting.
+- **Other lists (of objects) are still not read**, because mapping unknown
+  keys would be guessing.
+- **Every section dropped for its shape is now named** in `_extraction.why`
+  ("…had skills in a shape that could not be read, so it was not imported.
+  Add it below."). This is the rule that a filter which removes things must
+  say so, applied to R100's own filter.
+
+Its own commit and test (`test_skills_list_reply`), kept separate from the
+label splitting in the pattern reader, which is a different bug. R100 as
+shipped fails 3 of the 5 tests.
+
 ## R101. A key httpx cannot send is named as the key's problem, and generation stops blaming Gemini for everything
 
 **Decided 2026-09-23.** A generated resume's summary read:
