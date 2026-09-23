@@ -49,14 +49,15 @@ class EmbeddingScore:
 
 
 # Raw similarity is not comparable between backends, so the map onto 0-100 is
-# per backend. Gemini's cosines for this kind of text sit around 0.3-0.9;
-# model2vec's static embeddings run an order of magnitude lower, because a
-# short component is being compared against a long job description and static
-# vectors dilute across length.
+# per backend.
 #
-# Both figures are measured, not assumed. The Gemini pair is the original
-# calibration; the local pair comes from scoring the frozen 20-JD baseline,
-# where raw overall ran from about 0.00 to 0.08. Getting this wrong is not
+# **The local pair is void (R98).** It was recorded as "raw overall ran from
+# about 0.00 to 0.08" on the frozen 20-JD baseline. Clean potion has never
+# produced a value below 0.12 on any measured resume, so every job clips to 100
+# and the local job score is keyword order. The figure was almost certainly
+# Gemini resume vectors against potion JDs, served by the cache R97 fixed. It
+# is kept only until the anchored normalisation replaces it. The Gemini pair
+# is "the original calibration" and has no recorded measurement either. Getting this wrong is not
 # subtle in the way R24's threshold was — the wrong floor sends every job to
 # 0.0 and the pipeline finds nothing at all, which is exactly what the first
 # version of the local backend did.

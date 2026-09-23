@@ -594,7 +594,8 @@ output is *good*.
   rules. Still nobody's judgement.
 - **R36** — local embeddings spread scores across 88.7 points where Gemini
   spans 13.9, and agree with it on only 7 of 20 project selections. Wider is
-  not automatically better and no one has read those resumes.
+  not automatically better and no one has read those resumes. *Void since
+  R98: not a potion measurement.*
 - **R37's floor** — a one-page resume in the user's own words, marked
   `needs_review` because some bullets exceed the length zones. Whether that is
   an acceptable product or a bad first impression is a judgement, not a test.
@@ -625,6 +626,8 @@ disagreed on it. A JD where everything agrees proves nothing.
 | D derived triggers | jobscout, e-commerce, **computer_networking**, spotify | valid |
 
 ### R36 — local embeddings are a fallback, not an upgrade
+
+> **VOID (R98, 2026-09-23).** Run in the same week and on the same machine as R36's measurement, so almost certainly with Gemini resume vectors compared against potion job descriptions. Its selections cannot be shown to be potion's. "Local costs real quality" is unmeasured, not refuted.
 
 Answered, and against local. For an embedded C++/Linux role the obviously
 relevant project is Computer Networking — Docker, ContainerLab, WSL/Linux,
@@ -3582,6 +3585,8 @@ applied to everything.
 Calibration is now per backend and measured for each. Worth noting how the
 failure presented: not an error, not a warning, just a pipeline that
 discovered jobs and scored all of them zero.
+
+> **VOID (R98, 2026-09-23).** The local row below is not a potion measurement. Clean potion puts every raw similarity above 0.12, so a 0.0–88.7 spread through a `(0.00, 0.10)` window is impossible. It was almost certainly Gemini resume vectors against potion job descriptions, served by the cache R97 fixed. The window derived from it is void too. Kept as the record of what was believed.
 
 **An unexpected result, reported without a conclusion.** Over the same 20 JDs:
 
@@ -8961,6 +8966,118 @@ constant, the retry tests fail with `EMBED_RETRIES = 0`, the dimension tests
 fail with the width check removed, the recovery test fails when a successful
 retry is not reported, and the breaker test fails with the threshold unset.
 
+## R98. The local window was never fit on potion's own similarities, and the local job score has never carried an embedding signal
+
+**Decided 2026-09-23.** This closes Q51's question about where the window came
+from. How to replace it is a separate build.
+
+### What is proven
+
+Q51's probe was run on three profiles against the same 40 real jobs, on clean
+potion (R97's cache label in place, so nothing was served across models):
+
+| profile | level | raw min – max | at or above 0.10 |
+|---|---|---|---|
+| `yash_pathak` (the resume the window was fit on) | new grad | 0.2550 – 0.5908 | 40 of 40 |
+| `priya_raghunathan` | staff, six years | 0.1994 – 0.4864 | 40 of 40 |
+| `rohan_deshmukh` | new grad | 0.1213 – 0.4436 | 40 of 40 |
+
+- **120 of 120 at the ceiling.** The lowest clean value measured is 0.1213.
+  The window `(0.00, 0.10)` claims potion's raw similarity tops out at 0.10.
+- It does not fit any of the three, including the resume it was fit on.
+- It is wrong at all three levels, so seniority is ruled out. Q51 already
+  showed that resume structure cannot move raw outside the range of its
+  component cosines.
+
+**R36's own table cannot have come from clean potion, whatever produced it.**
+- Before R67 there was no keyword blend, so the job score was the normalised
+  embedding alone.
+- The local row reads min 0.0, median 63.6, max 88.7. Through a
+  `(0.00, 0.10)` window that needs raw values of about 0.000–0.089.
+- Clean potion has not produced one value below 0.12 across 120 pairs.
+- Caveat: R36 used the frozen 20, not these 40. For the claim to fail, 20 tech
+  postings would have to embed 1.4–6× less similar than 40 other tech postings
+  to the same resume. That is not a plausible corpus difference.
+
+### What the local job score has been, by regime
+
+- **Every clean-potion run** has scored the embedding half at a constant 100.
+  The job score is therefore 70 + 0.3 × keyword, in 12.5-point steps: the
+  board is **keyword order with ties**. That covers:
+  - every keyless user;
+  - every friend on the hosted app, whose key never reaches embeddings (Q52);
+  - R86's container runs;
+  - every run since R97.
+
+  Priya's highest raw similarity ranking 6th is this, not a potion opinion.
+- **The author's machine before R97, whenever a Gemini resume cache existed**
+  (so every local run on an unchanged resume) scored the embedding half from
+  noise, not from a constant. That is the regime R36 measured.
+- **Component selection is a different path, and is *not* voided.**
+  `_composite_score` reads the unclipped per-component cosines, so the window
+  never touched it.
+  - On clean potion, selection has always used potion's real similarities.
+    That is unjudged, not wrong.
+  - It was noise only in the cross-space regime above.
+
+### The mechanism: cross-space noise, the only candidate, not reproduced
+
+Q51 set out the mechanism.
+- R97's resume cache served the author's Gemini vectors (768 wide) to local
+  runs.
+- The job descriptions were embedded by potion (256 wide).
+- The old cosine took a dot product over the first 256 dimensions and divided
+  by both full norms.
+- Two unrelated coordinate systems give a small cosine near zero, and the
+  best-of-k averages land at about 0.00–0.08. That is R36's number.
+
+It is the only explanation left standing: seniority and structure are ruled
+out, and the table is impossible under clean potion. **It has not been
+reproduced.** The ~20-call Gemini reproduction (Q51) was skipped. This R does
+not depend on it: every void below holds because the table and the window are
+not clean potion, whatever they were. If the reproduction is ever run, record
+it here.
+
+### Void
+
+- **R36's table** (the 88.7-point local spread against Gemini's 13.9, and the
+  13/20 experience and 7/20 project agreement). Not a potion measurement.
+- **R36's explanation** that static vectors "run an order of magnitude lower"
+  because short components dilute against long job descriptions. Potion's raw
+  similarities sit in the same range as Gemini's calibration, not an order of
+  magnitude below it.
+- **V3's local verdict**, "R36 — local embeddings are a fallback, not an
+  upgrade". It was run on the same machine in the same week as R36, so it was
+  almost certainly under the same cache condition. Its selections cannot be
+  shown to be potion's.
+  - The product conclusion drawn from it, that local "costs real quality", is
+    **unmeasured, not refuted**.
+  - `auto` preferring Gemini when a key exists stays, for the other reason
+    R36 gave: every measurement in this log was taken on Gemini.
+- **The local window `(0.00, 0.10)`** and every local job score, band and
+  threshold decision made through it. `scoring_threshold` has been inert on
+  local, because every job scores at least 70.
+
+**Not void:**
+- R86's container rows. They were clean potion, which is why they saturated.
+- V2's keyless run, which checked page shape and does not depend on the
+  embedding backend.
+- Every Gemini measurement.
+
+**Unverified, not void:** the Gemini window `(0.30, 0.60)` has no recorded
+measurement either. Nothing here says it is wrong. The anchored normalisation
+that replaces the local window is meant to replace both.
+
+### The lesson, in this log's terms
+
+A constant with no measurement artifact. It was fit while a cache served the
+wrong model's vectors and a cosine truncated in silence. The explanation
+written for it was a plausible story about the model, not a check. It is R81's
+rule, "check the instrument before trusting the reading", learned at the
+instrument's own calibration: nobody could re-derive R36's number because
+nothing recorded how it was made. **A calibration constant ships with the
+script that produced it, or it is a guess with a decimal point.**
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -9560,7 +9677,7 @@ friends arrive.
 
 ## Q51. Potion's scale clips a senior profile, so its ranking may be keyword count alone
 
-**Status:** Open, found 2026-09-23. **Not refit here, by decision.** Moving
+**Status:** The window question is resolved by **R98**: the local window was never fit on potion's own similarities, and it is void. Replacing it (the anchored null set, Q3) is open. Found 2026-09-23. **Not refit here, by decision.** Moving
 `CALIBRATION` moves what `scoring_threshold` means (R24's shape), so a refit is
 its own R, decided from the measurement below.
 

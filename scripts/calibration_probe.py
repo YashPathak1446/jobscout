@@ -40,7 +40,8 @@ if str(ROOT) not in sys.path:
 # comment records it. Printed beside the measurement so the reader compares
 # against the fit, not only against the clip.
 FIT_ON = {
-    "local": ((0.00, 0.08), "frozen 20-JD baseline, the author's resume"),
+    # Void (R98): not a potion measurement; kept to print what was believed.
+    "local": ((0.00, 0.08), "R36's recorded fit, void (R98)"),
     "gemini": ((0.30, 0.90), "the original Gemini calibration"),
 }
 
