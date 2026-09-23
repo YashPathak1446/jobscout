@@ -148,15 +148,14 @@ this before the invite.**
 verified on the author's machine: 1385 tests OK, all three baselines match,
 and a re-import reads 3 experiences / 1 project / 3 skill groups.
 
+**Also done:** Q55 by R105 (2026-09-23). A remote posting is judged on
+its country, and a bare "Remote" is undecidable on the board. Q62 holds
+what it left: non-remote unknown locations, `exclude_countries` on the
+board, and a capture of real remote strings.
+
 **Before the invite, in order:**
 
-1. **Q55: remote postings bypass the country whitelist.**
-   - `location_matcher.parse_location` drops the country from any remote
-     string.
-   - `job_filter.evaluate` accepts remote before the whitelist is checked.
-   - The fix must carry three states (known in, known out, unknown), not flip
-     a default. A bare "Remote" is unknown: kept, badged and counted, never
-     silently eligible.
+1. ~~Q55~~, done (R105).
 2. **Q54's label: a job below the threshold is shown as "Not scored".**
    `_store_scores` writes back only the results that pass. Store every score,
    with a below-the-bar state, in both UIs.

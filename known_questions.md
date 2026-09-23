@@ -9530,6 +9530,87 @@ bullets at 2 lines each must still fit one page for a real senior's resume.
 A11's pre-flight on the friends' real resumes is where that gets checked,
 now that it reads the budget that ships.
 
+## R105. A remote posting is judged on its country, and one that names none is unknown
+
+**Decided 2026-09-23.** Resolves Q55, pilot item 1.
+
+**Three defects, not the two Q55 recorded:**
+1. **`parse_location` returned early from every remote string** with
+   `country=None`, apart from a short list of US phrasings. That list missed
+   `"Remote - US"` itself, because `", us"` needs a comma.
+2. **`evaluate` accepted a remote job before either country list.**
+3. **Found while fixing the first: "Argentina" was not a country by name.**
+   - R68's guard strikes `AR`, `CO` and `MA` from `COUNTRY_CODES`, because
+     they are Arkansas, Colorado and Massachusetts.
+   - The loop that makes every coded country recognisable by name read the
+     *filtered* map, so Argentina, Colombia and Morocco went with their codes.
+   - So "Argentina Remote" would still have parsed to nothing with (1) fixed
+     alone. The name loop now reads every code. The code is ambiguous; the
+     name never was.
+
+**The parse.** A remote string keeps `is_remote` and then has its remote
+words taken off. What is left goes through the same steps as any other
+location:
+- one country → `country`;
+- several (`"Remote - US or Canada"`, `"Remote (US, Canada)"`) → the new
+  `countries` field, with `country` left None;
+- none (`"Remote"`) → both empty.
+- A string naming a US state is one place, so `"Remote - Dublin, Ohio"` is not
+  split into Ireland and Ohio.
+
+Two narrow additions, both of them needed to read `"Remote - US"` and
+`"Remote - UK"`:
+- `US`/`USA`/`U.S.` as **whole tokens**. `us` is inside Austin, Houston,
+  Brussels and Russia.
+- A two-letter code that is the whole string.
+
+Also, **bare `america` is no longer the United States when `latin`, `south`
+or `central` precedes it, or when it is `americas`.** This applies to
+non-remote strings too: "Latin America" used to parse as the US and is now
+unknown.
+
+**One judgement, both gates.** `job_filter.country_decision` returns in / out
+/ unknown, and both gates call it:
+- discovery's `evaluate`, for remote and non-remote locations alike;
+- the board's `gate_verdict`.
+
+A posting naming several countries is in when any of them is acceptable.
+
+| | discovery (`evaluate`) | board (`gate_verdict`) |
+|---|---|---|
+| out | excluded, same reason text as before | hidden |
+| in | as before (remote: `location_score` 3) | as the body says |
+| unknown, profile names countries | kept, `location_score` −1 ("Remote, country not stated"), counted in the discovery log | **undecidable**, "remote, but the posting does not say which countries it hires in" |
+| profile names no countries | unchanged | unchanged |
+
+**Chose / rejected / breaks if wrong:**
+- **Several countries → a `countries` field** rather than the first match.
+  The first match turns "US or Canada" into Canada, and that job would be
+  lost to a US profile that today sees it. Also rejected: treating several
+  countries as unknown. That badges jobs plainly open to the reader. Both
+  gates read the field in this change, so it is not written and left unread.
+- **Unknown ranks at −1, not 3.** On a run capped by `--max-jobs`, bare-Remote
+  postings now compete with "Location unclear" rather than with named
+  priority states, so fewer of them reach generation. That is the cost of
+  not ranking unknown as the best known answer. If it proves too harsh on real
+  boards, the knob is that one number, not the three states.
+- **An undecidable body keeps its own reason** on the board. A row has one
+  reason, and an unread description is the larger unknown.
+- **`location_matcher.py` joins `_GATE_FILES`.** The stored verdicts are
+  fingerprinted on gate source. Without it, this parse change would have left
+  every "Remote - Ireland" row judged by the old parse, exactly as the
+  comment above that list warns.
+
+**Tests:** `test_remote_country` (27). The old code fails 29 subtests and
+errors on 4. One class walks both gates over the same strings and asserts
+that excluded ⇔ hidden, and remote-unclear ⇔ undecidable. The suite is
+otherwise unchanged: the same 14 `yash_pathak` errors as before (A11b).
+
+**Not measured on real boards.** The sandbox this was written in is refused
+by the ATS APIs (403 at the egress proxy). Apart from the two strings seen,
+every test string is a common format written here. That is the fixture that
+agrees with you. Q62 holds the capture that should replace it.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -10453,9 +10534,10 @@ explain. Worth confirming before Q59 uses either shape.
 
 ## Q55. A remote posting passes a country whitelist without its country ever being read
 
-**Status:** Open, found 2026-09-23 on the real six-year resume. A US-only
-profile was shown **"Argentina Remote"** and **"Remote - Ireland"**. R55's
-shape, one branch over. Not fixed here.
+**Status:** Resolved 2026-09-23 by R105, which found a third defect under
+these two (Argentina was not a country by name). Found 2026-09-23 on the real
+six-year resume. A US-only profile was shown **"Argentina Remote"** and
+**"Remote - Ireland"**. R55's shape, one branch over.
 
 **What was observed, and what was not.** Both postings were seen **on the
 board**, as `Argentina Remote` and `Remote - Ireland`, for a profile whose
@@ -10925,6 +11007,36 @@ null set embeds 60 more descriptions per resume on Gemini.
 ---
 
 # Out of scope
+
+## Q62. A non-remote location with no country is still shown as eligible, and the board gate ignores `exclude_countries`
+
+**Status:** Open, backlog from R105 (2026-09-23). Found while fixing Q55;
+deliberately not fixed there.
+
+**Three things R105 left alone:**
+1. **A non-remote posting whose country does not parse** (`"Multiple
+   Locations"`, `""`, a city the tables do not know, such as Brussels) is
+   kept with `location_score` −1 by discovery. On the board it is still
+   **shown** plainly.
+   - The invariant says unknown is never a value, so it should be
+     undecidable, like a bare "Remote".
+   - Left out because it badges a much larger share of the board than Q55
+     did, and that is a product decision, not a parse fix.
+   - `test_an_absent_location_is_not_newly_badged` pins today's behaviour so
+     the change is visible when it is made.
+2. **`gate_verdict` checks the whitelist and never `exclude_countries`.**
+   Discovery applies both. So a country the user excludes *after* a job was
+   stored stays on the board.
+   - Fixing it means passing the list to `country_decision` and adding it to
+     `gate_fingerprint`.
+   - The fingerprint half is the part that gets forgotten: a field the gate
+     reads but does not fingerprint leaves stale verdicts standing.
+3. **Real remote strings.** R105's tests are formats written here. The next
+   live run should dump every distinct `location` containing a remote word
+   from `jobs.db`, and each string should be checked against
+   `parse_location` for:
+   - a region (`EMEA`, `Europe`, `APAC`, `LATAM`), which R105 leaves unknown;
+   - a country the tables lack (Russia and Belgium's cities, for two).
 
 ## OOS1. DOCX output format
 

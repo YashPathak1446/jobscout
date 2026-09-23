@@ -677,6 +677,47 @@ def judge_body(text: str, profile, *, readable=None) -> GateVerdict:
     return GateVerdict(SHOWN)
 
 
+# ---------------------------------------------------------------------------
+# Where a posting is, against where the profile will work (Q55)
+#
+# Three answers, not two. A remote posting used to be accepted before either
+# country list was consulted, and its country had already been thrown away by
+# the parser, so "Argentina Remote" read as remote-and-acceptable for a
+# US-only profile. The fix is not to flip that default: a posting that says
+# only "Remote" has not said where it hires, and that is unknown, not no.
+# ---------------------------------------------------------------------------
+
+COUNTRY_IN, COUNTRY_OUT, COUNTRY_UNKNOWN = "in", "out", "unknown"
+
+REMOTE_UNKNOWN_REASON = ("remote, but the posting does not say which "
+                         "countries it hires in")
+
+
+def country_decision(loc: LocationResult, preferred, excluded=()) -> tuple:
+    """
+    `(state, reason)` for a parsed location: in, out, or unknown.
+
+    Shared by discovery's `evaluate` and the board's `gate_verdict`, so the two
+    cannot read the same location differently. A posting naming several
+    countries is in when any of them is acceptable: "US or Canada" is open to
+    someone in the US.
+    """
+    named = list(loc.countries) or ([loc.country] if loc.country else [])
+    if not named:
+        return COUNTRY_UNKNOWN, ""
+
+    excluded = list(excluded or [])
+    open_to = [country for country in named if country not in excluded]
+    if not open_to:
+        return COUNTRY_OUT, f"Location country '{named[0]}' is excluded"
+
+    preferred = list(preferred or [])
+    if preferred and not any(country in preferred for country in open_to):
+        return COUNTRY_OUT, (f"Location country '{' or '.join(open_to)}' "
+                             f"not in preferred countries {preferred}")
+    return COUNTRY_IN, ""
+
+
 def evaluate(job, profile) -> FilterDecision:
     """
     Evaluate a job against a user profile.
@@ -748,9 +789,22 @@ def evaluate(job, profile) -> FilterDecision:
     loc_result = parse_location(job.location)
     decision.location_result = loc_result
 
-    # Remote check
+    # Remote check. The posting's country is judged first, like any other
+    # location's (Q55): a remote job in Argentina is in Argentina.
     if loc_result.is_remote:
-        if prefs.locations.remote_ok:
+        preferred_countries = prefs.locations.countries
+        state, reason = country_decision(
+            loc_result, preferred_countries,
+            getattr(prefs.locations, "exclude_countries", None))
+        if state == COUNTRY_OUT:
+            decision.exclude = True
+            decision.reason = reason
+            return decision
+        if state == COUNTRY_UNKNOWN and preferred_countries:
+            # Kept, never ranked as a known match. The board badges it.
+            decision.location_score = -1
+            decision.reasons.append("Remote, country not stated")
+        elif prefs.locations.remote_ok:
             decision.location_score = 3
             decision.reasons.append("Remote (accepted)")
         else:
@@ -767,20 +821,14 @@ def evaluate(job, profile) -> FilterDecision:
     # Blacklist first — it is the narrower statement. A user who names no
     # preferred countries but rules one out has said something specific, and
     # the whitelist below would never reach it (R68).
-    excluded_countries = getattr(prefs.locations, "exclude_countries", None) or []
-    if loc_result.country in excluded_countries:
+    # Then the whitelist. Both through `country_decision`, the same judgement
+    # the remote branch above and the board's gate make.
+    state, reason = country_decision(
+        loc_result, prefs.locations.countries,
+        getattr(prefs.locations, "exclude_countries", None))
+    if state == COUNTRY_OUT:
         decision.exclude = True
-        decision.reason = f"Location country '{loc_result.country}' is excluded"
-        return decision
-
-    # Whitelist check: is the detected country in user's preferred countries?
-    preferred_countries = prefs.locations.countries
-    if preferred_countries and loc_result.country not in preferred_countries:
-        decision.exclude = True
-        decision.reason = (
-            f"Location country '{loc_result.country}' "
-            f"not in preferred countries {preferred_countries}"
-        )
+        decision.reason = reason
         return decision
 
     # Country matches — score by state preference
@@ -883,7 +931,11 @@ def _score_us_location(loc_result: LocationResult, location_prefs) -> int:
 # `judge_body` reads its readability rule from posting_facts, so that file is
 # gate code too. A third file joining the gate belongs on this list, or an
 # edit to it leaves every stored verdict judged under the old rule.
-_GATE_FILES = ("job_filter.py", "posting_facts.py")
+#
+# location_matcher.py is on it since Q55: the country gate below reads
+# `parse_location`, and a parser change that turns "Remote - Ireland" from
+# no-country into Ireland has to re-judge every stored row.
+_GATE_FILES = ("job_filter.py", "posting_facts.py", "location_matcher.py")
 
 
 def _gate_source() -> str:
@@ -934,6 +986,10 @@ def gate_verdict(row, profile) -> GateVerdict:
 
     A country that rules the job out hides it even when the body was
     undecidable: the location is a structured field, not the unread text.
+
+    A remote posting that names no country is undecidable when the profile
+    names countries (Q55): kept, badged and counted, never silently eligible.
+    A body that is itself undecidable keeps its own reason.
     """
     body = judge_body(row.get("full_jd") or "", profile)
     if body.state == HIDDEN:
@@ -944,9 +1000,11 @@ def gate_verdict(row, profile) -> GateVerdict:
         "countries", None) or []
     if preferred:
         location = parse_location(row.get("location") or "")
-        if location.country and location.country not in preferred:
-            return GateVerdict(
-                HIDDEN, f"Location country '{location.country}' not in "
-                        f"preferred countries {preferred}")
+        state, reason = country_decision(location, preferred)
+        if state == COUNTRY_OUT:
+            return GateVerdict(HIDDEN, reason)
+        if (state == COUNTRY_UNKNOWN and location.is_remote
+                and body.state == SHOWN):
+            return GateVerdict(UNDECIDABLE, REMOTE_UNKNOWN_REASON)
 
     return body

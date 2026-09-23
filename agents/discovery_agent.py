@@ -373,6 +373,14 @@ class DiscoveryAgent:
         excluded = len(jobs) - len(kept)
         logger.info(f"   Kept {len(kept)}, excluded {excluded}")
 
+        # Counted, because they are kept on an unknown (Q55): a remote posting
+        # that names no country is neither in the profile's countries nor out.
+        unstated = [j for j in kept
+                    if "Remote, country not stated" in j._filter_decision.reasons]
+        if unstated:
+            logger.info(f"      ❔ {len(unstated)} remote job(s) name no country; "
+                        f"kept, ranked as unclear and marked on the board")
+
         if excluded_reasons:
             for reason, count in sorted(excluded_reasons.items(), key=lambda x: -x[1]):
                 logger.info(f"      - {reason}: {count} jobs")
