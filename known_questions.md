@@ -9241,6 +9241,77 @@ fields are then read by pattern and flagged, rather than lost.
 whole reply on one key. The generation path validates per bullet, which is a
 different shape, but nobody has counted.
 
+## R101. A key httpx cannot send is named as the key's problem, and generation stops blaming Gemini for everything
+
+**Decided 2026-09-23.** A generated resume's summary read:
+
+    Bullets were not rewritten: Gemini could not be reached ('ascii' codec
+    can't encode character '\u2014' in position 76: ordinal not in range(128))
+
+R81's shape (a console could not print what it found), now in the generation
+path, and misattributed twice over.
+
+### Where the ASCII encode happens
+
+**Not in this repo's code.** Every file open on that path already passes
+`encoding="utf-8"`. The encode is in **httpx**, which google-genai sends
+through: header values are encoded as ASCII. The key travels as the
+`x-goog-api-key` header, and httpx raises exactly that message for a non-ASCII
+header value (reproduced in `test_key_encoding.TestTheMechanism`, so this is a
+measurement and not an inference).
+
+**What the position says.** A Gemini key is 39 characters, so an em dash at
+position 76 means the "key" carried about 37 more characters: a copied note or
+comment. Measured with python-dotenv 1.2.3:
+- `KEY="AIza… # note — x"` (comment inside the quotes) carries it.
+- `KEY=AIza…  — note` carries it.
+- `KEY=AIza…#note — x` (no space before `#`) carries it.
+- `KEY=AIza… # note` and `KEY="AIza…" # note` do not.
+
+A key pasted into the UI goes to generation only; it never reaches
+embeddings (Q52). That fits a run where scoring worked and rewriting did not.
+**Which carrier this run had is not known.** Checking on the author's machine
+is safe: print `len(key)` and `key.isascii()`, never the key.
+
+### Why it was called "unreachable"
+
+**`classify_api_error` never saw it.** `_gemini_tailor` wraps prompt
+building's aftermath, the call, fitting, validation and repair in one
+`except Exception`, and labels *every* exception "Gemini could not be
+reached". Our own bugs, a validator crash and a key the client cannot encode
+all read as a Google outage. (Had it been asked, `classify_api_error` would
+have said `fatal`, since the message has no 404, 429 or 503 in it.)
+
+### What changed
+
+- **One place builds a Gemini client:** `config.gemini_client`. There were
+  four: generation, embeddings, import, and `scripts/check_models.py`, which
+  also read the environment itself rather than through `resolve_api_key`. A
+  syntax-tree test fails on a fifth `genai.Client(`.
+- **`config.gemini_key_problem`** refuses a key with a non-ASCII character or
+  whitespace, before any client is built. It names the character, its code
+  point and its position, and **never repeats the key**. It checks only what
+  makes a key unsendable, not Google's key format, which can change.
+- **Generation says whose fault it was** (`_degraded_reason`):
+  - your key ("Your Gemini key was not used. …");
+  - Gemini (quota, transient, retired, or a transport error such as
+    `httpx.ConnectError`, told apart by the exception's module so httpx is
+    not imported: "could not be reached");
+  - Google refusing the request;
+  - **JobScout** ("… This is a bug in JobScout, not a Gemini outage.").
+- **The key panel says so at paste time.** `backend_status` returns
+  `key_problem`, and detection no longer picks Gemini on an unsendable key.
+  `BackendPanel.tsx` and Streamlit's panel both render it, rather than "add a
+  Gemini key above", which would be false because there is one.
+- **Import (R100) and embeddings (R97) name it too.** Import's `why` gives
+  the key problem instead of "could not be reached". Embeddings record it as
+  `fatal`, with the message.
+
+Mutation-checked: restoring the old catch-all label, or removing the key
+check, each fails its tests. The first version of these tests checked the
+classifier and not the call site, and passed with the old label restored. The
+call-site test exists because of that.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

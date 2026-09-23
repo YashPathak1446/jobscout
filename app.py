@@ -552,6 +552,10 @@ def _backend_panel():
     headline = BACKEND_HEADLINES.get(chosen, cached["description"])
 
     with st.container(border=True):
+        if cached.get("key_problem"):
+            # There is a key and it cannot be sent (R101): say so, rather than
+            # the "add a key" line below, which would be false.
+            st.error(cached["key_problem"], icon="🔑")
         if chosen == "none":
             st.warning(headline, icon="✍️")
             st.caption(

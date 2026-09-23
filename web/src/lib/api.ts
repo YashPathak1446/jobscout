@@ -108,6 +108,9 @@ export type Backend = {
   backend: string
   forced: boolean
   description: string
+  /** Why the key as entered cannot be sent (R101), or null. When set, the
+   *  key was ignored for detection, so the rung shown is what runs instead. */
+  key_problem: string | null
   available: Record<string, boolean>
 }
 

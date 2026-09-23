@@ -36,7 +36,9 @@ from tools.cache.llm_cache import LLMCache
 from config import (
     GENERATION_MODELS,
     LLM_CACHE_ENABLED,
+    ApiKeyProblem,
     classify_api_error,
+    gemini_client,
     llm_cache_dir,
     resolve_api_key,
 )
@@ -64,6 +66,37 @@ MODEL_PATH_LINES_PER_BULLET = 2
 # this template's margins, which is what the last entry extrapolates from.
 _LINE_ENDS = (110, 213, 316)
 _CHARS_PER_LINE = 106
+
+
+def _degraded_reason(exc: Exception) -> str:
+    """
+    Why the bullets were not rewritten, naming whose fault it was (R101).
+
+    Everything raised inside `_gemini_tailor` used to be reported as "Gemini
+    could not be reached": a prompt-builder bug, a validator crash, and a key
+    httpx could not encode (an em dash copied in with it) all looked like an
+    outage. The user was told to wait for Google, when the fix was theirs or
+    ours. Three answers now, because they send the reader to three different
+    places.
+    """
+    if isinstance(exc, ApiKeyProblem):
+        return f"Your Gemini key was not used. {exc}"
+
+    # Told apart by where the exception class lives, so no transport library
+    # has to be imported (httpx is google-genai's dependency, not this one's).
+    module = type(exc).__module__ or ""
+    transport = (isinstance(exc, (ConnectionError, TimeoutError))
+                 or module.startswith(("httpx", "httpcore")))
+    from_google = module.startswith("google")
+
+    if (transport or isinstance(exc, RateLimitError)
+            or classify_api_error(exc) in ("quota", "transient", "retired")):
+        return f"Gemini could not be reached ({exc})"
+    if from_google:
+        return f"Gemini refused the request ({exc})"
+    return (f"JobScout failed while preparing or checking this resume "
+            f"({type(exc).__name__}: {exc}). This is a bug in JobScout, "
+            f"not a Gemini outage.")
 
 
 class GenerationAgent:
@@ -1183,8 +1216,6 @@ Source bullets:
         quota and retired models fall through to the next entry, transient
         failures retry before falling through, and anything else raises.
         """
-        from google import genai
-
         cached = self.llm_cache.get(prompt)
         if cached is not None:
             # The model that originally wrote it, not the word "cache". A run
@@ -1193,7 +1224,7 @@ Source bullets:
             self.last_model_used = f"{self.llm_cache.last_model} (cached)"
             return cached
 
-        client = genai.Client(api_key=resolve_api_key(self.api_key))
+        client = gemini_client(self.api_key)
 
         last_error = None
         retired_models = []
@@ -1768,10 +1799,9 @@ Source bullets:
             # was never moved over, so a genuine Gemini outage told the user
             # their run had gone to "mock tailoring" — which sounds like test
             # output and gives them nothing to act on.
-            logger.error(f"   ❌ Gemini API error: {e}")
+            logger.error(f"   ❌ Gemini tailoring failed: {type(e).__name__}: {e}")
             return self._verbatim_tailor(
-                job, selected, bullet_budgets,
-                reason=f"Gemini could not be reached ({e})")
+                job, selected, bullet_budgets, reason=_degraded_reason(e))
 
     def _generate_filename(self, company: str, title: str, apply_url: str = "") -> str:
         """

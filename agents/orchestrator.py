@@ -580,7 +580,7 @@ def backend_status(gemini_key: str = "", backend: str = None,
     rendering on every keystroke should cache it.
     """
     from config import (OLLAMA_API_URL, OLLAMA_MODEL, OPENAI_MODEL,
-                        resolve_api_key, resolve_backend)
+                        gemini_key_problem, resolve_api_key, resolve_backend)
     from tools.generation import llm_backends
 
     # `resolve_api_key` is the single place that decides what "no key passed"
@@ -589,6 +589,12 @@ def backend_status(gemini_key: str = "", backend: str = None,
     # rung — this read `LLM_BACKEND` off the module, which was one of four
     # places answering the same question independently.
     key = resolve_api_key(gemini_key or None)
+    # A key that cannot be sent is not a key (R101). Detection must not choose
+    # Gemini on it, and the panel must say what is wrong with it rather than
+    # "add a key", because there is one.
+    key_problem = gemini_key_problem(key)
+    if key_problem:
+        key = ""
     openai_key = llm_backends.env_openai_key()
     ollama_up = llm_backends.ollama_is_running(OLLAMA_API_URL)
 
@@ -606,6 +612,7 @@ def backend_status(gemini_key: str = "", backend: str = None,
         "backend": chosen,
         "forced": forced,
         "description": llm_backends.describe(chosen, model),
+        "key_problem": key_problem,
         "available": {
             "gemini": bool(key),
             "openai": bool(openai_key),

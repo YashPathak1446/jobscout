@@ -219,6 +219,57 @@ def resolve_api_key(explicit: str = None) -> str:
     return os.getenv(API_KEY_ENV_VAR) or ""
 
 
+class ApiKeyProblem(ValueError):
+    """The Gemini key cannot be sent at all: it is not a key, as written."""
+
+
+def gemini_key_problem(key: str):
+    """
+    Why `key` cannot be sent as a Gemini key, or None when it can.
+
+    The key travels as the `x-goog-api-key` HTTP header, and httpx encodes
+    header values as ASCII. A key with anything else in it fails *inside the
+    client* with "'ascii' codec can't encode character '\u2014' in position
+    76", before any request leaves the machine. That is exactly what a comment
+    copied along with the key produces, either inside quotes in `.env` or
+    pasted into the key field. It was reported as "Gemini could not be
+    reached" (R101), which sent the reader to the wrong place entirely.
+
+    Checks only what makes a key unsendable (non-ASCII characters and
+    whitespace), not the key's format, which Google may change. The message
+    never repeats the key.
+    """
+    if not key:
+        return None
+    for position, char in enumerate(key):
+        if ord(char) > 127:
+            return (f"The Gemini key contains {char!r} (U+{ord(char):04X}) at "
+                    f"position {position}. A Gemini key is plain ASCII, so a note "
+                    f"or comment was probably copied with it. Paste just the key.")
+        if char.isspace():
+            return (f"The Gemini key contains a space or line break at position "
+                    f"{position}. A Gemini key has none, so something was probably "
+                    f"copied with it. Paste just the key.")
+    return None
+
+
+def gemini_client(explicit: str = None):
+    """
+    A `genai.Client` for the resolved key, refused when the key cannot be sent.
+
+    The one place a Gemini client is built. There were four
+    (`GenerationAgent._call_gemini_json`, `embedding_scorer._get_embedding`,
+    `llm_backends.complete_json`, `scripts/check_models.py`), and the last one
+    read the environment for itself rather than through `resolve_api_key`.
+    """
+    key = resolve_api_key(explicit)
+    problem = gemini_key_problem(key)
+    if problem:
+        raise ApiKeyProblem(problem)
+    from google import genai
+    return genai.Client(api_key=key)
+
+
 # --- backend resolution -----------------------------------------------------
 
 # Every rung, plus the word that means "decide for me". `auto` is a valid

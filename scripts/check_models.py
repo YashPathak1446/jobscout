@@ -1,12 +1,17 @@
-from dotenv import load_dotenv
-import os
-from google import genai
-load_dotenv()
+import sys
+from pathlib import Path
 
-if not os.getenv("GOOGLE_API_KEY"):
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from config import ApiKeyProblem, gemini_client, resolve_api_key  # noqa: E402  (loads .env)
+
+if not resolve_api_key():
     raise SystemExit("GOOGLE_API_KEY not set — check .env")
 
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+try:
+    client = gemini_client()
+except ApiKeyProblem as exc:
+    raise SystemExit(str(exc))
 
 print("=== Visible to this key ===")
 for m in client.models.list():

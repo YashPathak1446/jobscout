@@ -373,21 +373,14 @@ def _get_embedding(
         cache.set(payload, model_name, task_type, vector)
         return vector
 
-    from config import classify_api_error, resolve_api_key
+    from config import classify_api_error, gemini_client
     from tools.cache.rate_limiter import backoff_delay
-
-    try:
-        from google import genai
-    except ImportError as e:
-        logger.error(f"Embedding API error [fatal]: {e}")
-        _report(report, kind="fatal", attempts=0, recovered=False, error=str(e)[:200])
-        return []
 
     retries = 0 if _quota_spent(report) else EMBED_RETRIES
     kind = None
     for attempt in range(retries + 1):
         try:
-            client = genai.Client(api_key=resolve_api_key(api_key))
+            client = gemini_client(api_key)
             result = client.models.embed_content(
                 model=EMBEDDING_MODEL,
                 contents=payload,

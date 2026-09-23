@@ -267,8 +267,13 @@ def to_schema(text: str, agent=None) -> dict:
             logger.warning(f"Resume extraction failed — {exc}. "
                            "Reading the resume by pattern instead, which will "
                            "find less. Fixing the cause is worth it.")
-            why = (f"The model could not be reached ({type(exc).__name__}: "
-                   f"{str(exc)[:160]}), so the resume was read by pattern instead.")
+            from config import ApiKeyProblem
+            if isinstance(exc, ApiKeyProblem):
+                why = f"{exc} The resume was read by pattern instead."
+            else:
+                why = (f"The model could not be reached ({type(exc).__name__}: "
+                       f"{str(exc)[:160]}), so the resume was read by pattern "
+                       "instead.")
 
         # Judged outside the `try`: a reply that arrived and was unusable is
         # not a model that could not be reached, and must not be reported as
