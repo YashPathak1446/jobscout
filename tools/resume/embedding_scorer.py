@@ -42,6 +42,10 @@ class EmbeddingScore:
     embedding_score: float = 0.0        # the semantic half, 0-100
     keyword_score: float = 0.0          # the evidence half, 0-100
     keyword_hits: list[str] = field(default_factory=list)  # terms both name
+    # The blended cosine before `_normalise` clips it onto 0-100. Carried so a
+    # ceiling can be measured rather than inferred from ties at 100 (Q51);
+    # `scripts/calibration_probe.py` is what reads it.
+    raw_similarity: float = 0.0
 
 
 # Raw similarity is not comparable between backends, so the map onto 0-100 is
@@ -593,6 +597,7 @@ def _score_against(jd_text, jd_vec, resume_embeddings, parsed_resume,
         embedding_score=round(embedding_pct, 1),
         keyword_score=round(keyword_pct, 1),
         keyword_hits=hits,
+        raw_similarity=round(overall, 6),
     )
 
 
@@ -705,6 +710,7 @@ def score_job_mock(
         embedding_score=round(embedding_pct, 1),
         keyword_score=round(keyword_pct, 1),
         keyword_hits=hits,
+        raw_similarity=round(overall, 6),
     )
 
 

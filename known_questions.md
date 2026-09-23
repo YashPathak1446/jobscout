@@ -9558,6 +9558,62 @@ a measured gap. Both belong to A10 and should land before the pilot, because a
 deploy is exactly what creates these rows, and the first deploy is the day the
 friends arrive.
 
+## Q51. Potion's scale clips a senior profile, so its ranking may be keyword count alone
+
+**Status:** Open, found 2026-09-23. **Not refit here, by decision.** Moving
+`CALIBRATION` moves what `scoring_threshold` means (R24's shape), so a refit is
+its own R, decided from the measurement below.
+
+**The observation.** Priya's potion top 10 against 40 real jobs looks
+sensible for a six-year staff engineer: senior and staff backend and infra
+roles. But **seven of them tie at exactly 77.5.** That number is a ceiling,
+not a coincidence:
+
+- `overall = 0.7 × embedding + 0.3 × keyword`, and `keyword` moves in steps
+  of 12.5 (hits / `KEYWORD_SATURATION` = 8).
+- 77.5 = 0.7 × **100** + 0.3 × 25. The embedding half is at 100, with two
+  shared technologies.
+- `_normalise` clips the embedding half. The local window is
+  `CALIBRATION["local"] = (0.00, 0.10)`, so every raw blend at or above 0.10
+  scores 100.
+
+The window was fit in R36 on the frozen 20-JD baseline against the author's
+new-grad resume, where raw ran about **0.00–0.08**. A staff engineer against
+senior postings is exactly the pair that could sit higher.
+
+**Why it matters more than the ties.** For every job at the ceiling the
+embedding half is a constant, so **those jobs are ordered by keyword count
+alone**. That may be why the top 10 looks sane: R67 found keyword overlap
+discriminates about 8× better than the embedding. But it would mean that
+potion, which is what every friend without a key gets, is not doing semantic
+ranking for experienced users at all. A7's decision on how hard to push the
+key depends on that share. A 77.5 also appeared in R86's first Docker
+acceptance run (`6 / 77.5%`), which had fallen back to potion. That is a
+different fixture, so it is a hint, not a second measurement, but it went
+unremarked at the time.
+
+**The measurement, and why it is not here yet.** `scripts/calibration_probe.py`
+prints a profile's raw distribution against a corpus: min, quartiles and max,
+next to the 0.10 ceiling and the 0.00–0.08 fit. It also prints how many jobs
+sit at the ceiling, and how many of the top 10 do. It reads
+`EmbeddingScore.raw_similarity`, which R97's change added for this purpose.
+It could not run where this was written, because that session's egress policy
+denies both Hugging Face (so no potion model) and the job boards. Synthetic
+jobs were not substituted, because they would measure the fixture text. To
+run it:
+
+```bash
+python scripts/calibration_probe.py --input outputs/<date>/enriched_jobs.json
+```
+
+**What decides it:** the share of Priya's jobs at or above 0.10.
+- If it is most of them, the local window is miscalibrated for everyone past
+  new grad.
+- The candidate fixes are a wider fixed span, a per-profile window taken from
+  the user's own distribution (the way `score_bands` already self-calibrates
+  the display), or no clip at all above 100.
+- Each moves the threshold, so each is measured against the baseline first.
+
 ---
 
 # Out of scope

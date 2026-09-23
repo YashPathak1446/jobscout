@@ -264,6 +264,25 @@ class TestTwoVectorSpacesAreRefused(unittest.TestCase):
         self.assertEqual([e["kind"] for e in report], ["dimension"])
 
 
+class TestTheScoreCarriesItsRawSimilarity(unittest.TestCase):
+    """What `scripts/calibration_probe.py` reads to find the ceiling (Q51)."""
+
+    def test_the_raw_blend_survives_the_clip(self):
+        from tools.resume.resume_parser import ResumeParser
+
+        parser = ResumeParser(str(PRIYA_TEX), skip_embeddings=True, user_id=None)
+        vectors = {e.id: [1.0, 0.0] for e in parser.parsed_resume.experiences}
+        with mock.patch.object(scorer, "_get_embedding", return_value=[1.0, 0.0]), \
+                mock.patch.object(scorer, "active_backend",
+                                  lambda: ("local", "m", 2)):
+            score = scorer.score_job_with_embeddings(
+                "a job", vectors, parser.parsed_resume, user_id=None)
+
+        # cosine 1.0 against a local ceiling of 0.10: clipped to 100, raw kept.
+        self.assertEqual(score.embedding_score, 100.0)
+        self.assertEqual(score.raw_similarity, 1.0)
+
+
 @unittest.skipIf(genai is None, "google-genai not installed")
 class TestTheResumeCacheNamesTheModelThatWroteIt(unittest.TestCase):
     """
@@ -352,6 +371,76 @@ class TestTheRunSaysWhatWentUnscored(unittest.TestCase):
         self.assertEqual(orch._scoring_lines(), [])
         orch.state = {}
         self.assertEqual(orch._scoring_lines(), [], "a run that never analysed")
+
+
+class TestTheCalibrationProbe(unittest.TestCase):
+    """`scripts/calibration_probe.py` reads the ceiling as a number (Q51)."""
+
+    def setUp(self):
+        from scripts import calibration_probe
+        self.probe = calibration_probe
+
+    def _row(self, raw, overall=50.0):
+        return {"label": "x", "raw": raw, "embedding": 0.0, "overall": overall, "hits": 0}
+
+    def test_it_counts_what_the_clip_hides(self):
+        rows = [self._row(r, o) for r, o in
+                [(0.02, 40), (0.06, 60), (0.11, 77.5), (0.14, 77.5), (0.20, 85)]]
+        s = self.probe.summarise(rows, 0.00, 0.10)
+
+        self.assertEqual(s["at_ceiling"], 3)
+        self.assertAlmostEqual(s["share_at_ceiling"], 0.6)
+        self.assertEqual((s["min"], s["max"]), (0.02, 0.20))
+        self.assertAlmostEqual(s["median"], 0.11)
+        self.assertEqual(s["top10_distinct_scores"], 4)
+
+    def test_an_unscored_job_is_counted_not_averaged_in(self):
+        s = self.probe.summarise([self._row(0.05), self._row(None)], 0.0, 0.10)
+        self.assertEqual((s["scored"], s["unscored"]), (1, 1))
+        self.assertEqual(s["min"], 0.05)
+
+    def test_nothing_scored_reports_no_distribution(self):
+        s = self.probe.summarise([self._row(None)], 0.0, 0.10)
+        self.assertNotIn("min", s)
+        self.assertEqual(s["unscored"], 1)
+
+    def test_it_measures_the_production_window(self):
+        """Its ceiling is the scorer's, not a copy that can drift."""
+        floor, span = scorer.CALIBRATION["local"]
+        s = self.probe.summarise([self._row(0.05)], floor, span)
+        self.assertEqual(s["ceiling"], floor + span)
+
+    def test_the_script_runs_end_to_end_on_a_stubbed_embedder(self):
+        """Smoke: profile to printed distribution, in a data home of its own."""
+        import contextlib
+        import io
+        import shutil
+
+        from tools.resume import local_embeddings
+
+        with tempfile.TemporaryDirectory() as home:
+            for rel in ("user_profiles/priya_raghunathan.json",
+                        "data/master_resumes/priya_raghunathan.tex"):
+                (Path(home) / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy(ROOT / rel, Path(home) / rel)
+
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, {paths.HOME_ENV: home}), \
+                    mock.patch.object(scorer, "EMBEDDING_BACKEND", "auto"), \
+                    mock.patch.object(scorer, "_BACKEND", None), \
+                    mock.patch.object(scorer, "_EMBEDDING_CACHES", {}), \
+                    mock.patch.object(local_embeddings, "is_available", lambda: True), \
+                    mock.patch.object(local_embeddings, "dimensions", lambda m: 2), \
+                    mock.patch.object(local_embeddings, "embed",
+                                      lambda text, m: [1.0, len(text) % 7 / 10]), \
+                    contextlib.redirect_stdout(out):
+                self.probe.main(["--input",
+                                 str(ROOT / "tests/fixtures/acceptance_jobs.json")])
+
+        text = out.getvalue()
+        self.assertIn("at or above the ceiling", text)
+        self.assertIn("fit on    raw 0.00 - 0.08", text)
+        self.assertIn("7 in the input, 7 scored", text)
 
 
 if __name__ == "__main__":
