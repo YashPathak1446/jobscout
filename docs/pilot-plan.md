@@ -127,7 +127,61 @@ renders no user-submitted HTML. Re-evaluate at public signup.
 
 ## Stage A — the pilot (~11–14 focused days, plus A9b)
 
-A0–A3 are done (2026-09-22; A2 on 2026-09-21). A9b was split out of A0 and adds 1–1½ days.
+A0–A6 are done (A0–A3 2026-09-22, A2 on 2026-09-21; A4 R92–R94; A5 R95; A6
+R96). A9b was split out of A0 and adds 1–1½ days.
+
+### The remaining order (revised 2026-09-23)
+
+The author's order after the A7 work turned up what friends would actually
+hit. **Scoring does not block the invite. The output friends judge does.**
+Local ranking is keyword order until Q53 (R98, R99), which friends are told
+plainly. Keyword order is the half R67 found discriminates about 8× better, so
+it is not a random board.
+
+**Before the invite, in order:**
+
+1. **Q59: the bullet budget for sparse resumes.** Three jobs and one project
+   get 2 bullets per job and about three-quarters of a page, and one project
+   costs every job a bullet. This is what every friend's PDF looks like.
+   Also check where the projects and skills went missing (Q59 names the
+   master `.tex` check).
+2. **Q55: remote postings bypass the country whitelist.** It must carry three
+   states (known in, known out, unknown), not flip a default.
+3. **Q54's label: a job below the threshold is shown as "Not scored".** Store
+   the score with a below-the-bar state.
+4. **Q58's copy: what changes between postings without a key.** It lives in
+   A7's key step.
+   - *Proposed, needs the author's call:* the rest of A7 that is cheap and
+     not about scoring rides with it:
+     - the free-tier data-use sentence, which decision 4 relies on;
+     - `localStorage` for the key, without which every visit re-pastes it.
+
+     The test-this-key call and the step-by-step page wait. R101 already
+     checks a key's form at paste time, and Q61's numbers are now known
+     rather than guessed.
+5. **A8:** the event log and the success criterion.
+6. **A9:** Sentry.
+7. **A10:** concurrency, reaper and machine size. Q49's stale-run sweep is
+   part of it.
+8. **A11:** resume pre-flight on the friends' real resumes. After Q59, so it
+   reads the budget that will ship.
+9. **A11b: a clean clone runs green.** *Not in the author's list; kept here
+   because A12 depends on it.* `docker build --target verify` runs the suite
+   from a clone, and the 14 `yash_pathak` errors would fail it.
+10. **A12:** deploy, acceptance, invite.
+
+**After the invite:**
+- **Q53, the null set.** R99's cheap window failed its held-out check. Friends'
+  applied / rejected marks become the labels its blind comparison needs.
+- **A7b, a second free provider (Q60).** Flash is 20 requests a day (Q61),
+  which is 3–6 tailored resumes per friend per day.
+- **Q61: quota-aware embedding backoff and token pacing.** Before any Gemini
+  embedding measurement is trusted again, and before Q53 runs on Gemini.
+- *Proposed, needs the author's call:* **A9b** ("0 discovered" says why). A0
+  found no board blocking, and Q56 put scrape coverage at 15 of 20 from home,
+  so it is diagnostic rather than blocking. Pull it forward if the first
+  friend sees an empty board.
+- The rest of A7: the test-this-key call and the illustrated AI Studio page.
 
 ### A0. Fly egress probe — before anything else (½ day) — **DONE 2026-09-22**
 
@@ -756,6 +810,9 @@ user's run: bursting past requests-per-minute on a 30-job run (~40 calls), and
 the daily request cap for someone running several times a day. Google has cut
 free-tier limits more than once, so read the current AI Studio rate-limit page
 at build time rather than relying on any figure written down here.
+*Read 2026-09-23 (Q61): flash 5 RPM / 20 RPD, flash-lite 15 / 500, embedding
+100 RPM / 30K TPM / 1K RPD. Embeddings are token-bound, and the backoff does
+not yet tell a minute limit from a day limit.*
 **Action, unchanged:** find out whether the Gemini client backs off on a 429 or
 fails the run, and add backoff if it does not. With one user this never came up.
 
@@ -779,7 +836,7 @@ through the mock rung, then reuse A6's walker over the data home **plus a
 captured log handler**. A runtime walk, not a grep of the source — so it fails
 when a sixth call site starts logging the config it resolved.
 
-### A7b. More than one free provider (≈1 day, scoped in Q60, not started)
+### A7b. More than one free provider (≈1 day, scoped in Q60, not started) — **after the invite**
 
 One free Gemini key per friend is one daily cap per friend, and testing
 exhausts it. Groq and Cerebras free tiers serve OpenAI-compatible endpoints,
@@ -963,7 +1020,8 @@ locally and read the output. The pool spans CS students to 10-year engineers, so
 formats and lengths vary far beyond Jake's template. Two specific things to
 look at: whether the parser produces a sane profile, and whether the
 3-experience / 1-page defaults make sense for someone with ten years — that is
-R74's bullet-budget problem waiting to happen. Cheap, and it is the last chance
+R74's bullet-budget problem waiting to happen. *It happened: Q59, which is now
+item 1 of the remaining order, ahead of this.* Cheap, and it is the last chance
 to find a parser bug before it costs a first impression.
 
 ### A11b. A clean clone runs green (½ day) — before A12, because the image is a clone
