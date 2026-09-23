@@ -10246,6 +10246,31 @@ were never scored.**
 - Whatever the threshold becomes, a job below it should be stored with its
   score and a "below your bar" state, not as unscored.
 
+### Correction, 2026-09-23: the 29–40 band came from a broken parse
+
+The author reports the 29–40 band above came from an earlier parse of the
+real resume that was broken. With it parsed properly (after R100), the same
+Gemini pipeline scores that resume at **50–56%**. The two sets are not
+comparable.
+
+- **Withdrawn as threshold evidence:** the 29–40 band, the "19 of 19 below
+  the bar" count, and the 39.9 / 40.1 twin. They measured a resume the
+  import had mangled.
+- **Still standing:**
+  - The board defect below is a fact about the code, not about that run:
+    jobs under the threshold are stored with no score and shown as **"Not
+    scored"**.
+  - The Gemini window `(0.30, 0.60)` is still unmeasured (R98).
+  - A hard cut on a narrow band is still a coin flip for jobs near it. It
+    now needs its own measurement on a correctly parsed resume before anyone
+    draws conclusions.
+
+**One detail to reconcile.** The author describes the earlier broken parse as
+three experiences and one project, and also gives senior_real's proper shape
+as three and one. If both are right, the broken parse had the right *number*
+of entries and lost what was in them, which R100's reply-level failure would
+explain. Worth confirming before Q59 uses either shape.
+
 ## Q55. A remote posting passes a country whitelist without its country ever being read
 
 **Status:** Open, found 2026-09-23 on the real six-year resume. A US-only
