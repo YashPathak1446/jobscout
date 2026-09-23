@@ -15,9 +15,12 @@ assertion is written against the field *set* rather than against `full_jd`,
 because the way this regresses is somebody adding the next big column.
 """
 
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
@@ -36,10 +39,49 @@ ALLOWED_LIST_FIELDS = {
     "score", "status", "first_seen", "last_seen", "scored_at",
     "resume_tex", "resume_pdf", "run_date", "selection",
     "gate_reason", "gate_checked", "gate_verdict", "has_jd",
+    # R106: the threshold the score was judged against. The React badge needs
+    # it to say "below your bar of 40" rather than "Not scored".
+    "bar",
 }
 
 # Fields that exist on the row and are deliberately held back from lists.
 WITHHELD_FROM_LISTS = {"full_jd"}
+
+
+def _fixture_board(home: Path) -> None:
+    """
+    A board of three, in a data home of its own.
+
+    This class used to read the checkout's real board and skip when it was
+    empty: on a clean clone, in CI, and in the container image. So it never
+    ran anywhere but the author's machine, and R106's new `bar` column
+    reached the wire unreviewed. On a machine with jobs, that is exactly the
+    failure this module exists to catch, and it would have landed there
+    first. Now it builds what it reads:
+
+    * a job that met its bar, with a posting text;
+    * a job scored under its bar (R106), with the bar it missed;
+    * a legacy row scored before bars were stored, with no bar at all.
+    """
+    from tools.jobs import job_store
+    from tools.search.job_listing import JobListing
+
+    def listing(url, jd):
+        return JobListing(id=url, title="Engineer", company="ACME", location="Remote",
+                          description="", apply_url=url, salary_min=None,
+                          salary_max=None, created="", source="ats_greenhouse",
+                          full_jd=jd)
+
+    store = job_store.JobStore(job_store.db_path(None))
+    try:
+        store.record([listing("https://x.test/pass", "A posting. " * 200),
+                      listing("https://x.test/under", "Another posting."),
+                      listing("https://x.test/legacy", "")])
+        store.set_score("https://x.test/pass", 71.0, bar=40)
+        store.set_score("https://x.test/under", 39.9, bar=40)
+        store.set_score("https://x.test/legacy", 55.0)
+    finally:
+        store.close()
 
 
 @unittest.skipIf(TestClient is None, "fastapi not installed")
@@ -47,11 +89,33 @@ class TestTheBoardPayload(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        from tools import paths
+
+        cls._home = tempfile.TemporaryDirectory()
+        cls._env = mock.patch.dict(os.environ, {paths.HOME_ENV: cls._home.name})
+        cls._env.start()
+        _fixture_board(Path(cls._home.name))
+
         from api.main import app
         cls.client = TestClient(app)
         cls.rows = cls.client.get("/api/board?limit=50").json()["jobs"]
-        if not cls.rows:
-            raise unittest.SkipTest("needs a board with jobs in it")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._env.stop()
+        cls._home.cleanup()
+
+    def test_the_fixture_board_is_what_the_payload_serves(self):
+        """If this fails the others are measuring nothing: no skip, a failure."""
+        self.assertEqual(len(self.rows), 3)
+
+    def test_a_below_bar_row_carries_its_bar_to_the_browser(self):
+        by_url = {r["url"]: r for r in self.rows}
+        self.assertEqual((by_url["https://x.test/under"]["score"],
+                          by_url["https://x.test/under"]["bar"]), (39.9, 40.0))
+        self.assertEqual(by_url["https://x.test/pass"]["bar"], 40.0)
+        self.assertIsNone(by_url["https://x.test/legacy"]["bar"],
+                          "a row scored before bars makes no claim")
 
     def test_no_list_row_carries_the_posting_text(self):
         leaked = sorted({field for row in self.rows

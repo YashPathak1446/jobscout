@@ -9689,6 +9689,24 @@ generation. Only jobs that passed get resumes.
 - **No frontend test runner exists** (`web/package.json` has no
   vitest/jest/jsdom). The React badge is checked by a source test.
   Adding a runner is a dependency decision for the author.
+- **The "1424 OK" above was wrong for the author's machine.** R106 put `bar`
+  on every board row, and `test_api_payload`'s allow-list of fields that may
+  reach the browser did not name it. So `test_no_field_reaches_the_browser_
+  unreviewed` would have failed on any machine with a stored board: the
+  author's. It passed here only because it skipped here. The class skipped on
+  an empty board, so the one test written to catch a new column on the wire
+  could only run where nobody but the author runs the suite.
+  - It now builds its own board in a temporary `JOBSCOUT_HOME`: a job that met
+    its bar, one scored 39.9 under a bar of 40, and a row scored before bars
+    existed. It asserts the below-bar row's `(score, bar)` reaches the
+    payload as `(39.9, 40.0)` and the legacy row's bar is `None`. `bar` is
+    allow-listed with its reason.
+  - Mutation check: dropping `bar` from the allow-list fails the test with
+    "new field(s) on the wire: ['bar']". The checkout's `data/jobs.db` is
+    not touched.
+  - **On a clean clone, "Ran" now equals the collected count: 1426 and
+    1426**, with 0 skips raised from `setUpClass`. The 64 remaining skips are
+    individual tests, each counted as run.
 
 ## Q31. The caches are cwd-relative and miss the volume
 
