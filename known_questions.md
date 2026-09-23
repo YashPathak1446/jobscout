@@ -10596,6 +10596,96 @@ providers do not change that.
 key, UI and repair loop, plus a measurement pass per provider. Cross-provider
 fallback (item 3) is the part that could double it, and can ship second.
 
+## Q61. The free tier, measured: flash is 20 requests a day, and embeddings are bound by tokens, not requests
+
+**Status:** Open, recorded 2026-09-23 from the author's AI Studio rate-limit
+page (used / limit, on his key, that day). **These replace every guess in the
+pilot plan**, which said to read the page at build time and never did.
+
+    model                    RPM        TPM              RPD
+    Gemini 3.5 Flash         2 / 5      6.55K / 250K     8 / 20
+    Gemini Embedding 1      31 / 100   29.91K / 30K     21 / 1K
+    Gemini 3.1 Flash Lite    2 / 15     6.55K / 250K     8 / 500
+    Gemini 3.5 Flash Lite    1 / 15     1.89K / 250K     3 / 500
+
+Google has cut free-tier limits before. Re-read the page before relying on
+any row, and date whatever gets written down.
+
+### 1. Flash is 20 requests a day, and it is what every measurement used
+
+- **Per run:** each generated resume is one flash call, or two when the
+  repair fires. Import is one more.
+  - A UI run (`start_run(max_resumes=3)`) spends about 3–7.
+  - A CLI run at the profile default (`max_jobs_to_generate = 10`) spends
+    about 10–21.
+  - **One CLI run, or three UI runs, can spend a friend's whole day of
+    flash.**
+- **After that, generation drops to `gemini-3.1-flash-lite`**, the next
+  entry in `GENERATION_MODELS`, at 500 a day.
+  - It is recorded: `rung` per resume and `backend.used` in `state.json`,
+    plus the console's `Rungs used:`. **Neither UI shows it**, so from a
+    friend's side the drop is silent.
+  - Import rides the same chain. A flash-lite reply is what R100's importer
+    rejected, and this is the ordinary way a friend ends up on flash-lite.
+- **Measurement consequence.** Every quality number in this log was taken on
+  flash. A friend's resume written after the 20th call is not a flash
+  resume. Read quality feedback from the pilot against `backend.used`, not
+  against "Gemini".
+- **For A7b:** 20 flash calls a day per friend is 3–6 tailored resumes. That
+  is not much of a product, and it is the strongest argument for a second
+  provider.
+
+**A correction to one inference, recorded so it is not carried forward.**
+The flash 503s (Q57) are probably *not* this cap. Gemini reports an exhausted
+quota as **429 RESOURCE_EXHAUSTED**. **503 UNAVAILABLE** means capacity or
+overload. Q57's two hypotheses stand (overload, or a model on its way out);
+"daily quota" would have shown as 429s. If a log from that run kept the
+status line, it settles this.
+
+### 2. Embeddings are bound by tokens per minute, not requests
+
+29.91K of 30K TPM used, against 31 of 100 RPM. A job description is embedded
+from up to 8,000 characters (about 2K tokens), so **15–30 descriptions spend
+a minute's token budget**. A 40-job scoring burst is 2–3 minutes of it, sent
+in seconds. The first comparison's 34 failures (R97) fit this better than a
+request limit. Not proven: that run predates R97's classification. A re-run
+would say `quota`, and it cannot tell TPM from RPM either (below).
+
+This only bites where Gemini embeddings run: the CLI and local runs with a
+key in the environment. Hosted friends score on potion (Q52) and never touch
+this limit.
+
+### 3. The backoff treats a minute limit as it treats a day limit, and the breaker makes that worse
+
+Checked in the code. `classify_api_error` sees `429` / `RESOURCE_EXHAUSTED`
+and returns `quota` for all three limits alike (RPM, TPM, RPD).
+`_get_embedding` retries them identically: 2, 4, 8, 16 s with jitter, never
+shorter than a "retry in Ns" the error states (R97).
+
+- **Without a retry hint,** the whole schedule waits about 15–45 s, which can
+  be shorter than the one-minute token window. The call gives up while the
+  window is still full.
+- **R97's breaker then misreads it.** After two calls exhaust their retries
+  on `quota`, the run stops retrying, on the premise that exhausted-after-
+  retries means a spent daily cap. **A per-minute token limit hit by a burst
+  is exactly what trips it,** so every remaining job fails fast, when all of
+  them would succeed a minute later. The breaker was written for RPD (20 a
+  day) and fires on TPM (30K a minute).
+
+**What would fix it (not built):**
+- Read *which* quota the 429 names. Gemini's error detail identifies the
+  quota (per-minute or per-day). The exact field has to be read from a real
+  response before anything relies on it.
+- A minute limit waits out the window and never counts toward the breaker.
+  A day limit trips the breaker at once, with no retries.
+- Better still, pace embeddings by tokens (a sliding one-minute window under
+  30K) so a burst never reaches the wall. Scoring 40 jobs then takes
+  2–3 minutes, openly, instead of failing half of them.
+
+**Priority:** after the invite, since friends score on potion. It must come
+before any Gemini-embedding measurement is trusted again, and before Q53's
+null set embeds 60 more descriptions per resume on Gemini.
+
 ---
 
 # Out of scope
