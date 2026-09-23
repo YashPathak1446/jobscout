@@ -10111,6 +10111,37 @@ flip a default:
   United States, and every rule that trims a prefix must be tested against
   the strings the boards actually send.
 
+## Q56. JD scrape coverage from a home connection: 15 of 20, with every Vanta and Nextdoor posting empty
+
+**Status:** Open, recorded 2026-09-23 as the first **scrape** coverage number,
+for A12's egress re-check. The A0 probe measured the listing APIs only, and
+its caveat 2 says JD scraping was never probed.
+
+**The number.** On the real six-year resume, 20 jobs, residential origin:
+- **15 of 20 scraped**; **5 of 20 (25%) returned 0 characters**.
+- **Vanta, on Ashby: 3 of 3 empty.** A whole board, not a flaky page, so
+  likely the Ashby page path for that company.
+- **Nextdoor, generic scraper: 2 of 2 empty.**
+- The five were scored on the ~300-character snippet discovery found (R61:
+  kept and scored, skipped for generation), and the **undecidable badge fired
+  correctly** on all five.
+
+**What the number is for.** It is the home-origin control for the scrape
+path, the way A0's 98-slug table was for listings.
+- A12's re-check from Fly should report the same breakdown (per board, per
+  scraper, empty vs. short vs. full).
+- A drop from 75% there means the datacenter origin is being treated
+  differently.
+- The same 5 empty there means the gap is the scrapers', not the network's.
+
+**Two observations, not conclusions:**
+- The snippet-scored jobs landed at **29**, inside the 29–40 band the fully
+  read jobs occupied (Q54). At this threshold the score cannot tell a job
+  description from a 300-character snippet. The undecidable badge is what
+  keeps that honest, not the number.
+- One run of 20 is a small sample. The per-company pattern (3/3, 2/2) is
+  stronger evidence than the 75%.
+
 ---
 
 # Out of scope
