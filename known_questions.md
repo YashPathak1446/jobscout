@@ -10068,6 +10068,49 @@ were never scored.**
 - Whatever the threshold becomes, a job below it should be stored with its
   score and a "below your bar" state, not as unscored.
 
+## Q55. A remote posting passes a country whitelist without its country ever being read
+
+**Status:** Open, found 2026-09-23 on the real six-year resume. A US-only
+profile was shown **"Argentina Remote"** and **"Remote - Ireland"**. R55's
+shape, one branch over. Not fixed here.
+
+**The mechanism: two defects, stacked** (checked in the code, not inferred
+from the log):
+1. **`location_matcher.parse_location` throws the country away from any
+   remote string.** Measured:
+   - `"Argentina Remote"`, `"Remote - Ireland"`, `"Remote - US"` and
+     `"Remote"` all parse to `is_remote=True, country=None,
+     confidence="medium"`.
+   - After parsing, Argentina and the United States are the same value.
+2. **`job_filter.evaluate` accepts a remote job before the country
+   whitelist.** The remote branch (`if loc_result.is_remote: ... return
+   decision`) returns with `location_score = 3` when `remote_ok`. The
+   `exclude_countries` and `countries` checks below it are never reached.
+
+So "remote, country unknown" reads as "remote and acceptable". R55 was a
+country that never parsed and read as a mismatch; this is a country that
+never parsed and reads as a match.
+
+**One detail does not reproduce.** The log showed both as `(unparsed)`. On
+current code these strings parse to a truthy `LocationResult` that prints as
+`Remote`, and the discovery log line prints only for the first three jobs.
+The `(unparsed)` text came from another line, or another version, and should
+be pasted before anyone reasons from it.
+
+**Count the paths:** `is_remote` is read for gating in exactly one place
+(`job_filter.py`). `posting_facts` reads it for display only. So there is one
+gate to fix, but the parse is shared by every reader.
+
+**The fix has to carry three states** (known in, known out, unknown), not
+flip a default:
+- A remote posting that names a country is judged on that country.
+- One that names none (`"Remote"`) is **unknown**, not accepted. It is kept,
+  badged and counted, the way A4 handles undecidable jobs. It is never
+  silently eligible.
+- The parse change is the risky half: `"Remote - US"` must come back as the
+  United States, and every rule that trims a prefix must be tested against
+  the strings the boards actually send.
+
 ---
 
 # Out of scope
