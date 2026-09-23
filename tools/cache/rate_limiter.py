@@ -9,6 +9,7 @@ Handles API rate limits gracefully with:
 
 import time
 import random
+import re
 import logging
 from typing import Callable, Any, Optional
 
@@ -18,6 +19,28 @@ logger = logging.getLogger(__name__)
 class RateLimitError(Exception):
     """Raised when rate limit exceeded and max retries reached."""
     pass
+
+
+def backoff_delay(attempt: int, error_msg: str, base_delay: float = 1.0,
+                  max_delay: float = 60.0, jitter: bool = True) -> float:
+    """
+    How long to wait before retry number `attempt + 1`.
+
+    Exponential from `base_delay`, capped at `max_delay`, jittered so parallel
+    callers do not retry in lockstep — and never shorter than a "retry in Ns"
+    the error itself asks for. Split out of `retry_with_backoff` so a caller
+    that owns its own loop (the embedding scorer, which must record why each
+    attempt failed) waits exactly as generation does.
+    """
+    delay = min(base_delay * (2 ** attempt), max_delay)
+    if jitter:
+        delay = delay * (0.5 + random.random())
+
+    # Example: "Please retry in 26.868412568s"
+    match = re.search(r'retry in (\d+\.?\d*)', error_msg.lower())
+    if match:
+        delay = max(delay, float(match.group(1)))
+    return delay
 
 
 def retry_with_backoff(
@@ -67,26 +90,8 @@ def retry_with_backoff(
                 logger.error(f"❌ Max retries ({max_retries}) exceeded")
                 raise RateLimitError(f"Rate limit exceeded after {max_retries} retries") from e
             
-            # Calculate delay
-            delay = min(base_delay * (2 ** attempt), max_delay)
-            
-            # Add jitter
-            if jitter:
-                delay = delay * (0.5 + random.random())
-            
-            # Check for Retry-After header in error message
-            if 'retry in' in error_msg.lower():
-                try:
-                    # Extract wait time from error message
-                    # Example: "Please retry in 26.868412568s"
-                    import re
-                    match = re.search(r'retry in (\d+\.?\d*)', error_msg.lower())
-                    if match:
-                        suggested_delay = float(match.group(1))
-                        delay = max(delay, suggested_delay)
-                except:
-                    pass
-            
+            delay = backoff_delay(attempt, error_msg, base_delay, max_delay, jitter)
+
             logger.warning(
                 f"⏳ Rate limit hit (attempt {attempt + 1}/{max_retries + 1}). "
                 f"Waiting {delay:.1f}s before retry..."

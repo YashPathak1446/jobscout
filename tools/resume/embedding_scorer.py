@@ -12,6 +12,7 @@ import os
 import logging
 import math
 import threading
+import time
 from dataclasses import dataclass, field
 
 from config import EMBEDDING_BACKEND, EMBEDDING_MODEL, LOCAL_EMBEDDING_MODEL
@@ -41,17 +42,22 @@ class EmbeddingScore:
     embedding_score: float = 0.0        # the semantic half, 0-100
     keyword_score: float = 0.0          # the evidence half, 0-100
     keyword_hits: list[str] = field(default_factory=list)  # terms both name
+    # The blended cosine before `_normalise` clips it onto 0-100. Carried so a
+    # ceiling can be measured rather than inferred from ties at 100 (Q51);
+    # `scripts/calibration_probe.py` is what reads it.
+    raw_similarity: float = 0.0
 
 
 # Raw similarity is not comparable between backends, so the map onto 0-100 is
-# per backend. Gemini's cosines for this kind of text sit around 0.3-0.9;
-# model2vec's static embeddings run an order of magnitude lower, because a
-# short component is being compared against a long job description and static
-# vectors dilute across length.
+# per backend.
 #
-# Both figures are measured, not assumed. The Gemini pair is the original
-# calibration; the local pair comes from scoring the frozen 20-JD baseline,
-# where raw overall ran from about 0.00 to 0.08. Getting this wrong is not
+# **The local pair is void (R98).** It was recorded as "raw overall ran from
+# about 0.00 to 0.08" on the frozen 20-JD baseline. Clean potion has never
+# produced a value below 0.12 on any measured resume, so every job clips to 100
+# and the local job score is keyword order. The figure was almost certainly
+# Gemini resume vectors against potion JDs, served by the cache R97 fixed. It
+# is kept only until the anchored normalisation replaces it. The Gemini pair
+# is "the original calibration" and has no recorded measurement either. Getting this wrong is not
 # subtle in the way R24's threshold was — the wrong floor sends every job to
 # 0.0 and the pipeline finds nothing at all, which is exactly what the first
 # version of the local backend did.
@@ -108,6 +114,19 @@ def keyword_overlap(jd_text: str, parsed_resume) -> list:
     return sorted(t for t in resume_terms(parsed_resume) if term_matches(t, jd_lower))
 
 
+def scoring_window() -> tuple:
+    """
+    `(floor, ceiling)` of the raw window the active backend is mapped through.
+
+    A raw similarity at or past either edge is clipped to 0 or 100, and the
+    embedding half then cannot tell those jobs apart. The analysis agent
+    counts them per run and the run summary says so (R99's guard), because a
+    window nobody could see going stale is how R36's lasted a month.
+    """
+    floor, span = CALIBRATION.get(active_backend()[0], CALIBRATION["gemini"])
+    return floor, floor + span
+
+
 def _normalise(overall: float) -> float:
     """Map a raw blended similarity onto 0-100 for the active backend."""
     backend = active_backend()[0]
@@ -115,8 +134,23 @@ def _normalise(overall: float) -> float:
     return round(max(0.0, min(100.0, (overall - floor) / span * 100)), 1)
 
 
+class DimensionMismatch(ValueError):
+    """Two vectors of different widths were compared."""
+
+
 def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
-    """Compute cosine similarity between two vectors."""
+    """
+    Compute cosine similarity between two vectors.
+
+    Refuses vectors of different lengths. It used to `zip` them, which
+    truncates to the shorter one and returns a plausible number: a 256-wide
+    potion vector against a 768-wide Gemini one scored as if nothing were
+    wrong. That is exactly what a resume cache labelled with the wrong model
+    served (R97), and a silent truncation is how it went unseen.
+    """
+    if len(vec_a) != len(vec_b):
+        raise DimensionMismatch(
+            f"cannot compare a {len(vec_a)}-wide vector with a {len(vec_b)}-wide one")
     dot = sum(a * b for a, b in zip(vec_a, vec_b))
     norm_a = math.sqrt(sum(a * a for a in vec_a))
     norm_b = math.sqrt(sum(b * b for b in vec_b))
@@ -223,12 +257,86 @@ def _embedding_cache(user_id):
     return cache
 
 
+# How an embedding call that did not simply succeed is reported (R97).
+#
+# It was `except Exception: logger.error(...); return []` — no retry, no
+# classification. A 40-job run on a free key lost 34 jobs to it, and the only
+# record was 34 identical-looking log lines, so nobody could say whether it
+# was a rate limit, a retired model or a bad key. Each call that failed or
+# needed a retry now appends one entry to a caller-owned list:
+#
+#     {"kind": "quota" | "transient" | "retired" | "fatal" | "dimension",
+#      "attempts": int, "recovered": bool, "error": str (truncated)}
+#
+# A list the caller passes in, not module state: one process serves several
+# users' runs, and a module-level tally would be everyone's at once.
+EMBED_RETRIES = 4
+EMBED_BASE_DELAY = 2.0
+EMBED_MAX_DELAY = 60.0
+_RETRYABLE = ("quota", "transient")
+
+# After this many calls in one report have run out of retries on quota, the
+# rest of that run stops retrying. Backoff rescues a per-minute limit; a spent
+# *daily* cap will not clear within a run, and without this every remaining
+# job would wait out the full backoff to fail anyway (~20-40 minutes over 40
+# jobs). Scoped to the report, so it is per run and never crosses users.
+QUOTA_BREAKER = 2
+
+# Indirected so tests can retry without waiting.
+_sleep = time.sleep
+
+
+def _report(report, **entry) -> None:
+    if report is not None:
+        report.append(entry)
+
+
+def summarise_report(report) -> dict:
+    """
+    `{"failed": {kind: count}, "recovered": count}` for a report list.
+
+    Failed calls are counted by kind, because the kind is the whole point:
+    `quota` means slow down or wait, `retired` means config.py is stale,
+    `fatal` means the key, and `dimension` means two vector spaces met.
+    """
+    failed = {}
+    recovered = 0
+    for entry in report or []:
+        if entry.get("recovered"):
+            recovered += 1
+        else:
+            kind = entry.get("kind", "unknown")
+            failed[kind] = failed.get(kind, 0) + 1
+    return {"failed": dict(sorted(failed.items())), "recovered": recovered}
+
+
+def describe_report(summary: dict) -> str:
+    """One line for a person: "34 failed (30 quota, 4 fatal); 5 recovered"."""
+    failed = summary.get("failed") or {}
+    parts = []
+    total = sum(failed.values())
+    if total:
+        kinds = ", ".join(f"{n} {kind}" for kind, n in failed.items())
+        parts.append(f"{total} failed ({kinds})")
+    if summary.get("recovered"):
+        parts.append(f"{summary['recovered']} recovered after retrying")
+    return "; ".join(parts) or "no embedding failures"
+
+
+def _quota_spent(report) -> bool:
+    """True once `report` holds QUOTA_BREAKER quota failures that retries did not fix."""
+    spent = sum(1 for e in report or []
+                if e.get("kind") == "quota" and not e.get("recovered"))
+    return spent >= QUOTA_BREAKER
+
+
 def _get_embedding(
     text: str,
     task_type: str = "RETRIEVAL_DOCUMENT",
     api_key: str = None,
     *,
     user_id,
+    report=None,
 ) -> list[float]:
     """
     Get embedding vector from Gemini API, using config.EMBEDDING_MODEL.
@@ -239,6 +347,13 @@ def _get_embedding(
                    RETRIEVAL_QUERY for search queries.
         api_key: Explicit key; falls back to the environment when None.
         user_id: Whose embedding cache to read and write (`None` = unscoped).
+        report: Optional list that receives one entry per call that failed
+                or needed retrying (see `summarise_report`).
+
+    Quota and transient errors are retried with backoff — the same delays
+    generation uses — and anything else fails at once. A failure still
+    returns `[]`, which every caller already treats as "not scored"; what
+    changed is that the reason is kept.
     """
     # The cache key is the string actually sent to the API, truncation
     # included. Keying on the untruncated text would give two inputs that
@@ -258,33 +373,48 @@ def _get_embedding(
         cache.set(payload, model_name, task_type, vector)
         return vector
 
-    try:
-        from google import genai
+    from config import classify_api_error, gemini_client
+    from tools.cache.rate_limiter import backoff_delay
 
-        from config import resolve_api_key
+    retries = 0 if _quota_spent(report) else EMBED_RETRIES
+    kind = None
+    for attempt in range(retries + 1):
+        try:
+            client = gemini_client(api_key)
+            result = client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=payload,
+                config={
+                    "task_type": task_type,
+                    "output_dimensionality": EMBEDDING_DIMENSIONS,
+                },
+            )
+            vector = result.embeddings[0].values
+        except Exception as e:
+            kind = classify_api_error(e)
+            if kind in _RETRYABLE and attempt < retries:
+                delay = backoff_delay(attempt, str(e), EMBED_BASE_DELAY, EMBED_MAX_DELAY)
+                logger.warning(
+                    f"Embedding API {kind} (attempt {attempt + 1}/{retries + 1}); "
+                    f"waiting {delay:.1f}s")
+                _sleep(delay)
+                continue
+            logger.error(
+                f"Embedding API error [{kind}] after {attempt + 1} attempt(s): {e}")
+            _report(report, kind=kind, attempts=attempt + 1, recovered=False,
+                    error=str(e)[:200])
+            return []
 
-        client = genai.Client(api_key=resolve_api_key(api_key))
-
-        result = client.models.embed_content(
-            model=EMBEDDING_MODEL,
-            contents=payload,
-            config={
-                "task_type": task_type,
-                "output_dimensionality": EMBEDDING_DIMENSIONS,
-            },
-        )
-
-        vector = result.embeddings[0].values
+        if attempt:
+            _report(report, kind=kind, attempts=attempt + 1, recovered=True)
         cache.set(payload, model_name, task_type, vector)
         return vector
 
-    except Exception as e:
-        logger.error(f"Embedding API error: {e}")
-        return []
+    return []  # unreachable: the last attempt either returns or reports
 
 
 def embed_resume_components(parsed_resume, api_key: str = None, *,
-                            user_id) -> dict[str, list[float]]:
+                            user_id, report=None) -> dict[str, list[float]]:
     """
     Embed all resume components (experiences + projects).
     Returns dict mapping component_id → embedding vector.
@@ -295,7 +425,8 @@ def embed_resume_components(parsed_resume, api_key: str = None, *,
     # Embed each experience
     for exp in parsed_resume.experiences:
         text = f"{exp.title} {exp.company} {' '.join(exp.bullets)}"
-        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT", api_key=api_key, user_id=user_id)
+        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT", api_key=api_key, user_id=user_id,
+                             report=report)
         if vec:
             embeddings[exp.id] = vec
             logger.debug(f"Embedded experience: {exp.id}")
@@ -303,7 +434,8 @@ def embed_resume_components(parsed_resume, api_key: str = None, *,
     # Embed each project
     for proj in parsed_resume.projects:
         text = f"{proj.name} {proj.tech} {' '.join(proj.bullets)}"
-        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT", api_key=api_key, user_id=user_id)
+        vec = _get_embedding(text, "RETRIEVAL_DOCUMENT", api_key=api_key, user_id=user_id,
+                             report=report)
         if vec:
             embeddings[proj.id] = vec
             logger.debug(f"Embedded project: {proj.id}")
@@ -313,7 +445,7 @@ def embed_resume_components(parsed_resume, api_key: str = None, *,
     if parsed_resume.skills and parsed_resume.skills.categories:
         skills_text = " ".join(parsed_resume.skills.categories.values())
         vec = _get_embedding(skills_text, "RETRIEVAL_DOCUMENT", api_key=api_key,
-                             user_id=user_id)
+                             user_id=user_id, report=report)
         if vec:
             embeddings["__skills__"] = vec
 
@@ -374,6 +506,7 @@ def score_job_with_embeddings(
     api_key: str = None,
     *,
     user_id,
+    report=None,
 ) -> EmbeddingScore | None:
     """
     Score a single JD against pre-computed resume embeddings.
@@ -389,9 +522,26 @@ def score_job_with_embeddings(
         EmbeddingScore with similarity scores, or None on failure.
     """
     # Embed the JD
-    jd_vec = _get_embedding(jd_text, "RETRIEVAL_QUERY", api_key=api_key, user_id=user_id)
+    jd_vec = _get_embedding(jd_text, "RETRIEVAL_QUERY", api_key=api_key, user_id=user_id,
+                            report=report)
     if not jd_vec:
         return None
+
+    try:
+        return _score_against(jd_text, jd_vec, resume_embeddings, parsed_resume,
+                              max_experiences, max_projects)
+    except DimensionMismatch as e:
+        # Two vector spaces met: the job was embedded by one model and the
+        # resume by another. Not scored, and said so, rather than scored on
+        # the overlap of two unrelated coordinate systems.
+        logger.error(f"Embedding dimension mismatch: {e}")
+        _report(report, kind="dimension", attempts=1, recovered=False, error=str(e))
+        return None
+
+
+def _score_against(jd_text, jd_vec, resume_embeddings, parsed_resume,
+                   max_experiences, max_projects) -> EmbeddingScore:
+    """The scoring half of `score_job_with_embeddings`, once the JD is embedded."""
 
     # Score each component
     exp_scores = {}
@@ -454,6 +604,7 @@ def score_job_with_embeddings(
         embedding_score=round(embedding_pct, 1),
         keyword_score=round(keyword_pct, 1),
         keyword_hits=hits,
+        raw_similarity=round(overall, 6),
     )
 
 
@@ -566,6 +717,7 @@ def score_job_mock(
         embedding_score=round(embedding_pct, 1),
         keyword_score=round(keyword_pct, 1),
         keyword_hits=hits,
+        raw_similarity=round(overall, 6),
     )
 
 

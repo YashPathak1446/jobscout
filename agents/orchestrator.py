@@ -580,7 +580,7 @@ def backend_status(gemini_key: str = "", backend: str = None,
     rendering on every keystroke should cache it.
     """
     from config import (OLLAMA_API_URL, OLLAMA_MODEL, OPENAI_MODEL,
-                        resolve_api_key, resolve_backend)
+                        gemini_key_problem, resolve_api_key, resolve_backend)
     from tools.generation import llm_backends
 
     # `resolve_api_key` is the single place that decides what "no key passed"
@@ -589,6 +589,12 @@ def backend_status(gemini_key: str = "", backend: str = None,
     # rung — this read `LLM_BACKEND` off the module, which was one of four
     # places answering the same question independently.
     key = resolve_api_key(gemini_key or None)
+    # A key that cannot be sent is not a key (R101). Detection must not choose
+    # Gemini on it, and the panel must say what is wrong with it rather than
+    # "add a key", because there is one.
+    key_problem = gemini_key_problem(key)
+    if key_problem:
+        key = ""
     openai_key = llm_backends.env_openai_key()
     ollama_up = llm_backends.ollama_is_running(OLLAMA_API_URL)
 
@@ -606,6 +612,7 @@ def backend_status(gemini_key: str = "", backend: str = None,
         "backend": chosen,
         "forced": forced,
         "description": llm_backends.describe(chosen, model),
+        "key_problem": key_problem,
         "available": {
             "gemini": bool(key),
             "openai": bool(openai_key),
@@ -886,6 +893,8 @@ class JobScoutOrchestrator:
             'discovered_jobs': [],
             'enriched_jobs': [],
             'analysis_results': [],
+            # Jobs analysis could not score and why (R97); None until it runs.
+            'scoring': None,
             'generation_results': [],
         }
         
@@ -1275,6 +1284,7 @@ class JobScoutOrchestrator:
         )
         
         self.state['analysis_results'] = results
+        self.state['scoring'] = getattr(agent, "scoring", None)
         logger.info(f"✅ Analyzed {len(results)} jobs passing threshold")
 
         self._store_scores(results)
@@ -1630,6 +1640,8 @@ class JobScoutOrchestrator:
             f.write(f"**Jobs analyzed:** {len(self.state['enriched_jobs'])}\n")
             f.write(f"**Jobs passing threshold:** {len(results)}\n")
             f.write(f"**Threshold:** {self.profile.agent_preferences.scoring_threshold}%\n\n")
+            for line in self._scoring_lines():
+                f.write(f"> ⚠️  {line}\n")
             
             if results:
                 f.write("### Top Matches:\n\n")
@@ -1701,6 +1713,40 @@ class JobScoutOrchestrator:
         
         logger.info(f"✅ Summary saved: {summary_path}")
     
+    def _scoring_lines(self) -> list:
+        """
+        What the summary and the console say about jobs that went unscored.
+
+        Empty when every job was scored on real embeddings. Otherwise it says
+        how many were dropped and the failure kinds, because "34 not scored"
+        with no reason is what made the Gemini comparison unreadable (R97).
+        """
+        scoring = self.state.get('scoring') or {}
+        lines = []
+        if scoring.get('mock'):
+            lines.append("Scores use MOCK embeddings: the resume could not be embedded.")
+        if scoring.get('unscored'):
+            lines.append(f"Jobs not scored: {scoring['unscored']} "
+                         f"({scoring.get('description', 'reason unknown')})")
+        elif (scoring.get('embeddings') or {}).get('recovered'):
+            lines.append(f"Embeddings: {scoring.get('description')}")
+
+        # The window guard (R99). Any clipped job is reported, with counts, so
+        # 1 of 40 reads differently from 40 of 40. It is the event that says
+        # the fitted window has gone stale for a new kind of resume (Q53).
+        window = scoring.get('window') or {}
+        clipped = window.get('at_floor', 0) + window.get('at_ceiling', 0)
+        if clipped:
+            lines.append(
+                f"Scoring window hit: {window['at_ceiling']} of {window['scored']} "
+                f"jobs at the ceiling and {window['at_floor']} at the floor "
+                f"({window['backend']}, {window['model']}, raw "
+                f"{window['floor']:.4f}-{window['ceiling']:.4f}). The embedding "
+                f"half cannot rank those jobs, so keyword count orders them. "
+                f"If this resume differs from the ones the window was fit on, "
+                f"the window needs refitting (Q53).")
+        return lines
+
     def _print_final_report(self):
         """Print final report to console."""
         _console_print("\n\n")
@@ -1715,6 +1761,8 @@ class JobScoutOrchestrator:
         _console_print(f"  Jobs discovered: {len(self.state['discovered_jobs'])}")
         _console_print(f"  Jobs enriched: {len(self.state['enriched_jobs'])}")
         _console_print(f"  Jobs analyzed: {len(self.state['analysis_results'])}")
+        for line in self._scoring_lines():
+            _console_print(f"  {line}")
         
         gen = self.state['generation_results']
         valid = sum(1 for r in gen if r.get('status') == 'valid')

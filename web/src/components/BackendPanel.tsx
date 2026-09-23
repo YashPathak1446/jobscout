@@ -69,6 +69,15 @@ export function BackendPanel({
         </p>
       </div>
 
+      {/* There is a key and it cannot be sent (R101). Said before the rung,
+          because the rung below is what runs *instead* of the key. */}
+      {backend?.key_problem && (
+        <Alert variant="destructive">
+          <AlertTitle>This key cannot be used as entered</AlertTitle>
+          <AlertDescription>{backend.key_problem}</AlertDescription>
+        </Alert>
+      )}
+
       {/* backend === null is "still detecting", which is not "no model". The
           two say opposite things and look identical if you render the first
           as the second. */}
@@ -86,7 +95,9 @@ export function BackendPanel({
           )}
           <AlertTitle>{HEADLINE[chosen ?? ''] ?? backend.description}</AlertTitle>
           <AlertDescription className="space-y-2">
-            {none ? (
+            {none && backend.key_problem ? (
+              <p>Fix the key above, and bullets will be rewritten by Gemini.</p>
+            ) : none ? (
               <p>
                 To get tailored bullets, add a Gemini key above, or run{' '}
                 <strong>Ollama</strong> locally with any model pulled — free,

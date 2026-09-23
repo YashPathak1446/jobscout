@@ -127,7 +127,80 @@ renders no user-submitted HTML. Re-evaluate at public signup.
 
 ## Stage A — the pilot (~11–14 focused days, plus A9b)
 
-A0–A3 are done (2026-09-22; A2 on 2026-09-21). A9b was split out of A0 and adds 1–1½ days.
+A0–A6 are done (A0–A3 2026-09-22, A2 on 2026-09-21; A4 R92–R94; A5 R95; A6
+R96). A9b was split out of A0 and adds 1–1½ days.
+
+**Scoring stays keyword-ordered for the pilot, deliberately. Do not reopen
+this before the invite.**
+- Hosted friends score on potion (Q52). Potion's window was never fit on its
+  own similarities (R98), and the cheap refit failed its pre-registered
+  held-out check on the author's own resume (R99). So the embedding half is
+  pinned, and the board orders by keyword count.
+- Keyword order is the half R67 found discriminates about 8× better than the
+  embedding, so it is not a random board.
+- The real fix, the null set (Q53), needs labels that only friends'
+  applied / rejected marks can supply. The pilot is how it gets them.
+- Friends are told plainly that ranking is keyword-based for now.
+
+### The remaining order (current 2026-09-23; a fresh session starts here)
+
+**Done:** Q59 (R102 parser, R103 import, R100's correction, R104 budget),
+verified on the author's machine: 1385 tests OK, all three baselines match,
+and a re-import reads 3 experiences / 1 project / 3 skill groups.
+
+**Before the invite, in order:**
+
+1. **Q55: remote postings bypass the country whitelist.**
+   - `location_matcher.parse_location` drops the country from any remote
+     string.
+   - `job_filter.evaluate` accepts remote before the whitelist is checked.
+   - The fix must carry three states (known in, known out, unknown), not flip
+     a default. A bare "Remote" is unknown: kept, badged and counted, never
+     silently eligible.
+2. **Q54's label: a job below the threshold is shown as "Not scored".**
+   `_store_scores` writes back only the results that pass. Store every score,
+   with a below-the-bar state, in both UIs.
+3. **Q58's copy, with the cheap rest of A7:**
+   - A plain statement, next to the key field, of what changes between
+     postings without a key (which entries, which of your own bullets, skills
+     order) and what does not (the wording).
+   - The free-tier data-use sentence, from Google's current terms, read at
+     build time.
+   - The key in `localStorage`, sent only in POST bodies, with "forget key".
+4. **A8:** the per-user event log (including `reached_key_step` / `key_saved`)
+   and the success criterion.
+5. **A9:** Sentry, with the key scrubbed.
+6. **A10:** concurrency, the stale-run reaper (Q49: a startup sweep across
+   every partition, `queued` too) and machine size.
+7. **A11:** resume pre-flight on the friends' real resumes. Read the PDFs:
+   R104's 12-bullet page is not yet confirmed to fit one page for a real
+   senior's resume.
+8. **A11b: a clean clone runs green.** It stays before A12, because
+   `docker build --target verify` runs the suite from a clone, where the 14
+   `yash_pathak` tests error.
+9. **A12:** deploy, acceptance (gated on the `none` row), invite.
+
+**After the invite:**
+- **Q53, the null set:** anchor each resume against a fixed set of unrelated
+  postings. Its triggers have fired (R99).
+- **A7b, a second free provider (Q60):**
+  - Flash is 20 requests a day per key (Q61), so a friend gets 3–6 tailored
+    resumes a day.
+  - Also fixes Q60's defect: a `GROQ_API_KEY` is sent to OpenAI's URL.
+- **Q61's backoff fix:** tell a minute limit from a day limit, stop R97's
+  breaker firing on a token-rate limit, and pace Gemini embeddings by tokens.
+  This comes before any Gemini-embedding measurement is trusted again.
+- **A9b ("0 discovered" says why):** pull it forward if the first friend sees
+  an empty board.
+- **The rest of A7:** the test-this-key call and the illustrated AI Studio
+  page.
+
+**Conventions a fresh session needs:**
+- Both gates before every commit: `python -m unittest discover -s tests -q`
+  and `python scripts/baseline.py verify --all`.
+- On a clean clone, 14 `yash_pathak` errors are expected (A11b), and the
+  baselines report MISSING. Both are clean on the author's machine.
+- Decisions live in `known_questions.md` as R/Q entries, one commit each.
 
 ### A0. Fly egress probe — before anything else (½ day) — **DONE 2026-09-22**
 
@@ -756,13 +829,51 @@ user's run: bursting past requests-per-minute on a 30-job run (~40 calls), and
 the daily request cap for someone running several times a day. Google has cut
 free-tier limits more than once, so read the current AI Studio rate-limit page
 at build time rather than relying on any figure written down here.
+*Read 2026-09-23 (Q61): flash 5 RPM / 20 RPD, flash-lite 15 / 500, embedding
+100 RPM / 30K TPM / 1K RPD. Embeddings are token-bound, and the backoff does
+not yet tell a minute limit from a day limit.*
 **Action, unchanged:** find out whether the Gemini client backs off on a 429 or
 fails the run, and add backoff if it does not. With one user this never came up.
+
+*Answered 2026-09-23.*
+- **Generation** retried once per model and then fell to the verbatim floor.
+- **Embeddings** did not retry at all, and did not say why they failed.
+  - The first side-by-side found this: 34 of 40 Gemini jobs unscored.
+  - R97 adds classification, backoff and a per-run breaker for a spent daily
+    cap.
+  - The run report now names the failure kinds.
+- **The import path** (`llm_backends.complete_json`) still has no backoff.
+- **The side-by-side has not been re-run yet.** Before it is:
+  - Q51: potion's scale clips a senior profile, and may be ranking Priya by
+    keyword count alone.
+  - Q52: a key pasted in the UI never reaches embeddings. On the hosted app
+    every friend is scored with potion, key or not. So what the comparison
+    decides is whether that should change.
 
 `test_the_api_key_never_lands_anywhere`: run the pipeline with a sentinel key
 through the mock rung, then reuse A6's walker over the data home **plus a
 captured log handler**. A runtime walk, not a grep of the source — so it fails
 when a sixth call site starts logging the config it resolved.
+
+### A7b. More than one free provider (≈1 day, scoped in Q60, not started) — **after the invite**
+
+One free Gemini key per friend is one daily cap per friend, and testing
+exhausts it. Groq and Cerebras free tiers serve OpenAI-compatible endpoints,
+which the `openai` rung already speaks. Needed, in order:
+
+1. **Route the key to its provider.** Today `GROQ_API_KEY` is accepted and
+   sent to OpenAI's URL (Q60's defect).
+2. **Put the provider in the LLM cache key and the per-resume record** (R45,
+   R80, R79).
+3. **Give `_chat_tailor` the one repair attempt `_gemini_tailor` has.**
+4. **Extend A7's key page to a provider choice,** with a per-provider test
+   call, R101's key check and a data-use sentence per provider, each read
+   from that provider's terms at build time.
+5. **Cross-provider fallback on quota,** second, because it is a new
+   behaviour with its own attribution question.
+
+Each provider that becomes supported is an explicit new row in
+`acceptance.py`, not a quiet addition to the frozen list.
 
 ### A8. The feedback loop and what counts as success (½ day)
 
@@ -928,7 +1039,8 @@ locally and read the output. The pool spans CS students to 10-year engineers, so
 formats and lengths vary far beyond Jake's template. Two specific things to
 look at: whether the parser produces a sane profile, and whether the
 3-experience / 1-page defaults make sense for someone with ten years — that is
-R74's bullet-budget problem waiting to happen. Cheap, and it is the last chance
+R74's bullet-budget problem waiting to happen. *It happened: Q59, which is now
+item 1 of the remaining order, ahead of this.* Cheap, and it is the last chance
 to find a parser bug before it costs a first impression.
 
 ### A11b. A clean clone runs green (½ day) — before A12, because the image is a clone

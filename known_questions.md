@@ -594,7 +594,8 @@ output is *good*.
   rules. Still nobody's judgement.
 - **R36** — local embeddings spread scores across 88.7 points where Gemini
   spans 13.9, and agree with it on only 7 of 20 project selections. Wider is
-  not automatically better and no one has read those resumes.
+  not automatically better and no one has read those resumes. *Void since
+  R98: not a potion measurement.*
 - **R37's floor** — a one-page resume in the user's own words, marked
   `needs_review` because some bullets exceed the length zones. Whether that is
   an acceptable product or a bad first impression is a judgement, not a test.
@@ -625,6 +626,8 @@ disagreed on it. A JD where everything agrees proves nothing.
 | D derived triggers | jobscout, e-commerce, **computer_networking**, spotify | valid |
 
 ### R36 — local embeddings are a fallback, not an upgrade
+
+> **VOID (R98, 2026-09-23).** Run in the same week and on the same machine as R36's measurement, so almost certainly with Gemini resume vectors compared against potion job descriptions. Its selections cannot be shown to be potion's. "Local costs real quality" is unmeasured, not refuted.
 
 Answered, and against local. For an embedded C++/Linux role the obviously
 relevant project is Computer Networking — Docker, ContainerLab, WSL/Linux,
@@ -3582,6 +3585,8 @@ applied to everything.
 Calibration is now per backend and measured for each. Worth noting how the
 failure presented: not an error, not a warning, just a pipeline that
 discovered jobs and scored all of them zero.
+
+> **VOID (R98, 2026-09-23).** The local row below is not a potion measurement. Clean potion puts every raw similarity above 0.12, so a 0.0–88.7 spread through a `(0.00, 0.10)` window is impossible. It was almost certainly Gemini resume vectors against potion job descriptions, served by the cache R97 fixed. The window derived from it is void too. Kept as the record of what was believed.
 
 **An unexpected result, reported without a conclusion.** Over the same 20 JDs:
 
@@ -8884,6 +8889,647 @@ connection. `test_the_committed_config_binds_loopback` pins it.
   `running` cannot delete their own account until the operator does it. This
   is the registry's missing sweep, and it predates A6.
 
+## R97. An embedding failure says why, waits out a rate limit, and cannot cross vector spaces
+
+**Decided 2026-09-23.** Found by the pilot A7 comparison of Priya's top 10 on
+Gemini and on local potion. The Gemini column came back unusable: **34 of 40
+jobs unscored, with 34 logged errors**, and the 6 that scored sat at 33–40.
+With n=6, the rank correlation meant nothing, and the 0/10 top-10 overlap was
+an artifact of the failures, not a disagreement between models. The one thing
+the run could not say was *why*.
+
+**The reason was thrown away in the library, not in the script.**
+`embedding_scorer._get_embedding` was
+`except Exception: logger.error(...); return []`, with no retry and no
+classification. Every caller turns `[]` into "not scored", and
+`AnalysisAgent` dropped the job with a line that did not say why. Generation
+has had both `config.classify_api_error` and `retry_with_backoff` since R19.
+Embeddings had neither. That is the twin-path rule again: the fix existed on
+the path the author walks every run, because generation fails loudly, and not
+on the path that fails quietly.
+
+**What changed:**
+
+- **Every call that failed or needed a retry leaves one classified entry** in a
+  list the caller owns: `quota`, `transient`, `retired`, `fatal` or
+  `dimension`, with attempts and whether it recovered. It is a list the caller
+  passes in, not module state, because one process serves several users' runs.
+  `ResumeParser.embedding_report` collects the resume's calls and the jobs'.
+  `AnalysisAgent.scoring_summary` counts the unscored jobs and names the kinds.
+  The orchestrator puts that in `state.json`, the final console report and
+  `summary.md`: *"Jobs not scored: 34 (34 failed (34 quota))"*. The consumer
+  is wired in the same change.
+- **Quota and transient errors are retried**: 4 retries, exponential from
+  2 s, never shorter than a "retry in Ns" the API asks for.
+  `rate_limiter.backoff_delay` was split out of `retry_with_backoff`, so
+  embeddings wait exactly as generation does. A retry that succeeds is still
+  recorded, because a fix that erases its own diagnosis would leave the next
+  failure as unreadable as this one.
+- **A spent daily cap fails fast.** Backoff rescues a per-minute limit, but a
+  spent daily cap will not clear within a run, and each remaining job would
+  wait out the full backoff to fail anyway: about 20–40 minutes across 40
+  jobs. After two calls in one report have run out of retries on quota, that
+  run stops retrying. The count is per report, so it is per run and never
+  crosses users.
+- **Two vector spaces are refused, not blended.** `_cosine_similarity`
+  `zip`ped its inputs, which truncates to the shorter vector and returns a
+  plausible number. It now raises `DimensionMismatch`, and the job is
+  reported as `dimension` and left unscored.
+- **The resume cache names the model that wrote it.** `ResumeParser` labelled
+  `resume_embeddings.json` with `config.EMBEDDING_MODEL`, which is Gemini
+  whichever backend ran. So a potion run saved 256-wide vectors under
+  Gemini's name, and the next Gemini run in that checkout was handed them as
+  its own. With the truncation above, it scored without a sound. The label is
+  now `active_backend()`'s model. This is the cache-key lesson a fourth time
+  (R11, R45, R80): the key named a model, just not the one that wrote the
+  vectors, and `auto` widening "the embedding model" to two models is what
+  falsified it.
+
+**What this does not establish.** It does not show that the 34 were rate
+limits. They fit a 40-call burst on a free key with no spacing, but that is an
+inference. The re-run prints the classification, and the log gets the number
+then. Nor can it say whether the comparison's run was touched by the cache
+label. The author deleted `cache/resume_embeddings.json` before the re-run,
+so the re-run is clean either way.
+
+**What breaks if this is wrong.**
+- A per-minute limit that outlasts about 30 s of backoff shows up as `quota`
+  failures, not as silent ones. That is visible, and `EMBED_RETRIES` is the
+  knob.
+- A daily cap reached mid-run loses the jobs after it, and says so, instead of
+  hiding it behind half an hour of waiting.
+- Local potion errors are still not caught here. A model2vec exception is
+  raised, as it was before.
+
+Mutation-checked: the cache test fails with the label reverted to the
+constant, the retry tests fail with `EMBED_RETRIES = 0`, the dimension tests
+fail with the width check removed, the recovery test fails when a successful
+retry is not reported, and the breaker test fails with the threshold unset.
+
+## R98. The local window was never fit on potion's own similarities, and the local job score has never carried an embedding signal
+
+**Decided 2026-09-23.** This closes Q51's question about where the window came
+from. How to replace it is a separate build.
+
+### What is proven
+
+Q51's probe was run on three profiles against the same 40 real jobs, on clean
+potion (R97's cache label in place, so nothing was served across models):
+
+| profile | level | raw min – max | at or above 0.10 |
+|---|---|---|---|
+| `yash_pathak` (the resume the window was fit on) | new grad | 0.2550 – 0.5908 | 40 of 40 |
+| `priya_raghunathan` | staff, six years | 0.1994 – 0.4864 | 40 of 40 |
+| `rohan_deshmukh` | new grad | 0.1213 – 0.4436 | 40 of 40 |
+
+- **120 of 120 at the ceiling.** The lowest clean value measured is 0.1213.
+  The window `(0.00, 0.10)` claims potion's raw similarity tops out at 0.10.
+- It does not fit any of the three, including the resume it was fit on.
+- It is wrong at all three levels, so seniority is ruled out. Q51 already
+  showed that resume structure cannot move raw outside the range of its
+  component cosines.
+
+**R36's own table cannot have come from clean potion, whatever produced it.**
+- Before R67 there was no keyword blend, so the job score was the normalised
+  embedding alone.
+- The local row reads min 0.0, median 63.6, max 88.7. Through a
+  `(0.00, 0.10)` window that needs raw values of about 0.000–0.089.
+- Clean potion has not produced one value below 0.12 across 120 pairs.
+- Caveat: R36 used the frozen 20, not these 40. For the claim to fail, 20 tech
+  postings would have to embed 1.4–6× less similar than 40 other tech postings
+  to the same resume. That is not a plausible corpus difference.
+
+### What the local job score has been, by regime
+
+- **Every clean-potion run** has scored the embedding half at a constant 100.
+  The job score is therefore 70 + 0.3 × keyword, in 12.5-point steps: the
+  board is **keyword order with ties**. That covers:
+  - every keyless user;
+  - every friend on the hosted app, whose key never reaches embeddings (Q52);
+  - R86's container runs;
+  - every run since R97.
+
+  Priya's highest raw similarity ranking 6th is this, not a potion opinion.
+- **The author's machine before R97, whenever a Gemini resume cache existed**
+  (so every local run on an unchanged resume) scored the embedding half from
+  noise, not from a constant. That is the regime R36 measured.
+- **Component selection is a different path, and is *not* voided.**
+  `_composite_score` reads the unclipped per-component cosines, so the window
+  never touched it.
+  - On clean potion, selection has always used potion's real similarities.
+    That is unjudged, not wrong.
+  - It was noise only in the cross-space regime above.
+
+### The mechanism: cross-space noise, the only candidate, not reproduced
+
+Q51 set out the mechanism.
+- R97's resume cache served the author's Gemini vectors (768 wide) to local
+  runs.
+- The job descriptions were embedded by potion (256 wide).
+- The old cosine took a dot product over the first 256 dimensions and divided
+  by both full norms.
+- Two unrelated coordinate systems give a small cosine near zero, and the
+  best-of-k averages land at about 0.00–0.08. That is R36's number.
+
+It is the only explanation left standing: seniority and structure are ruled
+out, and the table is impossible under clean potion. **It has not been
+reproduced.** The ~20-call Gemini reproduction (Q51) was skipped. This R does
+not depend on it: every void below holds because the table and the window are
+not clean potion, whatever they were. If the reproduction is ever run, record
+it here.
+
+### Void
+
+- **R36's table** (the 88.7-point local spread against Gemini's 13.9, and the
+  13/20 experience and 7/20 project agreement). Not a potion measurement.
+- **R36's explanation** that static vectors "run an order of magnitude lower"
+  because short components dilute against long job descriptions. Potion's raw
+  similarities sit in the same range as Gemini's calibration, not an order of
+  magnitude below it.
+- **V3's local verdict**, "R36 — local embeddings are a fallback, not an
+  upgrade". It was run on the same machine in the same week as R36, so it was
+  almost certainly under the same cache condition. Its selections cannot be
+  shown to be potion's.
+  - The product conclusion drawn from it, that local "costs real quality", is
+    **unmeasured, not refuted**.
+  - `auto` preferring Gemini when a key exists stays, for the other reason
+    R36 gave: every measurement in this log was taken on Gemini.
+- **The local window `(0.00, 0.10)`** and every local job score, band and
+  threshold decision made through it. `scoring_threshold` has been inert on
+  local, because every job scores at least 70.
+
+**Not void:**
+- R86's container rows. They were clean potion, which is why they saturated.
+- V2's keyless run, which checked page shape and does not depend on the
+  embedding backend.
+- Every Gemini measurement.
+
+**Unverified, not void:** the Gemini window `(0.30, 0.60)` has no recorded
+measurement either. Nothing here says it is wrong. The anchored normalisation
+that replaces the local window is meant to replace both.
+
+### The lesson, in this log's terms
+
+A constant with no measurement artifact. It was fit while a cache served the
+wrong model's vectors and a cosine truncated in silence. The explanation
+written for it was a plausible story about the model, not a check. It is R81's
+rule, "check the instrument before trusting the reading", learned at the
+instrument's own calibration: nobody could re-derive R36's number because
+nothing recorded how it was made. **A calibration constant ships with the
+script that produced it, or it is a guess with a decimal point.**
+
+## R99. Refit the potion window from four profiles, with a guard, before building the null set
+
+**Decided 2026-09-23.** It replaces R98's void window. The rules below are
+recorded **before any fit is run**, so no number in them was chosen by looking
+at the result it produces. The measurements get appended here once they exist.
+
+### What is being done, and why not the null set first
+
+The structural fix is to anchor each resume against a fixed set of unrelated
+postings (Q53). That costs about 1.5 days plus a lot of labelling. The cheap
+version is one refit constant pair for potion. The two produce **nearly the
+same order within one board**: a window that does not clip keeps potion's
+own order, and they differ only in how much weight the embedding gets against
+keywords (about 15% across the three measured spreads).
+
+So the question the null set would also have to answer, whether potion's
+opinion improves a board at all, is answered in half a day by this. Nobody has
+ever read a potion-ordered board, because one never existed (R98). If potion
+loses, the null set would almost certainly have lost too, and the day is saved.
+
+**What this gives up**, stated so it is not rediscovered:
+- Scores are not comparable across people. Yash's floor sits about 0.13 raw
+  above Rohan's, a quarter of the window. In the pilot this only shows through
+  the threshold, since each friend sees only their own board.
+- A new kind of resume can clip again. The guard makes that visible; only the
+  null set prevents it.
+
+### The rules (pre-registered)
+
+In `scripts/calibration_probe.py`, as constants:
+
+- **Window** = the pooled observed raw range across the profiles, plus
+  `MARGIN` = 10% of that range at each end.
+- **At least `MIN_PROFILES` = 4 profiles**: yash, Priya, Rohan and one real
+  six-year resume nobody here wrote. `fit --write` refuses fewer.
+- **Leave one profile out.** Fit on the other three; the held-out profile may
+  have at most `LOO_MAX_CLIPPED` = 10% of its jobs clipped. If any profile
+  fails, the fit is not recorded and not shipped: a new resume would not fit
+  this window, which is exactly the failure being guarded against.
+- **Same model and same jobs.** The dumps must agree on model and on the
+  jobs' SHA-256, or the fit measures the difference between them.
+- **The constants ship with the script and its recorded output**
+  (`baselines/calibration/local-window.json`), per R98. A test will pin
+  `CALIBRATION["local"]` to that record.
+- **Blind comparison.** For each profile, today's board order (the void window,
+  which is keyword order) and the fitted window's order are shown unlabelled,
+  with no scores, in a random order. The key is kept in a separate file.
+  **It ships only if it wins or ties on 3 of 4, and never if it loses on the
+  real resume.** If potion loses, the write-up is "local stays keyword-ordered,
+  deliberately".
+- **Threshold.** Only the jobs a threshold of 40 would *newly* drop are
+  labelled fit or not a fit, after the comparison. The threshold stays 40 if
+  no job labelled fit falls below it. Otherwise it moves to the highest value
+  that drops none, and how many "not a fit" jobs it removes is reported.
+- **Potion only.** The Gemini window `(0.30, 0.60)` stays as it is,
+  unverified. Hosted friends never reach Gemini embeddings (Q52), so it cannot
+  be checked against the users who exist.
+
+### The guard (built with this entry)
+
+Every run counts the scored jobs whose raw similarity is at or past the floor
+or the ceiling. **Any clip is reported, with counts, in the run summary**
+(`summary.md` and the final console report), not only in the log.
+`AnalysisAgent` counts them, `scoring_summary()["window"]` carries the counts,
+and `_scoring_lines` prints them. Mock scores are exempt; they have their own
+scale.
+
+Until the fit lands, the guard fires on **every** local run ("40 of 40 at the
+ceiling"). That is true, and it is the first time a run has said so.
+
+**One known limit.** A hosted friend's run summary is not something the
+author reads. Carrying the guard to the operator belongs to A8's event log,
+which does not exist yet. It is logged as Q53's first trigger, not added as a
+field nothing reads.
+
+### A risk named before the data
+
+On a synthetic set shaped like the three measured ranges, **Rohan failed
+leave-one-out at 12%**. His minimum (0.1213) *is* the pooled minimum, so a
+window fit without him starts near 0.139 and clips his lowest jobs. Whether
+the real data fails depends on how many of Rohan's jobs sit below about 0.14.
+If it fails, that is the rule working, not a reason to widen the margin after
+seeing it. Any change to `MARGIN` or `LOO_MAX_CLIPPED` is made before the real
+fit runs, or not at all.
+
+**Confirmed by the author before the real fit ran (2026-09-23):** 10% margin
+and a 10% held-out limit, both unchanged. **A failure is an answer, not an
+obstacle.** A window fit on three resumes that does not cover a fourth is
+R36's failure exactly, and loosening the rule until it passes would be fitting
+the rule to the data. If any profile fails, the fixed window cannot do this
+job, nothing ships from R99, and the null set (Q53) is required before potion
+scoring is used.
+
+### Result, 2026-09-23: the fit failed its held-out check. The cheap version is dead.
+
+Run by the author on the same 40 jobs, potion, four profiles. `fit --write`
+refused, as pre-registered, and nothing was written.
+
+    pooled    160 raw values, 0.1213 - 0.5908
+    window    0.0744 - 0.6378   (10% margin)
+
+    profile        n     min  median     max   held out (window fit on the other three)
+    priya         40  0.1994  0.3505  0.4864    0% clipped  pass
+    rohan         40  0.1213  0.3607  0.4436    8% clipped  pass
+    senior_real   40  0.1732  0.3587  0.4854    0% clipped  pass
+    yash_pathak   40  0.2550  0.4770  0.5908   12% clipped  FAIL
+
+- **It failed on the author's own resume, not on Rohan's** as the synthetic
+  run predicted. Yash has the highest values. A window fit on the other three
+  tops out at 0.5229 and clips his best matches: the jobs at the top of his
+  board, the ones that matter most.
+- The failure is the check doing its job. A window fit on three resumes that
+  does not cover a fourth is R36's failure exactly. Loosening the rule to pass
+  would have been fitting the rule to the data, and the author declined that
+  before the run.
+- **So no fixed window is shipped for potion.** The blind comparison is not
+  run, because there is no fitted window to compare. The local window stays
+  R98's void `(0.00, 0.10)` for now, which means keyword order with ties, and
+  the guard still reports it on every local run.
+- **Q53's third trigger has fired.** The null set is the fix, not a later one.
+
+What survives from this R: the guard (every run reports clipped jobs in its
+summary), and the fitting tool (`calibration_probe.py --dump / fit / ab`),
+which Q53 reuses for its own held-out check on `Z_TOP`.
+
+**One thing to take into Q53.** The three profiles that passed have medians
+within 0.01 of each other (0.3505–0.3607). Yash's median is 0.12 above them.
+The spread between resumes is not noise around one level: one resume sits
+higher. That is what a per-resume anchor corrects and a shared window cannot,
+so this failure is evidence *for* Q53's design, not only against R99's.
+
+## R100. A model's reply to a resume is kept for what it holds, and the import says who read it
+
+**Decided 2026-09-23.** Found importing the real six-year resume with a
+working key. The log read:
+
+    gemini-3.5-flash       -> 503
+    gemini-3.1-flash-lite  -> 200
+    WARNING: Extraction returned no contact block; reading the resume by pattern instead
+
+The result was **0 experiences, 0 projects, 0 skill groups**. The confirmation
+screen then said the text could not be split "most likely because no model
+was available to read it". **A model had answered.** The same file imported
+cleanly on an earlier run, when flash was up.
+
+### What was wrong
+
+- **One missing block discarded the whole reply.** `to_schema` kept a reply
+  only if `parsed.get("contact")` was truthy. Anything else (no contact
+  block, an empty one, a one-item list, a wrapper object, capitalised keys)
+  went to the pattern reader. That reader cannot split roles apart by design,
+  and on this resume found nothing at all. Experiences, projects and skills
+  do not depend on contact details. Gating them on it threw away exactly the
+  part the model is needed for, to keep the part the pattern reader does
+  best.
+- **The screen stated a cause nobody had checked.** Both UIs printed "most
+  likely because no model was available" whenever the pattern reader left
+  unsplit text. That covers three different events with one false sentence:
+  no model configured, the model unreachable, and the model answered but its
+  reply was rejected. It is the unknown-is-never-a-value rule applied to an
+  explanation: a guessed cause displayed as a known one.
+- **Nothing recorded what the reply looked like,** so the question "did
+  flash-lite answer in a different shape from flash?" could not be answered
+  from the run.
+
+### What changed
+
+- **A reply is judged section by section.** `_unwrap` undoes *structure*
+  only: a one-item list, a single-key wrapper such as `{"resume": {...}}`,
+  and capitalised section names. It never guesses content, per the pattern
+  reader's rule. A section of the wrong type (`contact` as a string) is
+  dropped, not fatal. A reply is discarded only when it holds **no** section
+  the prompt asked for.
+- **A missing or empty contact block is read by pattern and flagged.**
+  Contact is the one section the pattern reader is reliable at, and R33's
+  confirmation screen shows every field for correction.
+- **Every import records `_extraction: {read_by, why}`.** `why` names what
+  happened: no model configured, the call failed (with its error), or the
+  model answered and its reply held nothing usable (with its **shape**:
+  types, key names and counts, never values, since the values are someone's
+  resume). Both UIs show `why` instead of the guess, in `ImportConfirm.tsx`
+  and `app.py` (the twin-path rule). The renderer ignores the key, so it
+  never reaches a `.tex`.
+- **A usable reply is judged outside the `try`.** If a malformed section
+  raises during normalisation, that is no longer reported as "the model could
+  not be reached".
+
+### What is not known
+
+**Whether flash-lite's reply differs structurally from flash's.** The reply
+was not recorded, and it cannot be reproduced where this was written: no key,
+and the egress policy blocks Gemini. The next import logs the shape whenever
+a reply is rejected, and says it on the screen, so the same run that fails
+next will answer this. If flash-lite puts contact details under another name
+(`personal_info`, say), this change still keeps its experiences. The contact
+fields are then read by pattern and flagged, rather than lost.
+
+**Not checked here:** whether any other consumer of a model reply gates the
+whole reply on one key. The generation path validates per bullet, which is a
+different shape, but nobody has counted.
+
+### Correction, 2026-09-23: R100 dropped a list of skills, and dropped sections silently
+
+Found while tracing Q59's skills loss. `_unwrap` drops a section whose type
+does not match the prompt, which is right for `contact` as a string. But for
+`skills`, a **list of strings** is the same content in the other container,
+and dropping it threw away every skill a model returned that way. It said
+nothing, so the confirmation screen showed "Skill groups: 0" with no reason.
+The regression was R100's own, introduced while fixing a whole-reply discard.
+
+- **A list of skill strings now becomes one `Skills` category.** The
+  confirmation screen shows it for splitting.
+- **Other lists (of objects) are still not read**, because mapping unknown
+  keys would be guessing.
+- **Every section dropped for its shape is now named** in `_extraction.why`
+  ("…had skills in a shape that could not be read, so it was not imported.
+  Add it below."). This is the rule that a filter which removes things must
+  say so, applied to R100's own filter.
+
+Its own commit and test (`test_skills_list_reply`), kept separate from the
+label splitting in the pattern reader, which is a different bug. R100 as
+shipped fails 3 of the 5 tests.
+
+## R101. A key httpx cannot send is named as the key's problem, and generation stops blaming Gemini for everything
+
+**Decided 2026-09-23.** A generated resume's summary read:
+
+    Bullets were not rewritten: Gemini could not be reached ('ascii' codec
+    can't encode character '\u2014' in position 76: ordinal not in range(128))
+
+R81's shape (a console could not print what it found), now in the generation
+path, and misattributed twice over.
+
+### Where the ASCII encode happens
+
+**Not in this repo's code.** Every file open on that path already passes
+`encoding="utf-8"`. The encode is in **httpx**, which google-genai sends
+through: header values are encoded as ASCII. The key travels as the
+`x-goog-api-key` header, and httpx raises exactly that message for a non-ASCII
+header value (reproduced in `test_key_encoding.TestTheMechanism`, so this is a
+measurement and not an inference).
+
+**What the position says.** A Gemini key is 39 characters, so an em dash at
+position 76 means the "key" carried about 37 more characters: a copied note or
+comment. Measured with python-dotenv 1.2.3:
+- `KEY="AIza… # note — x"` (comment inside the quotes) carries it.
+- `KEY=AIza…  — note` carries it.
+- `KEY=AIza…#note — x` (no space before `#`) carries it.
+- `KEY=AIza… # note` and `KEY="AIza…" # note` do not.
+
+A key pasted into the UI goes to generation only; it never reaches
+embeddings (Q52). That fits a run where scoring worked and rewriting did not.
+**Which carrier this run had is not known.** Checking on the author's machine
+is safe: print `len(key)` and `key.isascii()`, never the key.
+
+### Why it was called "unreachable"
+
+**`classify_api_error` never saw it.** `_gemini_tailor` wraps prompt
+building's aftermath, the call, fitting, validation and repair in one
+`except Exception`, and labels *every* exception "Gemini could not be
+reached". Our own bugs, a validator crash and a key the client cannot encode
+all read as a Google outage. (Had it been asked, `classify_api_error` would
+have said `fatal`, since the message has no 404, 429 or 503 in it.)
+
+### What changed
+
+- **One place builds a Gemini client:** `config.gemini_client`. There were
+  four: generation, embeddings, import, and `scripts/check_models.py`, which
+  also read the environment itself rather than through `resolve_api_key`. A
+  syntax-tree test fails on a fifth `genai.Client(`.
+- **`config.gemini_key_problem`** refuses a key with a non-ASCII character or
+  whitespace, before any client is built. It names the character, its code
+  point and its position, and **never repeats the key**. It checks only what
+  makes a key unsendable, not Google's key format, which can change.
+- **Generation says whose fault it was** (`_degraded_reason`):
+  - your key ("Your Gemini key was not used. …");
+  - Gemini (quota, transient, retired, or a transport error such as
+    `httpx.ConnectError`, told apart by the exception's module so httpx is
+    not imported: "could not be reached");
+  - Google refusing the request;
+  - **JobScout** ("… This is a bug in JobScout, not a Gemini outage.").
+- **The key panel says so at paste time.** `backend_status` returns
+  `key_problem`, and detection no longer picks Gemini on an unsendable key.
+  `BackendPanel.tsx` and Streamlit's panel both render it, rather than "add a
+  Gemini key above", which would be false because there is one.
+- **Import (R100) and embeddings (R97) name it too.** Import's `why` gives
+  the key problem instead of "could not be reached". Embeddings record it as
+  `fatal`, with the message.
+
+Mutation-checked: restoring the old catch-all label, or removing the key
+check, each fails its tests. The first version of these tests checked the
+classifier and not the call site, and passed with the old label restored. The
+call-site test exists because of that.
+
+### Correction, 2026-09-23: a key has no fixed format, and quotes break it too
+
+This entry said "a Gemini key is 39 characters", and its tests built keys as
+`AIza…` + 33. **Current AI Studio keys start `AQ` and are 53 characters.**
+The author's new key: length 53, `isascii()` True. The em dash came from the
+old, malformed value.
+
+The code never checked a prefix or a length. Only the prose and the fixtures
+assumed one, and a fixture that assumes a format is one refactor away from a
+check that refuses every new key. So:
+
+- **`gemini_key_problem` checks only what breaks a key:** a non-ASCII
+  character (httpx cannot encode it), whitespace, and now **quote
+  characters** (`"`, `'`, `` ` ``), which `.env` quoting leaves inside a
+  value and which would be sent as part of the key.
+- **The tests are format-free:** an `AQ…` key, an old `AIza…` key, a
+  200-character key and a one-character key all pass. The position
+  assertions are computed from the fixture, not written as 39. Adding a
+  prefix-or-length check makes them fail (mutation-checked).
+- The "position 76" reasoning above still stands, but for a 39-character key
+  of that era it meant about 37 extra characters. Read it as "longer than the
+  key", not as a statement about key length.
+
+## R102. An entry with no bullets is its own entry, and never takes the next one's
+
+**Decided 2026-09-23.** Q59's first finding, fixed first because it put wrong
+content on a resume someone sends to an employer.
+
+**The defect.** `latex_parser` read experiences and projects with one
+expression each: a heading, then a `\resumeItemListStart … End` block. An
+entry with no bullet list (a scholarship, an award, a volunteer role) could
+not match on its own, and `tex_renderer` writes exactly that shape, heading
+only, because an empty list is a LaTeX error:
+
+- **Projects:** the heading's first argument was matched lazily across
+  newlines. A bullet-less project listed first ran on to the *next*
+  project's list. "Merit Scholarship" then a paper parsed as **one project,
+  named for the scholarship and carrying the paper's bullet**, and the paper
+  was gone. Listed last, it was dropped.
+- **Experiences:** the list had to follow the heading directly, so a
+  bullet-less role was dropped in any position, without stealing.
+
+Every stage after the parse (selection, budget, generation, skills evidence)
+sees only what the parser returned.
+
+**The fix.**
+- Each section is cut at its headings (`_entries`), and an entry's bullets
+  are looked for only inside its own span (`_span_bullets`).
+- A project heading's two arguments are read by **balancing braces**
+  (`_braced`). The first nests (`\textbf{\href{url}{\underline{Name}}} $|$
+  \emph{tech}`), and the first draft of this fix used a lazy pattern within
+  the span, which stopped at the `}{` inside the link and returned an empty
+  name. The pattern it replaced only worked because the following list forced
+  the match onward. A test with a linked heading caught it.
+- **Downstream, an entry with no source bullets gets none:**
+  - `_allocate_with_importance` gives it 0, and its share goes to entries
+    that can use it. A budget of 1 is an instruction to write a bullet from
+    nothing.
+  - `_restore_factual_fields` removes anything a model wrote under it,
+    because it had no source.
+
+**Tested per section, per position**, because the defect depended on order:
+bullet-less first, last and in the middle, for projects and for experiences.
+Experience positions are set by dates, since `tex_renderer` writes them
+newest first; the first draft's tests had silently rendered the same order
+every time. The committed masters (Priya 3/3/2; Rohan 3/3/2 with projects
+1/2/1/1) parse exactly as before. The old parser fails 11 of the 12 new
+tests, and removing the source guard fails its own.
+
+**Still open in Q59:** skills collapsing in import, R100's list-typed skills
+regression (a separate commit), and the budget. The zero budget here is the
+zero case of the budget change's cap by master count, pulled forward because
+this fix is what lets bullet-less entries reach the budget at all.
+
+## R103. Skill groups laid out on one line import as the groups they are
+
+**Decided 2026-09-23.** Q59's import half. A PDF often extracts
+`Languages: … | Cloud: … | Data: …` as a single line. `_heuristic_skills` read
+one `Label: values` per line, so the first label won and the other two groups,
+labels included, became part of its value. Three categories imported as one.
+
+**The rule is structural and conservative:** split a line at an explicit
+separator (`|`, `•`, `·`, `;`) **only when every piece carries its own
+label.**
+- `Python | Go | AWS` is one list, not three groups.
+- A partly labelled line is not split.
+- Labels with no separator between them (`Languages: Python, Go Cloud: AWS`)
+  are left for a person. Is "Go Cloud" a skill? That is content, and the
+  pattern reader never guesses at content; R33's confirmation screen is where
+  it gets decided.
+
+**Twin path:** a model reply with a single skills group whose value holds
+labelled groups (`{"Skills": "Languages: Python; Cloud: AWS"}`) goes through
+the same rule. Several groups are left exactly as the model gave them.
+
+A list of skills from the model is R100's correction, committed separately:
+a different bug in a different function. The code before this change fails 5
+of the 10 new tests.
+
+## R104. The page is budgeted first, and every component is capped by its own master
+
+**Decided 2026-09-23.** Q59's budget half, the last of the three fixes, done
+after the parser (R102) and import (R103), so the budget is measured on
+masters that read back correctly.
+
+**The defect.** `exp_budget_table` and `proj_budget_table` were measured on
+resumes with both sections full (Q3: 3 + 3 = 12 bullets), so each describes
+half a page. R74 let the jobs take the page when there were no projects, and
+only then. With **one** project the jobs kept their half:
+- 3 jobs + 1 project budgeted `[2,2,2] + [3] = 9`, against 3 jobs alone at
+  `[3,3,3]`. **A one-line project cost every job a bullet.**
+- The per-job cap was a constant 3, so a 5-bullet lead role showed 3
+  whatever the page had left.
+- A component was budgeted beyond what its master held. Priya's third role
+  has 2 bullets and was budgeted 3, which on the model path asks for a bullet
+  with no source.
+
+**The rule.**
+- **Every component is capped by the smaller of its master's bullet count
+  and validation's per-component maximum** (`EXPERIENCE_MAX_BULLETS` = 4,
+  `PROJECT_MAX_BULLETS` = 3, and 2 for projects when there are four or
+  more). That is the author's condition: capped by what the master has, not
+  just by the page, so a 12-bullet role gets 4 and cannot fill a page on its
+  own. The maxima are validation's own constants, not new ones.
+- **The page is budgeted before the sections share it:**
+  - It is the larger of `PAGE_BULLETS` (12, Q3's measurement) and what the
+    tables give a full resume, then limited by the sum of the caps.
+  - Each section keeps its table share up to its caps, and what one cannot
+    use flows to the other, jobs first.
+  - R74's zero-projects case is now one instance of this rule rather than a
+    special branch.
+- **A full resume is budgeted exactly as before.** Both halves full leaves
+  nothing to flow and no cap binds.
+
+**Measured** (model path):
+
+    shape                                   before              after
+    Rohan 3 jobs + 1 project                [2,2,2]+[3]  = 9    [3,3,2]+[1]    = 9  (master-bound)
+    Rohan 3 jobs + 0 projects               [3,3,3]      = 9    [3,3,2]        = 8  (third role holds 2)
+    Rohan as selected (3 + 4)               [2,2,2]+[2,2,2,1]   [3,3,2]+[1,2,1,1] = 13
+    senior, long masters (5,4,4 + 2)        9                   12              (the page, used)
+    both halves full (3+3, 6 bullets each)  [2,2,2]+[2,2,2]     unchanged
+
+Rohan's total does not rise, but it moves: bullets that were asked of
+1-bullet projects (invention pressure on the model path) go to the jobs that
+hold them.
+
+**Tests** (`test_page_budget`) run on parsed masters (the committed fixtures
+and synthetic shapes), not on `yash_pathak`, so a clean clone runs them. The
+old logic fails 5 of the 7. R74's own nine tests (`test_page_is_a_page`)
+need `yash_pathak` only for its profile; run against a scratch copy with
+Priya's profile, all nine pass on the new code as on the old.
+
+**Not measured:** the PDFs. A budget is a claim about the page, and 12
+bullets at 2 lines each must still fit one page for a real senior's resume.
+A11's pre-flight on the friends' real resumes is where that gets checked,
+now that it reads the budget that ships.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -9480,6 +10126,801 @@ has to make to a person.
 a measured gap. Both belong to A10 and should land before the pilot, because a
 deploy is exactly what creates these rows, and the first deploy is the day the
 friends arrive.
+
+## Q51. Potion's scale clips a senior profile, so its ranking may be keyword count alone
+
+**Status:** The window question is resolved by **R98**: the local window was never fit on potion's own similarities, and it is void. Replacing it (the anchored null set, Q3) is open. Found 2026-09-23. **Not refit here, by decision.** Moving
+`CALIBRATION` moves what `scoring_threshold` means (R24's shape), so a refit is
+its own R, decided from the measurement below.
+
+**The observation.** Priya's potion top 10 against 40 real jobs looks
+sensible for a six-year staff engineer: senior and staff backend and infra
+roles. But **seven of them tie at exactly 77.5.** That number is a ceiling,
+not a coincidence:
+
+- `overall = 0.7 × embedding + 0.3 × keyword`, and `keyword` moves in steps
+  of 12.5 (hits / `KEYWORD_SATURATION` = 8).
+- 77.5 = 0.7 × **100** + 0.3 × 25. The embedding half is at 100, with two
+  shared technologies.
+- `_normalise` clips the embedding half. The local window is
+  `CALIBRATION["local"] = (0.00, 0.10)`, so every raw blend at or above 0.10
+  scores 100.
+
+The window was fit in R36 on the frozen 20-JD baseline against the author's
+new-grad resume, where raw ran about **0.00–0.08**. A staff engineer against
+senior postings is exactly the pair that could sit higher.
+
+**Why it matters more than the ties.** For every job at the ceiling the
+embedding half is a constant, so **those jobs are ordered by keyword count
+alone**. That may be why the top 10 looks sane: R67 found keyword overlap
+discriminates about 8× better than the embedding. But it would mean that
+potion, which is what every friend without a key gets, is not doing semantic
+ranking for experienced users at all. A7's decision on how hard to push the
+key depends on that share. A 77.5 also appeared in R86's first Docker
+acceptance run (`6 / 77.5%`), which had fallen back to potion. That is a
+different fixture, so it is a hint, not a second measurement, but it went
+unremarked at the time.
+
+**The measurement, and why it is not here yet.** `scripts/calibration_probe.py`
+prints a profile's raw distribution against a corpus: min, quartiles and max,
+next to the 0.10 ceiling and the 0.00–0.08 fit. It also prints how many jobs
+sit at the ceiling, and how many of the top 10 do. It reads
+`EmbeddingScore.raw_similarity`, which R97's change added for this purpose.
+It could not run where this was written, because that session's egress policy
+denies both Hugging Face (so no potion model) and the job boards. Synthetic
+jobs were not substituted, because they would measure the fixture text. To
+run it:
+
+```bash
+python scripts/calibration_probe.py --input outputs/<date>/enriched_jobs.json
+```
+
+**What decides it:** the share of Priya's jobs at or above 0.10.
+- If it is most of them, the local window is miscalibrated for everyone past
+  new grad.
+- The candidate fixes are a wider fixed span, a per-profile window taken from
+  the user's own distribution (the way `score_bands` already self-calibrates
+  the display), or no clip at all above 100.
+- Each moves the threshold, so each is measured against the baseline first.
+
+### Measured 2026-09-23: 40 of 40 at the ceiling
+
+`scripts/calibration_probe.py` was run by the author on Priya against the same
+40 real jobs as the first comparison, on potion:
+
+- **40 of 40 jobs at or above the 0.10 ceiling.** Raw ranges from
+  **0.1994 to 0.4864**, against a window fit on 0.00–0.08.
+- **So the embedding half is 100 for every job, and the board is ordered by
+  keyword count alone.** The share is all of them, not most, which
+  generalises the seven ties at 77.5 above.
+- The highest raw similarity, Dropbox (Metadata), ranks **6th**.
+
+**Caveat before anyone reads "6th" as the bug.** Calling that order wrong
+assumes potion's raw order is right, and nobody has measured that. R67 found
+the embedding order *worse* than keyword order on Gemini. Unclipping would
+hand the ranking back to an embedding nobody has checked. Whatever fix
+follows is judged by reading a top 10, not by agreement with raw order.
+
+### Where the window came from
+
+- **A hand-entered constant.** `CALIBRATION["local"] = (0.00, 0.10)` in
+  `tools/resume/embedding_scorer.py`. Nothing derives it.
+- **Recorded by R36** against `minishlab/potion-base-8M`, on the frozen 20-JD
+  baseline (`baselines/2026-08-21-pre-step7`: the author's resume and 20
+  enriched jobs; the contents are gitignored and only the manifest is
+  committed).
+- **No artifact of the measurement exists.** There is no script, no output
+  and no raw values, only the sentence "raw overall ran from about 0.00 to
+  0.08".
+- The Gemini pair `(0.30, 0.60)` is labelled "the original calibration" and
+  has no record at all.
+
+### Hypothesis, unconfirmed: the window was fit on noise from two vector spaces
+
+R97's defect was live when R36 measured, and it predicts R36's number exactly.
+
+1. The resume cache was labelled `config.EMBEDDING_MODEL`, which is
+   `gemini-embedding-001`, whichever backend ran. The author always had a key,
+   so his cache held **768-wide Gemini vectors** for an unchanged resume.
+2. A `local` run hit that cache: same file hash, same label. The job
+   descriptions were embedded fresh by potion at 256 wide. The JD cache has
+   R28's width guard; the resume cache had none.
+3. `_cosine_similarity` `zip`ped the two, so it took a dot product of Gemini's
+   first 256 dimensions with a potion vector, divided by both full norms. Two
+   unrelated coordinate systems give a cosine of about 0 ± 1/√256 ≈ ±0.06.
+   Top-k averages of the best of those land at small positive values:
+   **about 0.00–0.08**.
+
+R36's explanation ("static vectors dilute across length") would then be a
+rationalisation of noise. The old arithmetic that divided by the cap does not
+enter into it: the author's resume (five jobs, thirteen projects) saturates
+both caps, the one shape for which that arithmetic was right.
+
+**Resume structure cannot explain the gap.** Raw is a weighted average of
+per-component cosines (`_weighted` over `_section_average`s, plus the skills
+cosine), so it never exceeds the largest single component cosine. A missing
+projects section or shorter text moves raw *within* the range of the
+component cosines. It cannot lift every component from ≤0.08 to 0.2–0.49.
+The 40 job descriptions are the same ones. So the 2.5–6× shift is in the
+vectors, not in Priya being invented, half a page long, or without projects.
+
+**The test** (scratchpad script, run by the author, with a key):
+1. Embed the author's resume on Gemini and the job descriptions on potion.
+2. Score with the old truncating cosine, on the frozen 20 if they survive,
+   else on the 40.
+3. Compare with a clean potion-on-potion probe of `yash_pathak` and
+   `rohan_deshmukh` on the same 40, plus a real six-year resume imported under
+   a `JOBSCOUT_HOME` outside the checkout.
+
+How to read it:
+- Reproducing about 0.00–0.08 **and** a clean yash near Priya's 0.2–0.5
+  confirms it. The window is then stale for everyone, not just senior
+  profiles.
+- A clean yash at 0.00–0.08 falsifies it.
+
+**If confirmed, these are suspect and the R must void them explicitly**, not
+leave them standing as numbers that look authoritative:
+- **R36's table.** Local's 88.7-point spread against Gemini's 13.9, and the
+  13/20 experience and 7/20 project agreement with Gemini. These are local
+  selections made on noise, if the resume cache was hit.
+- **V3's "R36 — local embeddings are a fallback, not an upgrade"**
+  (2026-08-23). Local dropped Computer Networking for an embedded C++ role and
+  led with tutoring. It was one configuration, read once. If its resume
+  vectors were Gemini's, it judged noise, and the product conclusion drawn
+  from it ("it costs real quality") is unmeasured, not refuted.
+- **The local window itself**, and every local score and threshold decision
+  since.
+
+Two local results are probably **not** void:
+- R86's container runs (`6 / 81.2%, 85.0%, 77.5%`, and the `NOT COMPARABLE`
+  row). The container had no key and no Gemini cache, so they were potion
+  against potion. They look saturated because they are real.
+- Priya's probe above: the cache was deleted beforehand, and R97's label
+  would have missed anyway.
+
+Whether each earlier run actually hit the cache is not recorded anywhere,
+which is why "suspect" is the honest word until the reproduction runs.
+
+## Q52. A key pasted in the UI never switches embeddings to Gemini
+
+**Status:** Open, found 2026-09-23 while planning pilot A7. Whether to fix it
+depends on the potion-vs-Gemini comparison (Q51, R97).
+
+**What the code does.**
+- `embedding_scorer.active_backend()` chooses between Gemini and local with
+  `resolve_api_key()` and **no argument**, so it sees only a key in the
+  server's environment.
+- It stores the answer in the process-global `_BACKEND`.
+- The key a user pastes does travel all the way down, from `start_run` into
+  `ResumeParser`, `embed_resume_components`, `score_job_with_embeddings` and
+  `_get_embedding(api_key=...)`. But `_get_embedding` branches on
+  `active_backend()` first, so the key is used only when the server already
+  had one of its own.
+- The hosted app deliberately has none (pilot plan, decision 4). **So every
+  hosted user is scored with potion whatever they paste, and the key changes
+  only bullet rewriting.**
+
+The UI copy does not claim otherwise, so nothing lies today. But A7's
+comparison measures a path no hosted user can take. And the process-global
+has the shape multi-tenancy breaks: were it ever keyed on a user's key, one
+user's backend would become everyone's.
+
+**What threading it would take.** Count the readers; do not assume two (R80).
+Seven places read or depend on the backend decision, and each moves from one
+answer per process to one per run:
+
+1. `active_backend()` itself. It becomes a resolver that takes the run's key,
+   called once and stored on the `ResumeParser`.
+2. `_normalise`, which picks the calibration.
+3. `_embedding_cache`, which is keyed by dimensions.
+4. `_get_embedding`: the branch, and the model in the cache key.
+5. The resume cache's label (fixed to `active_backend()` by R97, so it
+   follows).
+6. `scripts/acceptance.py`, which reports the backend.
+7. **The board.** `jobs.score` does not record which backend produced it, and
+   `score_bands` takes quartiles over every score. `scoring_threshold` means
+   different things under the two calibrations (Q51). A friend who adds a key
+   after a keyless run would see two scales ranked as one, with no marker.
+   This needs an `embedding_model` column (additive, which `_migrate`
+   supports), and then either a rescore on key change or bands per model.
+
+**Other costs.**
+- The free-tier data sentence has to say that every job description goes to
+  Google for scoring, not only the bullets for rewriting.
+- About N+4 embedding calls per run count against the friend's quota. R97's
+  retry and breaker are what make that survivable.
+- `tests/test_embedding_backend.py` and `test_scope_seam.py` stub the global.
+- A test in the style of `test_backend_selection` should fail on any reader
+  of `EMBEDDING_BACKEND` outside the resolver.
+
+**Estimate:** about a day, on top of A7.
+
+**Leaning:** decide after Q51 is measured.
+- If potion ranks sensibly once the ceiling is understood, hosted stays
+  local-only for everyone. Scores stay comparable, and the key is honestly
+  "for rewriting".
+- If it does not, thread the key through per run, as above.
+
+## Q53. The structural fix for the local scale: anchor each resume against a fixed set of unrelated postings
+
+**Status:** **Trigger 3 fired, 2026-09-23.** R99's fit failed its held-out check (yash_pathak 12% clipped), so no fixed window can ship and this is the fix. Originally deferred by R99, which tried the cheap version first. **Build it when any trigger fires, whichever comes first:**
+1. **The window guard fires on a new resume.** A run summary reports jobs at
+   the floor or the ceiling for a resume unlike the four the window was fit on.
+   The guard exists to make this visible (R99). On the hosted app the author
+   only sees it once A8's event log carries it, so A8 has to carry it before
+   this trigger can fire for friends.
+2. **The paid tier.** Paying users are comparable across people in ways a
+   pilot is not (support, thresholds, any shared ranking), and one fixed
+   window cannot give that.
+3. **R99's fit fails its held-out check.** If one of the four profiles is not
+   covered by a window fit on the other three, no fixed window can be shipped,
+   and this is the fix rather than a later one.
+
+**The design**, planned in Q51's follow-up and kept here so it is not
+re-derived:
+- **The unrelated set:** about 60 USAJOBS announcements from series far from
+  tech, at most 4 per series. Federal works are public domain (17 U.S.C. §105).
+  Keep only the summary, duties and qualifications, to limit the federal
+  boilerplate. Fetched once by `scripts/build_null_set.py` with a USAJOBS API
+  key; `tools/assets/null_jds.json` is versioned by its SHA-256.
+- **μ and σ:** a robust median and 1.4826 × MAD. They are computed every run,
+  not cached, from the resume's vectors and the cached vectors of the
+  unrelated postings, through the same raw-score function as real jobs. No
+  cache, so no key to go stale.
+- **The scale:** `z = (raw − μ) / σ_eff`, with `σ_eff = max(σ, r·μ)` and the
+  floor reported whenever it binds. `emb% = clamp((z − Z_FLOOR) / (Z_TOP −
+  Z_FLOOR))`, where `Z_FLOOR = 0` by meaning and `Z_TOP` is fit once, then held
+  out one resume at a time.
+- **If fewer than 40 unrelated postings embed,** the baseline is unknown and
+  jobs are left unscored and counted (kind `anchor`), never scored against a
+  fallback.
+- **A `score_basis` column** marks stored scores from another scale.
+
+R99's blind comparison decides whether this is ever worth building: if
+potion's ordering loses, the null set would too.
+
+## Q54. On Gemini the threshold decides by a fifth of a point, and the jobs it drops are shown as never scored
+
+**Status:** Open, found 2026-09-23 on the real six-year resume (the one R99
+fits with; not committed), Gemini, 20 jobs. **Feeds R99's threshold
+re-measure; not fixed here.**
+
+**What happened.**
+- 19 of the 19 scored jobs landed at 29–40. One passed at **40.1**; its
+  identical twin posting at Samsara scored **39.9** and was dropped.
+- One resume was generated from 20 jobs.
+- The threshold is the same failure potion had, pointing the other way. On
+  potion it passed everything (every job ≥ 70, R98). Here it cuts through the
+  middle of a band where 0.2 points is text noise between two copies of one
+  posting. Either way, it is not grading anything.
+
+**Why it lands there.**
+- `overall = 0.7 × emb + 0.3 × kw`, and Gemini's embedding half is mapped
+  through `(0.30, 0.60)`.
+- That pair has no recorded measurement (R98: unverified, not void).
+- R24 and R49 already found Gemini scores packing into a narrow band. A hard
+  cut at a fixed number inside a narrow band is a coin flip for everything
+  near it.
+
+**The second defect, found while checking: the board says the dropped jobs
+were never scored.**
+- `_store_scores` writes back only the results that passed the threshold
+  (`orchestrator._store_scores`, fed by `analysis_results`, which
+  `AnalysisAgent` fills only above the bar).
+- So the Samsara twin, scored 39.9, has `score IS NULL` on the board.
+- `MatchBadge` then renders it **"Not scored"**, with the tooltip "analysis
+  has not scored it yet".
+- That is false: analysis scored it and discarded the number. It is the
+  unknown-is-never-a-value invariant broken in the other direction (a known
+  value shown as unknown), and a computed value that was never stored, the
+  recurring bug.
+
+**What R99's re-measure needs to take from this.**
+- A threshold is a claim about fit only on a scale that separates fit from
+  not-fit. The scale comes first.
+- Potion's comes from R99's refit. Gemini's is unverified and out of R99's
+  scope (potion only).
+- **So on Gemini the threshold stays arbitrary until its window is measured.**
+  That is a reason to show dropped jobs with their score rather than hide
+  them.
+- Whatever the threshold becomes, a job below it should be stored with its
+  score and a "below your bar" state, not as unscored.
+
+### Correction, 2026-09-23: the 29–40 band came from a broken parse
+
+The author reports the 29–40 band above came from an earlier parse of the
+real resume that was broken. With it parsed properly (after R100), the same
+Gemini pipeline scores that resume at **50–56%**. The two sets are not
+comparable.
+
+- **Withdrawn as threshold evidence:** the 29–40 band, the "19 of 19 below
+  the bar" count, and the 39.9 / 40.1 twin. They measured a resume the
+  import had mangled.
+- **Still standing:**
+  - The board defect below is a fact about the code, not about that run:
+    jobs under the threshold are stored with no score and shown as **"Not
+    scored"**.
+  - The Gemini window `(0.30, 0.60)` is still unmeasured (R98).
+  - A hard cut on a narrow band is still a coin flip for jobs near it. It
+    now needs its own measurement on a correctly parsed resume before anyone
+    draws conclusions.
+
+**One detail to reconcile.** The author describes the earlier broken parse as
+three experiences and one project, and also gives senior_real's proper shape
+as three and one. If both are right, the broken parse had the right *number*
+of entries and lost what was in them, which R100's reply-level failure would
+explain. Worth confirming before Q59 uses either shape.
+
+## Q55. A remote posting passes a country whitelist without its country ever being read
+
+**Status:** Open, found 2026-09-23 on the real six-year resume. A US-only
+profile was shown **"Argentina Remote"** and **"Remote - Ireland"**. R55's
+shape, one branch over. Not fixed here.
+
+**What was observed, and what was not.** Both postings were seen **on the
+board**, as `Argentina Remote` and `Remote - Ireland`, for a profile whose
+countries are the United States only. Neither was logged individually: the
+discovery log prints its per-job location line only for the first three jobs.
+The `(unparsed)` first reported here was a misattribution. It came from
+entries at the top of the log for other companies, not from these two.
+**Everything below comes from the code**, reproduced with these two strings,
+not read from any log line.
+
+**The mechanism: two defects, stacked:**
+1. **`location_matcher.parse_location` throws the country away from any
+   remote string.** Measured:
+   - `"Argentina Remote"`, `"Remote - Ireland"`, `"Remote - US"` and
+     `"Remote"` all parse to `is_remote=True, country=None,
+     confidence="medium"`.
+   - After parsing, Argentina and the United States are the same value.
+2. **`job_filter.evaluate` accepts a remote job before the country
+   whitelist.** The remote branch (`if loc_result.is_remote: ... return
+   decision`) returns with `location_score = 3` when `remote_ok`. The
+   `exclude_countries` and `countries` checks below it are never reached.
+
+So "remote, country unknown" reads as "remote and acceptable". R55 was a
+country that never parsed and read as a mismatch; this is a country that
+never parsed and reads as a match.
+
+**On the log itself.** For these strings the current code would log
+`Remote`, not `(unparsed)`: they parse to a truthy `LocationResult`. The only
+text `(unparsed)` is ever printed for is an empty result. An error whose
+country is invisible in the log is invisible to anyone reading only the log,
+which is one more reason the per-job line is worth printing for every
+excluded or unknown location, not just the first three jobs.
+
+**Count the paths:** `is_remote` is read for gating in exactly one place
+(`job_filter.py`). `posting_facts` reads it for display only. So there is one
+gate to fix, but the parse is shared by every reader.
+
+**The fix has to carry three states** (known in, known out, unknown), not
+flip a default:
+- A remote posting that names a country is judged on that country.
+- One that names none (`"Remote"`) is **unknown**, not accepted. It is kept,
+  badged and counted, the way A4 handles undecidable jobs. It is never
+  silently eligible.
+- The parse change is the risky half: `"Remote - US"` must come back as the
+  United States, and every rule that trims a prefix must be tested against
+  the strings the boards actually send.
+
+## Q56. JD scrape coverage from a home connection: 15 of 20, with every Vanta and Nextdoor posting empty
+
+**Status:** Open, recorded 2026-09-23 as the first **scrape** coverage number,
+for A12's egress re-check. The A0 probe measured the listing APIs only, and
+its caveat 2 says JD scraping was never probed.
+
+**The number.** On the real six-year resume, 20 jobs, residential origin:
+- **15 of 20 scraped**; **5 of 20 (25%) returned 0 characters**.
+- **Vanta, on Ashby: 3 of 3 empty.** A whole board, not a flaky page, so
+  likely the Ashby page path for that company.
+- **Nextdoor, generic scraper: 2 of 2 empty.**
+- The five were scored on the ~300-character snippet discovery found (R61:
+  kept and scored, skipped for generation), and the **undecidable badge fired
+  correctly** on all five.
+
+**What the number is for.** It is the home-origin control for the scrape
+path, the way A0's 98-slug table was for listings.
+- A12's re-check from Fly should report the same breakdown (per board, per
+  scraper, empty vs. short vs. full).
+- A drop from 75% there means the datacenter origin is being treated
+  differently.
+- The same 5 empty there means the gap is the scrapers', not the network's.
+
+**Two observations, not conclusions:**
+- The snippet-scored jobs landed at **29**, inside the 29–40 band the fully
+  read jobs occupied (Q54). At this threshold the score cannot tell a job
+  description from a 300-character snippet. The undecidable badge is what
+  keeps that honest, not the number.
+- One run of 20 is a small sample. The per-company pattern (3/3, 2/2) is
+  stronger evidence than the 75%.
+
+## Q57. `gemini-3.5-flash` answered 503 to every call of a run; the fallback chain carried it
+
+**Status:** Open, observed 2026-09-23 on one run (the real six-year resume, 20
+jobs). No failure reached the user. It is recorded because it is the first
+time the chain's head has been dead for a whole run.
+
+**What happened.** Every generation call to `GENERATION_MODELS[0]`,
+`gemini-3.5-flash`, returned 503. Each call fell through to the next model and
+succeeded, so the run completed.
+
+**What the code does with a 503, checked:**
+- `classify_api_error` calls 503 / `UNAVAILABLE` / "high demand" `transient`.
+  Its docstring says "retry, then fall through".
+- **Generation does not retry a transient error.**
+  - `retry_with_backoff` retries only quota-shaped errors and re-raises
+    anything else at once.
+  - So `_call_gemini` goes straight to the next model on a 503.
+  - Every call in this run paid one failed request to the head before doing
+    real work.
+- The docstring and the behaviour disagree. Harmless here (falling through
+  was the right move), but a docstring promising a retry that never happens
+  is a comment crediting a guard that never fires, which is R55's note.
+
+**What to check before assuming anything:**
+1. **Which model wrote the resume.** If the 503 persisted, the bullets came
+   from `gemini-3.1-flash-lite`, not flash. The run does record it. Each
+   generation result's `rung` is the model that answered
+   (`_rung_used`, fed by `last_model_used`), and the orchestrator totals
+   them into `state.json` as `backend.used`, e.g.
+   `{"gemini-3.1-flash-lite": 1}`. The console prints the same as
+   `Rungs used:`. *(Corrected the same day: this line first said the model
+   was not recorded and pointed at `last_model_used`, which is never written
+   anywhere under that name.)*
+2. **Whether it is overload or retirement.** A 503 "high demand" clears on
+   its own; a model on its way out tends to 404 (`retired`) later.
+   `scripts/check_models.py` live-probes the chain; run it again on another
+   day before changing `GENERATION_MODELS`.
+
+**Leaning:** nothing to change until it recurs. If it does, demote the head
+of the chain rather than add retries to a model that is not answering.
+
+## Q58. Without a key, two resumes for two postings differ only in skills order
+
+**Status:** Open, found 2026-09-23 on the SDE II profile's Samsara and Sigma
+resumes, `none` rung. **Belongs to A7's copy.** It is correct behaviour and
+needs saying, not fixing.
+
+**What was seen.** The two PDFs have identical bullets. The only difference is
+the order of skills within their lines.
+
+**Why that is correct on `none`.** Without a model nothing is reworded (R37's
+floor). What can change per posting:
+- which components are selected;
+- how many bullets each gets (the budget);
+- which master bullets fit that budget (`_bullets_within_lines`);
+- the order and choice of skills (`_select_skills_for_jd`).
+
+For a resume with three jobs and one project, selection always takes all of
+them (the caps are 3 and 4), so the first item never varies. The budget
+depends on counts and importance, not on the posting, so for most pairs of
+postings the second and third do not vary either. Skills order is all that
+is left.
+
+**Why it matters for the pilot.** A keyless friend running twenty postings
+gets twenty near-identical PDFs, and will reasonably conclude the tool does
+nothing. The honest description of `none` is narrower than the current copy
+("a real resume tailored *by selection*", pilot-plan A7): **for a resume with
+few components, `none` tailors almost nothing but the skills line.** Selection
+starts to matter only once there are more components than slots (the
+author's 5 jobs and 13 projects, not a friend's 3 and 1).
+
+**For A7's copy**, say plainly what changes between postings without a key:
+- which experiences and projects appear, if you have more than fit;
+- which of your own bullets are kept;
+- the order of your skills.
+
+And what does not: **the wording of any bullet.** Say it next to the key
+field, where the choice is made.
+
+## Q59. Sparse resumes get three-quarters of a page, and a single project costs every job a bullet
+
+**Status:** Resolved 2026-09-23 by R102 (parser), R103 (import; plus R100's
+correction) and R104 (budget). Found from the SDE II profile's PDFs. **R74's shape:** that R fixed a
+section that is *absent*, and this is a section that is *sparse*.
+
+### The author's read, checked
+
+The observations: the master's first role had 5 bullets and the output 3;
+ACADEMIC PROJECTS held a paper and a scholarship and the output 1 project; 3
+skill categories came out as 1. The read was that the bullet budget did this
+before any model call, so Gemini would produce the same items, reworded.
+
+- **Bullets per role: right about the count, wrong about "the same items".**
+  - `_compute_bullet_budgets` caps every experience at `exp_max = 3` before
+    any model call, so a 5-bullet role can never show more than 3, however
+    much page is left.
+  - Gemini is then asked for exactly that count. But its prompt carries all
+    five master bullets (`_build_selected_experience_text`), so it can fold
+    content from all five into three.
+  - The no-key path keeps whole master bullets in master order until the line
+    budget is spent (`_bullets_within_lines`).
+  - So the count is identical on both paths and the content is not.
+- **Projects 2 → 1: not the budget, and not selection.**
+  - Selection takes up to `max_count = 4` projects, and `_decide_project_count`
+    only trims when there are 4 or more.
+  - A two-project master cannot come out with one by either path. So the
+    parsed master had one project: the import read the paper and the
+    scholarship as one entry, or dropped one.
+- **Skills 3 → 1: not the budget either.**
+  - `max_skill_categories` is 6, and a category is dropped only if none of its
+    skills fit the line.
+  - So one category in the output means one category in the master `.tex`
+    the import wrote, or two came through empty.
+- **To tell which:** count what the imported master actually holds. That is
+  the `\resumeProjectHeading` lines and the `\textbf{…}{: …}` lines in the
+  skills section of the `.tex` under `data/master_resumes/` in that data home.
+  If the master holds 2 projects and 3 categories, this entry is wrong and
+  generation lost them. If it holds 1 and 1, the loss is in import, and R100
+  is the place to look.
+
+### What the budget does at sparse inputs (measured, not proposed)
+
+`_compute_bullet_budgets` and `_fit_budgets_to_lines`, run on the committed
+fixtures (model path; no-key path after the line fit):
+
+    shape                          model path              no-key path
+    Priya     3 exp, 0 proj        [3,3,3]      = 9        [3,3,2]           = 8
+    Rohan     3 exp, 4 proj        [2,2,2]+[2,2,2,1] = 13  [3,3,2]+[1,2,1,1] = 13
+    3 exp + 1 proj (senior_real)   [2,2,2]+[3]  = 9        [3,3,2]+[1]       = 9
+
+- **Tables measured on the author's shape.** `exp_budget_table` gives 3 jobs
+  6 bullets, and the project table gives 1 project 3. They were measured on
+  resumes with both sections (Q3: 3 + 3 = 12 bullets is a page with two to
+  spare). Each half assumes the other half is full.
+- **R74 fixed zero projects only.** With 0 projects, the job side gets the
+  whole page (3 × 3 = 9). With **1** project it does not: the job side keeps
+  its half-page 6, and the project side holds one project of at most 3.
+- **So adding a one-line project costs every job a bullet:** 3,3,3 becomes
+  2,2,2 on the model path.
+- **Both sparse shapes total 9 bullets against the page's 12.** That is about
+  three-quarters of a page, with the per-role cap of 3 preventing the lead
+  role from using the rest.
+- **The author's shape (5 jobs, 13 projects) saturates every table,** which
+  is why this never showed on his resume. Friends' resumes will look like
+  Priya's and senior_real's.
+
+The no-key path partly hides it for short bullets. Rohan's one-line bullets
+buy 3,3,2 from a 2,2,2 budget. Long bullets (two lines or more) get exactly
+the model path's count.
+
+**Not proposed yet**, per the author. The shape of a fix is visible, though:
+budget the page, not each half. That means an unused project half flows to
+the jobs the way R74 lets an absent one, and `exp_max` is bounded by what the
+page and the master hold rather than by a constant.
+
+### Findings, 2026-09-23: where the projects and skills went
+
+These were measured by rendering a synthetic master through `tex_renderer`,
+parsing it back with `latex_parser`, and running `_build_skills_section`. The
+author's resume was not used; it is private and not here.
+
+**Projects: lost in the parse of the master, not in import or the budget.**
+The renderer writes a bullet-less entry (a scholarship, an award) as a heading
+with no `\resumeItemListStart` block. The parser's project pattern requires
+that block after every heading. So:
+
+- **Bullet-less project last: it is dropped.** Paper then scholarship parses
+  to one project, the paper.
+- **Bullet-less project first: it steals the next project's bullets.** The
+  pattern runs on to the next list. Scholarship then paper parses to **one
+  project named "Merit Scholarship" carrying the paper's bullet**, and the
+  paper is gone. That is not a loss, it is a misattribution on the page a
+  friend sends out.
+- **A bullet-less experience is dropped** (a volunteer role with no bullets
+  vanished), without stealing anything.
+
+Every stage after the parse (selection, budget, generation) sees only what
+the parser returned, so no later fix can recover these.
+
+**Skills: lost in import. Generation keeps what the master has.**
+A three-category master comes out of `_build_skills_section` as three lines.
+The collapse happens before the master is written:
+
+- **Pattern reader:** skill lines without a `Label:` become one `Skills`
+  category. `Languages: … | Cloud: … | Data: …` on one line keeps only
+  `Languages`, with the other two folded into its value.
+- **Model path:** a reply with skills under one `Skills` key gives one
+  category. **A reply with skills as a list gives none.** That is a
+  regression from R100: `_unwrap` drops a wrong-typed section, which for a
+  list of skills throws the content away rather than keeping it as one
+  category.
+
+**Which of these the author's run hit** is readable from that data home's
+master `.tex` (under `data/master_resumes/`):
+- how many `\resumeProjectHeading` lines, and what names;
+- how many `\textbf{…}{: …}` lines in the skills section;
+- whether the surviving project's name matches its bullets.
+
+The R33 confirmation screen's "Skill groups" count at import time also says
+it.
+
+**The budget, restated with what it does not explain.** Model path: 3 jobs +
+1 project gives [2,2,2] + [3] = 9. 3 jobs + 0 projects gives [3,3,3] = 9. The
+no-key path's counts depend on bullet length (Rohan's one-line bullets:
+[3,3,2] + [1]). The per-job cap of 3 (`exp_max`) and the half-page tables
+explain 5 → 3 on the first role. They do not explain 2 → 1 projects or
+3 → 1 skills; the two findings above do.
+
+### Correction and verification, 2026-09-23
+
+**Skills: the author's read was wrong, and import was fine.** The master
+always had 3 skill categories. The "3 → 1" came from the generated PDF's
+skills block, which is generation's output, not import's. So the skills
+paragraph above is about the wrong stage for this resume:
+- The collapse modes it describes are real (the pattern reader's one-line
+  groups, fixed by R103; a model's skills list, R100's correction), and
+  their tests stand.
+- They were not what this run hit.
+- If a generated PDF shows fewer skill groups than its master holds, look at
+  `_build_skills_section`. It drops a category only past
+  `max_skill_categories` or when no skill fits `MAX_SKILL_LINE_CHARS`. Read
+  that resume's `.tex` before calling it fine.
+
+**The scholarship stays absent, accepted and not chased.** It was lost at
+import, before the master `.tex` was written, so R102's parser fix has
+nothing to recover. The paper survives.
+
+**Verified on the author's machine after R102–R104:**
+- `python -m unittest discover -s tests -q`: **1385 tests OK**. The 14
+  `yash_pathak` tests run there.
+- `python scripts/baseline.py verify --all`: **all three baselines match.**
+- Re-import of the real six-year resume: **3 experiences, 1 project, 3 skill
+  groups.**
+
+## Q60. More than one free provider: what Groq or Cerebras on the `openai` rung would need (scope only)
+
+**Status:** Open, scoped 2026-09-23, not built. Planned as pilot item **A7b**.
+The reason: the author will run out of Gemini free quota testing, and so will
+friends. One provider's daily cap is then the pilot's ceiling.
+
+**What is already there.** `tools/generation/llm_backends.py` has one
+`/chat/completions` client, and the `openai` and `ollama` rungs are that
+client with different base URLs. Groq and Cerebras both serve
+OpenAI-compatible endpoints, so the transport is done.
+
+**A defect found while scoping.** `env_openai_key()` accepts `OPENAI_API_KEY`,
+`GROQ_API_KEY`, `OPENROUTER_API_KEY`, `TOGETHER_API_KEY` or
+`DEEPSEEK_API_KEY`. But `OPENAI_BASE_URL` (`https://api.openai.com/v1`) and
+`OPENAI_MODEL` (`gpt-4o-mini`) are hardcoded literals. **A Groq key alone is
+sent to OpenAI's URL asking for OpenAI's model**, and fails. The five names
+are read and the provider they imply is not: a key list with no routing.
+Fixing this is the first line of the work below.
+
+**What it would need:**
+
+1. **A provider inside the `openai` rung, not five new rungs.** A small table
+   maps provider to base URL, default model and key variable
+   (`openai / groq / cerebras / openrouter / …`), and the key's provider picks
+   the row. `LADDER` stays four rungs. Whatever records what wrote a resume
+   (R79's `rung`, `backend.used`) must record `provider:model`, or two
+   providers become one label.
+2. **The cache key (R45 / R80).** `LLMCache` keys on `backend|model|prompt`,
+   and for this rung `model` is `OPENAI_MODEL`. Two providers serving the same
+   model name (Llama 3.3 70B is on both Groq and Cerebras, with different
+   serving stacks) would share entries: R80 exactly, one level down again.
+   **The provider goes in the key.** Ask the CLAUDE.md question at build time:
+   what does the key assume is interchangeable, and is that still true?
+3. **Falling back across providers on quota.** Today a spent Gemini quota
+   falls to the verbatim floor. It never tries another rung. "Use Groq when
+   Gemini is out" is new behaviour: a cross-rung fallback with its own
+   attribution per resume, and a decision about whether one run may mix
+   writers.
+4. **The key UI.** A7's single Gemini field becomes a provider choice plus a
+   key.
+   - One key per provider in `localStorage`, sent only in POST bodies.
+   - A7's test-this-key call generalised to a one-token chat completion per
+     provider.
+   - **A data-use sentence per provider**, from each provider's current terms,
+     read at build time. Free tiers differ on training use, so one sentence
+     for all would be false for some.
+   - R101's `gemini_key_problem` generalises to every provider's key.
+5. **The repair loop.** `_chat_tailor` returns whatever the model sent: no
+   validation-repair attempt, unlike `_gemini_tailor`. Found on Ollama and
+   still true. Faster free models on this path would ship their first draft.
+   It needs the same one narrow repair before these providers carry real
+   output.
+6. **Measurement.** Every quality number in this log was taken on Gemini.
+   `acceptance.py` runs "both supported rungs". A provider that becomes
+   supported is a new row, and adding it is an explicit decision about the
+   frozen list, not a quiet addition.
+
+**Not affected:** scoring. Embeddings are potion or Gemini (Q52), and these
+providers do not change that.
+
+**Rough size:** about a day, including the routing fix, provider-aware cache
+key, UI and repair loop, plus a measurement pass per provider. Cross-provider
+fallback (item 3) is the part that could double it, and can ship second.
+
+## Q61. The free tier, measured: flash is 20 requests a day, and embeddings are bound by tokens, not requests
+
+**Status:** Open, recorded 2026-09-23 from the author's AI Studio rate-limit
+page (used / limit, on his key, that day). **These replace every guess in the
+pilot plan**, which said to read the page at build time and never did.
+
+    model                    RPM        TPM              RPD
+    Gemini 3.5 Flash         2 / 5      6.55K / 250K     8 / 20
+    Gemini Embedding 1      31 / 100   29.91K / 30K     21 / 1K
+    Gemini 3.1 Flash Lite    2 / 15     6.55K / 250K     8 / 500
+    Gemini 3.5 Flash Lite    1 / 15     1.89K / 250K     3 / 500
+
+Google has cut free-tier limits before. Re-read the page before relying on
+any row, and date whatever gets written down.
+
+### 1. Flash is 20 requests a day, and it is what every measurement used
+
+- **Per run:** each generated resume is one flash call, or two when the
+  repair fires. Import is one more.
+  - A UI run (`start_run(max_resumes=3)`) spends about 3–7.
+  - A CLI run at the profile default (`max_jobs_to_generate = 10`) spends
+    about 10–21.
+  - **One CLI run, or three UI runs, can spend a friend's whole day of
+    flash.**
+- **After that, generation drops to `gemini-3.1-flash-lite`**, the next
+  entry in `GENERATION_MODELS`, at 500 a day.
+  - It is recorded: `rung` per resume and `backend.used` in `state.json`,
+    plus the console's `Rungs used:`. **Neither UI shows it**, so from a
+    friend's side the drop is silent.
+  - Import rides the same chain. A flash-lite reply is what R100's importer
+    rejected, and this is the ordinary way a friend ends up on flash-lite.
+- **Measurement consequence.** Every quality number in this log was taken on
+  flash. A friend's resume written after the 20th call is not a flash
+  resume. Read quality feedback from the pilot against `backend.used`, not
+  against "Gemini".
+- **For A7b:** 20 flash calls a day per friend is 3–6 tailored resumes. That
+  is not much of a product, and it is the strongest argument for a second
+  provider.
+
+**A correction to one inference, recorded so it is not carried forward.**
+The flash 503s (Q57) are probably *not* this cap. Gemini reports an exhausted
+quota as **429 RESOURCE_EXHAUSTED**. **503 UNAVAILABLE** means capacity or
+overload. Q57's two hypotheses stand (overload, or a model on its way out);
+"daily quota" would have shown as 429s. If a log from that run kept the
+status line, it settles this.
+
+### 2. Embeddings are bound by tokens per minute, not requests
+
+29.91K of 30K TPM used, against 31 of 100 RPM. A job description is embedded
+from up to 8,000 characters (about 2K tokens), so **15–30 descriptions spend
+a minute's token budget**. A 40-job scoring burst is 2–3 minutes of it, sent
+in seconds. The first comparison's 34 failures (R97) fit this better than a
+request limit. Not proven: that run predates R97's classification. A re-run
+would say `quota`, and it cannot tell TPM from RPM either (below).
+
+This only bites where Gemini embeddings run: the CLI and local runs with a
+key in the environment. Hosted friends score on potion (Q52) and never touch
+this limit.
+
+### 3. The backoff treats a minute limit as it treats a day limit, and the breaker makes that worse
+
+Checked in the code. `classify_api_error` sees `429` / `RESOURCE_EXHAUSTED`
+and returns `quota` for all three limits alike (RPM, TPM, RPD).
+`_get_embedding` retries them identically: 2, 4, 8, 16 s with jitter, never
+shorter than a "retry in Ns" the error states (R97).
+
+- **Without a retry hint,** the whole schedule waits about 15–45 s, which can
+  be shorter than the one-minute token window. The call gives up while the
+  window is still full.
+- **R97's breaker then misreads it.** After two calls exhaust their retries
+  on `quota`, the run stops retrying, on the premise that exhausted-after-
+  retries means a spent daily cap. **A per-minute token limit hit by a burst
+  is exactly what trips it,** so every remaining job fails fast, when all of
+  them would succeed a minute later. The breaker was written for RPD (20 a
+  day) and fires on TPM (30K a minute).
+
+**What would fix it (not built):**
+- Read *which* quota the 429 names. Gemini's error detail identifies the
+  quota (per-minute or per-day). The exact field has to be read from a real
+  response before anything relies on it.
+- A minute limit waits out the window and never counts toward the breaker.
+  A day limit trips the breaker at once, with no retries.
+- Better still, pace embeddings by tokens (a sliding one-minute window under
+  30K) so a burst never reaches the wall. Scoring 40 jobs then takes
+  2–3 minutes, openly, instead of failing half of them.
+
+**Priority:** after the invite, since friends score on potion. It must come
+before any Gemini-embedding measurement is trusted again, and before Q53's
+null set embeds 60 more descriptions per resume on Gemini.
 
 ---
 

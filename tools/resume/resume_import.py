@@ -182,6 +182,80 @@ def _tidy(text: str) -> str:
 
 # --- schema extraction -------------------------------------------------------
 
+SECTIONS = ("contact", "education", "experiences", "projects", "skills")
+SECTION_TYPES = {"contact": dict, "education": list, "experiences": list,
+                 "projects": list, "skills": dict}
+
+
+def _shape(reply) -> str:
+    """
+    The structure of a model reply, never its content.
+
+    What a log may say about a reply to a resume: types, key names and counts.
+    Not the values, which are someone's name, employers and phone number.
+    """
+    if isinstance(reply, dict):
+        parts = []
+        for key, value in list(reply.items())[:8]:
+            if isinstance(value, (list, dict)):
+                parts.append(f"{key}: {type(value).__name__}[{len(value)}]")
+            else:
+                parts.append(f"{key}: {type(value).__name__}")
+        return "{" + ", ".join(parts) + "}"
+    if isinstance(reply, list):
+        return f"list[{len(reply)}]"
+    return type(reply).__name__
+
+
+def _unwrap(reply):
+    """
+    The resume object inside a reply, when the model wrapped it.
+
+    Structure only, never content: a one-item list, a single key holding the
+    object (`{"resume": {...}}`), and capitalised section names. Returns None
+    when no section the prompt asked for can be found.
+    """
+    if isinstance(reply, list) and len(reply) == 1:
+        reply = reply[0]
+    if not isinstance(reply, dict):
+        return None
+    if len(reply) == 1:
+        (only,) = reply.values()
+        if isinstance(only, dict) and not any(k.lower() in SECTIONS for k in reply):
+            reply = only
+    lowered = {str(k).lower(): v for k, v in reply.items()}
+
+    # Skills as a plain list of strings is the same content in the other
+    # container, and becomes one category. R100 dropped it as the wrong type,
+    # which threw away every skill a model returned that way.
+    skills = lowered.get("skills")
+    if isinstance(skills, list) and skills and all(isinstance(x, str) for x in skills):
+        lowered["skills"] = {"Skills": ", ".join(x.strip() for x in skills if x.strip())}
+
+    # One group holding labelled groups is the pattern reader's one-line case
+    # arriving through the model (R103): the same rule, the same bar.
+    skills = lowered.get("skills")
+    if isinstance(skills, dict) and len(skills) == 1:
+        (value,) = skills.values()
+        if isinstance(value, str):
+            pieces = _skill_segments(value.strip())
+            if len(pieces) > 1:
+                lowered["skills"] = _heuristic_skills(pieces)
+
+    # A section of the wrong type is dropped, not trusted and not fatal: a
+    # string where the prompt asked for a list would fail in `_normalise`.
+    # But never silently: every one dropped is named, and the import says so.
+    kept = {k: lowered[k] for k in SECTIONS
+            if k in lowered and isinstance(lowered[k], SECTION_TYPES[k])}
+    dropped = [k for k in SECTIONS
+               if k in lowered and lowered[k] and k not in kept]
+    if not any(kept.values()):
+        return None
+    if dropped:
+        kept["_dropped"] = dropped
+    return kept
+
+
 def to_schema(text: str, agent=None) -> dict:
     """
     A structured resume from raw text.
@@ -190,19 +264,24 @@ def to_schema(text: str, agent=None) -> dict:
     generation agent, so extraction rides the same backend ladder as bullet
     rewriting (R37) and inherits its caching and fallbacks. Without one, or
     when the model fails, the heuristic floor runs instead.
+
+    **A reply is kept for what it contains, section by section (R100).** It
+    used to be kept only when it had a truthy `contact` block, and discarded
+    whole otherwise, experiences and all. A working key's model answered, its
+    reply lacked that one block, and a six-year resume imported as zero
+    experiences. Contact is the section the pattern reader is actually good
+    at, so a missing block is filled from it and marked for review. A reply is
+    discarded only when it holds no section at all.
+
+    The result carries `_extraction`: `{"read_by": "model" | "pattern", "why":
+    str | None}`. Both UIs show `why` rather than guessing a cause.
     """
+    why = None
     if agent is not None:
+        answered, parsed = False, None
         try:
             parsed = agent(EXTRACTION_PROMPT + text[:24000])
-            if isinstance(parsed, dict) and parsed.get("contact"):
-                return _normalise(parsed)
-            if parsed is None:
-                # The deliberate floor: no model is configured at all. Not a
-                # problem, and saying "failed" about it would be wrong.
-                logger.info("No model configured; reading the resume by pattern")
-            else:
-                logger.warning("Extraction returned no contact block; "
-                               "reading the resume by pattern instead")
+            answered = True
         except Exception as exc:
             # A rung that should have answered did not. Distinct from having
             # no rung, and the distinction is the whole of R47: this is the
@@ -211,8 +290,57 @@ def to_schema(text: str, agent=None) -> dict:
             logger.warning(f"Resume extraction failed — {exc}. "
                            "Reading the resume by pattern instead, which will "
                            "find less. Fixing the cause is worth it.")
+            from config import ApiKeyProblem
+            if isinstance(exc, ApiKeyProblem):
+                why = f"{exc} The resume was read by pattern instead."
+            else:
+                why = (f"The model could not be reached ({type(exc).__name__}: "
+                       f"{str(exc)[:160]}), so the resume was read by pattern "
+                       "instead.")
 
-    return _normalise(heuristic_schema(text))
+        # Judged outside the `try`: a reply that arrived and was unusable is
+        # not a model that could not be reached, and must not be reported as
+        # one.
+        if answered and parsed is None:
+            # The deliberate floor: no model is configured at all. Not a
+            # problem, and saying "failed" about it would be wrong.
+            logger.info("No model configured; reading the resume by pattern")
+            why = "No model is configured, so the resume was read by pattern."
+        elif answered:
+            schema = _unwrap(parsed)
+            if schema is not None:
+                return _from_model(schema, text)
+            why = ("A model answered, but its reply held none of the sections "
+                   f"asked for (it looked like {_shape(parsed)}), so the resume "
+                   "was read by pattern instead.")
+            logger.warning(f"Extraction reply unusable, shape {_shape(parsed)}; "
+                           "reading the resume by pattern instead")
+
+    out = _normalise(heuristic_schema(text))
+    out["_extraction"] = {"read_by": "pattern", "why": why}
+    return out
+
+
+def _from_model(schema: dict, text: str) -> dict:
+    """A usable reply, with any missing contact block read by pattern."""
+    dropped = schema.pop("_dropped", [])
+    out = _normalise(schema)
+    notes = []
+    if dropped:
+        notes.append("The model's reply had " + ", ".join(dropped) + " in a shape "
+                     "that could not be read, so " + ("it was" if len(dropped) == 1
+                     else "they were") + " not imported. Add "
+                     + ("it" if len(dropped) == 1 else "them") + " below.")
+        logger.warning(f"Extraction reply sections in an unreadable shape: {dropped}")
+    if not any((out["contact"] or {}).values()):
+        floor = heuristic_schema(text).get("contact") or {}
+        out["contact"] = dict(floor)
+        notes.append("The model's reply had no contact details, so they were "
+                     "read by pattern. Check them.")
+        logger.warning("Extraction reply had no contact block; "
+                       "contact read by pattern, the rest kept from the model")
+    out["_extraction"] = {"read_by": "model", "why": " ".join(notes) or None}
+    return out
 
 
 def _normalise(schema: dict) -> dict:
@@ -234,6 +362,8 @@ def _normalise(schema: dict) -> dict:
     unparsed = schema.get("_unparsed")
     if unparsed:
         out["_unparsed"] = unparsed
+    if schema.get("_extraction"):
+        out["_extraction"] = schema["_extraction"]
     for section in ("experiences", "projects"):
         for entry in out[section]:
             entry["bullets"] = [b for b in (entry.get("bullets") or []) if b]
@@ -478,6 +608,27 @@ def _heuristic_education(lines) -> list:
 # become one.
 _SKILL_CATEGORY = re.compile(r"^([A-Za-z][A-Za-z0-9 &/+-]{0,28}):\s*(.+)$")
 
+# Separators a PDF leaves between skill groups that were laid out on one line.
+_SKILL_GROUP_SEPARATOR = re.compile(r"\s*[|•·;]\s*")
+
+
+def _skill_segments(line: str) -> list:
+    """
+    One skills line as the labelled groups it holds (R103).
+
+    `Languages: Python, Go | Cloud: AWS | Data: Kafka` is three groups on one
+    line, and was read as one: `Languages`, holding the other two labels as
+    values. It is split only on an explicit separator, and **only when every
+    piece carries its own label.** `Python | Go | AWS` is one list, not three
+    groups, and label-looking text with no separator between it
+    (`Languages: Python, Go Cloud: AWS`) is left alone. Is "Go Cloud" a skill?
+    That is content, and the confirmation screen is where a person decides it.
+    """
+    pieces = [p for p in _SKILL_GROUP_SEPARATOR.split(line) if p.strip()]
+    if len(pieces) > 1 and all(_SKILL_CATEGORY.match(p.strip()) for p in pieces):
+        return [p.strip() for p in pieces]
+    return [line]
+
 
 def _heuristic_skills(lines) -> dict:
     """
@@ -504,10 +655,9 @@ def _heuristic_skills(lines) -> dict:
     """
     categories, current = {}, None
 
-    for line in (lines or []):
-        line = line.strip()
-        if not line:
-            continue
+    segments = [seg for raw in (lines or []) for seg in _skill_segments(raw.strip())
+                if raw.strip()]
+    for line in segments:
         match = _SKILL_CATEGORY.match(line)
         if match:
             label, values = match.group(1).strip(), match.group(2).strip()

@@ -77,6 +77,10 @@ export function ImportConfirm({
   const leftovers = Object.entries(draft._unparsed ?? {}).filter(
     ([, lines]) => lines && lines.length,
   )
+  // What actually happened, as recorded by the importer (R100). This used to
+  // be a guess, "most likely because no model was available", printed even
+  // when a model had answered and its reply had been thrown away.
+  const why = draft._extraction?.why ?? null
 
   function setContact(field: string, value: string) {
     setDraft((d) => ({ ...d, contact: { ...(d.contact ?? {}), [field]: value } }))
@@ -167,16 +171,27 @@ export function ImportConfirm({
         <Stat label="Skill groups" value={Object.keys(skillsFromRows()).length} />
       </div>
 
+      {why && leftovers.length === 0 && (
+        <Alert>
+          <AlertTriangle className="size-4" />
+          <AlertTitle>How this was read</AlertTitle>
+          <AlertDescription>
+            <p>{why}</p>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {leftovers.length > 0 && (
         <Alert>
           <AlertTriangle className="size-4" />
           <AlertTitle>Some of this could not be split into entries</AlertTitle>
           <AlertDescription className="space-y-3">
+            {why && <p>{why}</p>}
             <p>
-              Most likely because no model was available to read it. It is
-              below exactly as it appeared. Use <strong>Add an experience</strong>
-              or <strong>Add a project</strong> further down to enter what you
-              want kept — copying from here — and delete anything you do not.
+              It is below exactly as it appeared. Use{' '}
+              <strong>Add an experience</strong> or <strong>Add a project</strong>{' '}
+              further down to enter what you want kept — copying from here — and
+              delete anything you do not.
             </p>
             {leftovers.map(([section, lines]) => (
               <div key={section} className="w-full">

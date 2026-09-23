@@ -281,10 +281,9 @@ def complete_json(prompt: str, gemini_key: str = None,
         return None
 
     if choice == "gemini":
-        from google import genai
-        from config import GENERATION_MODELS
+        from config import GENERATION_MODELS, gemini_client
 
-        client = genai.Client(api_key=key)
+        client = gemini_client(key)
         last_error = None
         for model in GENERATION_MODELS:
             try:

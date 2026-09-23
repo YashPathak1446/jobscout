@@ -58,6 +58,10 @@ class AnalysisAgent:
         logger.info(f"Resume: {self.resume_path.name}")
         logger.info(f"Mock embeddings: {mock_embeddings}")
         
+        # Asked-for mock is a test mode; mock the parser fell back to is a
+        # failure. `scoring_summary` reports only the second.
+        self.mock_requested = mock_embeddings
+
         # Parse resume and compute embeddings
         self.resume_parser = ResumeParser(
             str(self.resume_path),
@@ -90,6 +94,10 @@ class AnalysisAgent:
         logger.info(f"📊 Analyzing {len(enriched_jobs)} jobs...")
         
         results = []
+        unscored = 0
+        # The window guard (R99): how many scored jobs the raw window clipped.
+        # Mock vectors have their own fixed scale and are not counted.
+        window = self._window_guard()
         threshold = self.profile.agent_preferences.scoring_threshold
         
         for i, job in enumerate(enriched_jobs, 1):
@@ -114,9 +122,16 @@ class AnalysisAgent:
                 
                 if not score:
                     logger.warning(f"   ⚠️  Scoring failed, skipping")
+                    unscored += 1
                     continue
                 
                 logger.info(f"   Score: {score.overall_score:.1f}%")
+                if window is not None:
+                    window["scored"] += 1
+                    if score.raw_similarity <= window["floor"]:
+                        window["at_floor"] += 1
+                    elif score.raw_similarity >= window["ceiling"]:
+                        window["at_ceiling"] += 1
                 
                 # Check threshold
                 if score.overall_score < threshold:
@@ -171,12 +186,52 @@ class AnalysisAgent:
             on_progress(len(enriched_jobs), len(enriched_jobs), "done")
 
         logger.info(f"✅ Analysis complete: {len(results)} jobs passed threshold")
+
+        # A job that could not be scored is dropped here, so the count and the
+        # reason are the only record it existed (R97).
+        self.scoring = self.scoring_summary(unscored, window)
+        if unscored or self.scoring["embeddings"]["failed"]:
+            logger.warning(f"⚠️  {unscored} of {len(enriched_jobs)} jobs could not be "
+                           f"scored — {self.scoring['description']}")
         
         # Sort by score (highest first)
         results.sort(key=lambda x: x['score']['overall'], reverse=True)
         
         return results
     
+    def _window_guard(self):
+        """A fresh clip counter for this run, or None when scores are mock."""
+        if getattr(self.resume_parser, "using_mock_embeddings", False):
+            return None
+        from tools.resume.embedding_scorer import active_backend, scoring_window
+
+        backend, model, _ = active_backend()
+        floor, ceiling = scoring_window()
+        return {"backend": backend, "model": model, "floor": floor,
+                "ceiling": ceiling, "scored": 0, "at_floor": 0, "at_ceiling": 0}
+
+    def scoring_summary(self, unscored: int, window=None) -> dict:
+        """
+        What the run's embeddings cost it: jobs left unscored, and why.
+
+        `{"unscored": n, "mock": bool, "embeddings": summarise_report(...),
+        "description": str, "window": {...} | None}`. `window` counts the
+        scored jobs the raw window clipped (R99); None for mock scores. The orchestrator writes it into the run's state,
+        final report and summary.
+        """
+        from tools.resume.embedding_scorer import describe_report, summarise_report
+
+        report = getattr(self.resume_parser, "embedding_report", [])
+        embeddings = summarise_report(report)
+        return {
+            "unscored": unscored,
+            "mock": (bool(getattr(self.resume_parser, "using_mock_embeddings", False))
+                     and not getattr(self, "mock_requested", False)),
+            "embeddings": embeddings,
+            "description": describe_report(embeddings),
+            "window": window,
+        }
+
     def _canonicalize_selected_components(self, selected: Dict[str, List[str]]) -> Dict[str, List[str]]:
         """
         Resolve selected component aliases into canonical ResumeParser IDs.

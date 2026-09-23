@@ -75,6 +75,9 @@ export type ResumeSchema = {
    *  only when no model was available; showing it is the difference between
    *  "we found one job" and "we found one job and could not read this part". */
   _unparsed?: Record<string, string[]>
+  /** Who read the resume and, when it matters, why (R100). `why` is the
+   *  recorded cause; the screen shows it instead of guessing one. */
+  _extraction?: { read_by: 'model' | 'pattern'; why: string | null }
 }
 
 export type Extraction =
@@ -105,6 +108,9 @@ export type Backend = {
   backend: string
   forced: boolean
   description: string
+  /** Why the key as entered cannot be sent (R101), or null. When set, the
+   *  key was ignored for detection, so the rung shown is what runs instead. */
+  key_problem: string | null
   available: Record<string, boolean>
 }
 

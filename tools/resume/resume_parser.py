@@ -65,6 +65,9 @@ class ResumeParser:
         self.resume_path = Path(resume_path)
         self.api_key = api_key
         self.user_id = user_id
+        # Every embedding call this parser makes that failed or needed a
+        # retry, resume and jobs alike (R97). Read by AnalysisAgent's tally.
+        self.embedding_report: list = []
         
         if not self.resume_path.exists():
             raise FileNotFoundError(f"Resume not found: {resume_path}")
@@ -136,11 +139,16 @@ class ResumeParser:
         # Check cache first — if the master resume hasn't changed,
         # reuse the cached embeddings instead of making 25 API calls.
         from ..cache.embedding_cache import EmbeddingCache, cache_dir
-        from config import EMBEDDING_MODEL
+        from .embedding_scorer import active_backend
 
         # Model is passed in so a switch invalidates the cache instead of
-        # silently mixing two vector spaces (R11).
-        cache = EmbeddingCache(cache_dir(self.user_id), model=EMBEDDING_MODEL)
+        # silently mixing two vector spaces (R11). It is the model that will
+        # actually embed, not `config.EMBEDDING_MODEL`: that constant names
+        # Gemini whichever backend is active, so potion's 256-wide vectors
+        # were saved under Gemini's name and served to the next Gemini run as
+        # its own (R97). The key named a model — just not the one that wrote
+        # the vectors.
+        cache = EmbeddingCache(cache_dir(self.user_id), model=active_backend()[1])
         cached = cache.get(self.resume_path)
 
         if cached and cached.get('embeddings'):
@@ -166,9 +174,17 @@ class ResumeParser:
         logger.info("🔢 Computing embeddings for resume components...")
         
         self.component_embeddings: Dict[str, List[float]] = embed_resume_components(
-            self.parsed_resume, api_key=self.api_key, user_id=self.user_id
+            self.parsed_resume, api_key=self.api_key, user_id=self.user_id,
+            report=self.embedding_report,
         )
         
+        # A component that failed to embed is left out of every score this
+        # run, so say which way it failed rather than score quietly on less.
+        if self.embedding_report:
+            from .embedding_scorer import describe_report, summarise_report
+            logger.warning("⚠️  Resume embeddings: " +
+                           describe_report(summarise_report(self.embedding_report)))
+
         # Fall back to mock if real embeddings failed
         if len(self.component_embeddings) == 0:
             logger.warning("⚠️  Real embeddings failed, falling back to mock")
@@ -267,6 +283,7 @@ class ResumeParser:
                 max_projects=5,
                 api_key=self.api_key,
                 user_id=self.user_id,
+                report=self.embedding_report,
             )
         
         # Update the job metadata

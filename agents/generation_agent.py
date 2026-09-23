@@ -36,7 +36,9 @@ from tools.cache.llm_cache import LLMCache
 from config import (
     GENERATION_MODELS,
     LLM_CACHE_ENABLED,
+    ApiKeyProblem,
     classify_api_error,
+    gemini_client,
     llm_cache_dir,
     resolve_api_key,
 )
@@ -59,11 +61,47 @@ logging.basicConfig(level=logging.INFO)
 # 2N lines of page, and that is the quantity the no-model rung has to match.
 MODEL_PATH_LINES_PER_BULLET = 2
 
+# Bullets a one-page resume holds when both sections are full (Q3: 3 jobs and
+# 3 projects at 12, with two lines to spare). The page, budgeted before the
+# sections share it (R104).
+PAGE_BULLETS = 12
+
 # Where each rendered line ends, in characters, from the zone table
 # `bullet_fit` and `validation` share. A line holds about 106 characters at
 # this template's margins, which is what the last entry extrapolates from.
 _LINE_ENDS = (110, 213, 316)
 _CHARS_PER_LINE = 106
+
+
+def _degraded_reason(exc: Exception) -> str:
+    """
+    Why the bullets were not rewritten, naming whose fault it was (R101).
+
+    Everything raised inside `_gemini_tailor` used to be reported as "Gemini
+    could not be reached": a prompt-builder bug, a validator crash, and a key
+    httpx could not encode (an em dash copied in with it) all looked like an
+    outage. The user was told to wait for Google, when the fix was theirs or
+    ours. Three answers now, because they send the reader to three different
+    places.
+    """
+    if isinstance(exc, ApiKeyProblem):
+        return f"Your Gemini key was not used. {exc}"
+
+    # Told apart by where the exception class lives, so no transport library
+    # has to be imported (httpx is google-genai's dependency, not this one's).
+    module = type(exc).__module__ or ""
+    transport = (isinstance(exc, (ConnectionError, TimeoutError))
+                 or module.startswith(("httpx", "httpcore")))
+    from_google = module.startswith("google")
+
+    if (transport or isinstance(exc, RateLimitError)
+            or classify_api_error(exc) in ("quota", "transient", "retired")):
+        return f"Gemini could not be reached ({exc})"
+    if from_google:
+        return f"Gemini refused the request ({exc})"
+    return (f"JobScout failed while preparing or checking this resume "
+            f"({type(exc).__name__}: {exc}). This is a bug in JobScout, "
+            f"not a Gemini outage.")
 
 
 class GenerationAgent:
@@ -585,6 +623,12 @@ class GenerationAgent:
                     if component.get(field) != truth:
                         component[field] = truth
                         restored += 1
+                # An entry the master gives no bullets gets none here either
+                # (R102). Whatever a model wrote under "Merit Scholarship" had
+                # no source, so it is invention by construction.
+                if not source.bullets and component.get("bullets"):
+                    component["bullets"] = []
+                    restored += 1
 
         if restored:
             logger.info(f"   🔒 Restored {restored} factual field(s) from your resume")
@@ -754,37 +798,61 @@ class GenerationAgent:
         num_exp = len(selected_exp_ids)
         num_proj = len(selected_proj_ids)
 
-        # --- Global bullet budgets from component counts ---
+        # --- The page, then the sections (Q59, R104) ---
+        #
+        # The tables below were measured on resumes with both sections full
+        # (Q3: 3 jobs + 3 projects = 12 bullets, a page with two to spare), so
+        # each one describes *half* a page. R74 let the jobs take the page
+        # when there were no projects, and only then. With one project, the
+        # jobs kept their half (6) and the project its three, so adding a
+        # one-line project cost every job a bullet, and a sparse resume
+        # (3 jobs + 1 project, what most friends have) got 9 bullets of 12.
+        #
+        # Now the page is budgeted first and the sections share it:
+        #   - every component is capped by what its master actually holds, and
+        #     by the per-component maximum validation already enforces. A
+        #     2-bullet role is never asked for 3 (the rest would be invented),
+        #     and a 12-bullet role cannot fill the page on its own;
+        #   - the page is the larger of the measured 12 and what the tables
+        #     give a full resume, so a resume that fills both halves is
+        #     budgeted exactly as before;
+        #   - each section keeps its table share up to its caps, and what one
+        #     section cannot use flows to the other: jobs first.
+        from tools.generation.validation import (EXPERIENCE_MAX_BULLETS,
+                                                 PROJECT_MAX_BULLETS)
+
         exp_budget_table = {1: 3, 2: 5, 3: 6, 4: 7}
         proj_budget_table = {1: 3, 2: 5, 3: 6, 4: 7}
 
-        total_exp_budget = exp_budget_table.get(num_exp, num_exp * 2)
-        total_proj_budget = proj_budget_table.get(num_proj, num_proj * 2)
+        exp_share = exp_budget_table.get(num_exp, num_exp * 2) if num_exp else 0
+        proj_share = proj_budget_table.get(num_proj, num_proj * 2) if num_proj else 0
 
-        exp_max = 3
-        proj_max = 2 if num_proj >= 4 else 3
+        proj_max = 2 if num_proj >= 4 else PROJECT_MAX_BULLETS
 
-        # A page is a page whatever sections are on it.
-        #
-        # These two tables were measured against resumes that have both
-        # sections (Q3: 3 exp + 3 proj = 12 bullets, two spare), so each one
-        # describes half a page. A resume with no projects therefore spent the
-        # projects half on nothing: Priya's three jobs shared six bullets and
-        # the bottom third of the page stayed blank.
-        #
-        # Eighth instance of the rule. A section the resume does not have is
-        # unknown evidence, not a reason to shrink the section it does have —
-        # the same arithmetic that scored her at 1.8% by dividing three jobs
-        # by a cap of five. When one side is missing the other gets the page,
-        # bounded by what a single component may hold and, below, by how many
-        # bullets the master actually contains.
-        if not num_proj:
-            total_exp_budget = num_exp * exp_max
-        elif not num_exp:
-            total_proj_budget = num_proj * proj_max
+        def caps(ids, ceiling):
+            out = {}
+            for cid in ids:
+                held = self._master_bullet_count(cid)
+                # Unknown is not zero: an id the parser cannot find keeps the
+                # ceiling, and validation reports the missing component.
+                out[cid] = ceiling if held is None else min(held, ceiling)
+            return out
+
+        exp_caps = caps(selected_exp_ids, EXPERIENCE_MAX_BULLETS)
+        proj_caps = caps(selected_proj_ids, proj_max)
+
+        page = min(max(PAGE_BULLETS, exp_share + proj_share),
+                   sum(exp_caps.values()) + sum(proj_caps.values()))
+        total_exp_budget = min(exp_share, sum(exp_caps.values()))
+        total_proj_budget = min(proj_share, sum(proj_caps.values()))
+        spare = page - total_exp_budget - total_proj_budget
+        grow = min(spare, sum(exp_caps.values()) - total_exp_budget)
+        total_exp_budget += max(grow, 0)
+        spare -= max(grow, 0)
+        total_proj_budget += max(min(spare, sum(proj_caps.values()) - total_proj_budget), 0)
 
         # Per-component caps based on importance
-        # High importance → can get up to 3 bullets
+        # High importance → can get up to its cap
         # Low importance → capped at 1 bullet regardless of budget
         exp_budgets = self._allocate_with_importance(
             component_ids=selected_exp_ids,
@@ -792,7 +860,8 @@ class GenerationAgent:
             importance=self._promote_on_evidence(
                 selected_exp_ids, exp_importance, conditional_scores),
             total_budget=total_exp_budget,
-            global_max=exp_max,
+            global_max=EXPERIENCE_MAX_BULLETS,
+            caps=exp_caps,
         )
 
         proj_budgets = self._allocate_with_importance(
@@ -802,6 +871,7 @@ class GenerationAgent:
                 selected_proj_ids, proj_importance, conditional_scores),
             total_budget=total_proj_budget,
             global_max=proj_max,
+            caps=proj_caps,
         )
 
         actual_exp_total = sum(exp_budgets.values())
@@ -988,6 +1058,7 @@ class GenerationAgent:
         importance: Dict[str, str],
         total_budget: int,
         global_max: int,
+        caps: Dict[str, int] = None,
     ) -> Dict[str, int]:
         """
         Allocate bullets using blended importance + JD fit priority.
@@ -1022,8 +1093,11 @@ class GenerationAgent:
             jd_score = scores.get(cid, 0.0)
             return imp_weight + jd_score
 
-        # Start everyone at 1
-        allocation = {cid: 1 for cid in component_ids}
+        # Start everyone at 1, except an entry the master gives no bullets to
+        # (a scholarship, an award). It gets 0 and keeps it: a budget of 1
+        # there is an instruction to write a bullet from nothing (R102).
+        empty = {cid for cid in component_ids if self._master_bullet_count(cid) == 0}
+        allocation = {cid: (0 if cid in empty else 1) for cid in component_ids}
 
         # Low-importance components are frozen at 1 — no extras
         eligible = [
@@ -1031,8 +1105,9 @@ class GenerationAgent:
             if importance.get(cid, "medium") != "low"
         ]
 
-        # Remaining budget after giving 1 to everyone
-        remaining = total_budget - len(component_ids)
+        # Remaining budget after giving 1 to everyone who can have one
+        remaining = total_budget - sum(allocation.values())
+        eligible = [cid for cid in eligible if cid not in empty]
 
         # Sort eligible by blended priority
         ranked_eligible = sorted(eligible, key=blended_priority, reverse=True)
@@ -1043,7 +1118,7 @@ class GenerationAgent:
             for cid in ranked_eligible:
                 if remaining <= 0:
                     break
-                if allocation[cid] < global_max:
+                if allocation[cid] < min(global_max, (caps or {}).get(cid, global_max)):
                     allocation[cid] += 1
                     remaining -= 1
                     gave_any = True
@@ -1051,6 +1126,20 @@ class GenerationAgent:
                 break  # All eligible at max
 
         return allocation
+
+    def _master_bullet_count(self, component_id: str):
+        """
+        How many bullets the master resume gives this component, or None when
+        the id is unknown (unknown is not zero: it is left to validation).
+        """
+        parser = getattr(self, "resume_parser", None)
+        if parser is None:
+            return None
+        component = (parser.get_experience_by_id(component_id)
+                     or parser.get_project_by_id(component_id))
+        if component is None:
+            return None
+        return len(component.bullets or [])
 
     def _resolve_to_canonical_exp(self, exp_id: str) -> str:
         """Resolve an experience ID alias to its canonical parser ID."""
@@ -1183,8 +1272,6 @@ Source bullets:
         quota and retired models fall through to the next entry, transient
         failures retry before falling through, and anything else raises.
         """
-        from google import genai
-
         cached = self.llm_cache.get(prompt)
         if cached is not None:
             # The model that originally wrote it, not the word "cache". A run
@@ -1193,7 +1280,7 @@ Source bullets:
             self.last_model_used = f"{self.llm_cache.last_model} (cached)"
             return cached
 
-        client = genai.Client(api_key=resolve_api_key(self.api_key))
+        client = gemini_client(self.api_key)
 
         last_error = None
         retired_models = []
@@ -1768,10 +1855,9 @@ Source bullets:
             # was never moved over, so a genuine Gemini outage told the user
             # their run had gone to "mock tailoring" — which sounds like test
             # output and gives them nothing to act on.
-            logger.error(f"   ❌ Gemini API error: {e}")
+            logger.error(f"   ❌ Gemini tailoring failed: {type(e).__name__}: {e}")
             return self._verbatim_tailor(
-                job, selected, bullet_budgets,
-                reason=f"Gemini could not be reached ({e})")
+                job, selected, bullet_budgets, reason=_degraded_reason(e))
 
     def _generate_filename(self, company: str, title: str, apply_url: str = "") -> str:
         """
