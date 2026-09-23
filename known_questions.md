@@ -9163,6 +9163,14 @@ If it fails, that is the rule working, not a reason to widen the margin after
 seeing it. Any change to `MARGIN` or `LOO_MAX_CLIPPED` is made before the real
 fit runs, or not at all.
 
+**Confirmed by the author before the real fit ran (2026-09-23):** 10% margin
+and a 10% held-out limit, both unchanged. **A failure is an answer, not an
+obstacle.** A window fit on three resumes that does not cover a fourth is
+R36's failure exactly, and loosening the rule until it passes would be fitting
+the rule to the data. If any profile fails, the fixed window cannot do this
+job, nothing ships from R99, and the null set (Q53) is required before potion
+scoring is used.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -9977,7 +9985,7 @@ answer per process to one per run:
 ## Q53. The structural fix for the local scale: anchor each resume against a fixed set of unrelated postings
 
 **Status:** Open, deferred 2026-09-23 by R99, which ships the cheap version
-first. **Build it when either trigger fires, whichever comes first:**
+first. **Build it when any trigger fires, whichever comes first:**
 1. **The window guard fires on a new resume.** A run summary reports jobs at
    the floor or the ceiling for a resume unlike the four the window was fit on.
    The guard exists to make this visible (R99). On the hosted app the author
@@ -9986,6 +9994,9 @@ first. **Build it when either trigger fires, whichever comes first:**
 2. **The paid tier.** Paying users are comparable across people in ways a
    pilot is not (support, thresholds, any shared ranking), and one fixed
    window cannot give that.
+3. **R99's fit fails its held-out check.** If one of the four profiles is not
+   covered by a window fit on the other three, no fixed window can be shipped,
+   and this is the fix rather than a later one.
 
 **The design**, planned in Q51's follow-up and kept here so it is not
 re-derived:
