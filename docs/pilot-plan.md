@@ -166,14 +166,17 @@ board, and a capture of real remote strings.
    - The free-tier data-use sentence, from Google's current terms, read at
      build time.
    - The key in `localStorage`, sent only in POST bodies, with "forget key".
+   - **Q63's interim sentence**, at `ResumeStep`'s "Yes, replace" checkbox and
+     wherever a user who already has a profile imports another: jobs already
+     on your board keep the scores from your previous resume, and only newly
+     found jobs are scored against this one. The board is per user, not per
+     profile, so both paths reach it.
 4. **A8:** the per-user event log (including `reached_key_step` / `key_saved`)
    and the success criterion.
 5. **A9:** Sentry, with the key scrubbed.
 6. **A10:** concurrency, the stale-run reaper (Q49: a startup sweep across
    every partition, `queued` too) and machine size.
-7. **A11:** resume pre-flight on the friends' real resumes. **Decide Q63
-   first:** a re-import changes the resume every stored score was computed
-   against, and since R106 nothing re-scores a stored job in normal use. Read the PDFs:
+7. **A11:** resume pre-flight on the friends' real resumes. Read the PDFs:
    R104's 12-bullet page is not yet confirmed to fit one page for a real
    senior's resume.
 8. **A11b: a clean clone runs green.** It stays before A12, because
@@ -184,6 +187,11 @@ board, and a capture of real remote strings.
 **After the invite:**
 - **Q53, the null set:** anchor each resume against a fixed set of unrelated
   postings. Its triggers have fired (R99).
+- **Q63, stale scores after a resume change:** decide it with Q53, because
+  both change what a stored score means. The fix computes each row's display
+  state once, in the facade. It was scheduled before A11, but A11 runs before
+  any friend has a board. A friend replacing their resume after the invite
+  is the first real trigger, and Q58's sentence covers that until then.
 - **A7b, a second free provider (Q60):**
   - Flash is 20 requests a day per key (Q61), so a friend gets 3–6 tailored
     resumes a day.

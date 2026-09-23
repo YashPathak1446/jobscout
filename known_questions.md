@@ -11103,9 +11103,10 @@ null set embeds 60 more descriptions per resume on Gemini.
 
 ## Q63. Below-bar scores are permanent: a resume re-parse (A11) or a lowered threshold leaves stale exclusions
 
-**Status:** Open, found 2026-09-23 reviewing R106. **Decide before A11**,
-which re-imports friends' resumes and so changes every resume their stored
-scores were computed against.
+**Status:** Open, found 2026-09-23 reviewing R106. **Decide after the
+invite, next to Q53.** It was first scheduled "before A11", and that reasoning
+was wrong (see *When it bites* below). Until then, Q58 carries one line of
+copy where a resume can be replaced.
 
 ### What re-scores a stored job today (checked in the code)
 
@@ -11177,9 +11178,61 @@ re-score.
 
 **Leaning:** 1 with 2 folded in. The fingerprint decides *when* a score is
 stale; a threshold change needs no re-score, only the comparison. Q40 comes
-first, or alongside, so re-scoring reads what was originally scored. **Decide
-before A11**, because A11 is the first time friends' resumes change after
-their boards fill.
+first, or alongside, so re-scoring reads what was originally scored.
+
+### Whatever the fix: the row's display state is computed once, in the facade
+
+A row's state is one of **below bar / stale / strong / typical / weak**, and
+possibly "not scored". Today each UI derives it itself, and each orders the
+rule itself: `MatchBadge.tsx` checks `score < bar` before its bands, and
+Streamlit's `_board_row` makes the same check in its own code. Adding
+"stale" would make that a third rule written twice. That is CLAUDE.md's
+two-paths-one-walked shape, and R69/R70 showed how it ends: fixed in one
+renderer and left in the other.
+
+So the fix puts a `display_state` (name open) on each board row in the facade
+payload (`board_jobs`), and both UIs render it without re-deriving it. The
+order of precedence (stale before below-bar? below-bar before bands?) is then
+written once and tested once in Python, which also covers the missing
+frontend test runner. The UIs keep the copy; the facade decides the state.
+The payload test's allow-list gains the field in the same change.
+
+### When it bites: checked 2026-09-23 against the hosted React app
+
+**The threshold: no screen changes it.** `PreferencesStep` saves only
+`job_preferences`; `AboutYouStep` saves its own three answers; no component
+in `web/src` writes `agent_preferences.scoring_threshold`. `RunStep.tsx:345`
+only displays it. One caveat: `PATCH /api/profile/{name}` takes a free
+`updates` dict, so a hand-built request can set it. That is the user's own
+partition and needs devtools, so it is not a product path, but "no UI" is not
+"cannot".
+
+**The resume: yes, two ways, both in `ResumeStep.tsx`.**
+1. **Replace the profile.** Typing an existing profile name shows "“name”
+   already exists" and a "Yes, replace" checkbox (`ResumeStep.tsx:182-197`).
+   That sends `force: true` to `POST /api/profile` (line 80), which rebuilds
+   the profile and its master resume. The board keeps every score computed
+   against the old resume, and none is re-scored.
+2. **A second profile under a new name.** `jobs.db` has no profile column:
+   the board is per user (R90's partition), not per profile. So a second
+   resume, imported under a new name, is ranked against a board scored for
+   the first. No warning appears on this path at all.
+
+Both hit passing jobs too, which was true before R106. What R106 adds is
+that jobs under the bar no longer heal on the next run.
+
+**Why "before A11" was the wrong trigger.** A11 is the author running
+friends' resumes through `extract_resume` locally, *before* the invite. No
+friend has a board then, so there is nothing stored to go stale. The first
+time a stored score can go stale is a friend replacing their resume after
+their first run. That happens after the invite, so the full fix is scheduled
+there. The copy covers the gap:
+
+- **Q58 copy (both paths):** at the replace checkbox, and at the import step
+  whenever the user already has a profile, one sentence: jobs already on
+  your board keep the scores from your previous resume; only newly found
+  jobs are scored against this one. It is true today and stays true until
+  this is fixed, so it needs no hedge.
 
 ---
 
