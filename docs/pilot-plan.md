@@ -759,6 +759,21 @@ at build time rather than relying on any figure written down here.
 **Action, unchanged:** find out whether the Gemini client backs off on a 429 or
 fails the run, and add backoff if it does not. With one user this never came up.
 
+*Answered 2026-09-23.*
+- **Generation** retried once per model and then fell to the verbatim floor.
+- **Embeddings** did not retry at all, and did not say why they failed.
+  - The first side-by-side found this: 34 of 40 Gemini jobs unscored.
+  - R97 adds classification, backoff and a per-run breaker for a spent daily
+    cap.
+  - The run report now names the failure kinds.
+- **The import path** (`llm_backends.complete_json`) still has no backoff.
+- **The side-by-side has not been re-run yet.** Before it is:
+  - Q51: potion's scale clips a senior profile, and may be ranking Priya by
+    keyword count alone.
+  - Q52: a key pasted in the UI never reaches embeddings. On the hosted app
+    every friend is scored with potion, key or not. So what the comparison
+    decides is whether that should change.
+
 `test_the_api_key_never_lands_anywhere`: run the pipeline with a sentinel key
 through the mock rung, then reuse A6's walker over the data home **plus a
 captured log handler**. A runtime walk, not a grep of the source — so it fails

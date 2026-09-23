@@ -9614,6 +9614,66 @@ python scripts/calibration_probe.py --input outputs/<date>/enriched_jobs.json
   the display), or no clip at all above 100.
 - Each moves the threshold, so each is measured against the baseline first.
 
+## Q52. A key pasted in the UI never switches embeddings to Gemini
+
+**Status:** Open, found 2026-09-23 while planning pilot A7. Whether to fix it
+depends on the potion-vs-Gemini comparison (Q51, R97).
+
+**What the code does.**
+- `embedding_scorer.active_backend()` chooses between Gemini and local with
+  `resolve_api_key()` and **no argument**, so it sees only a key in the
+  server's environment.
+- It stores the answer in the process-global `_BACKEND`.
+- The key a user pastes does travel all the way down, from `start_run` into
+  `ResumeParser`, `embed_resume_components`, `score_job_with_embeddings` and
+  `_get_embedding(api_key=...)`. But `_get_embedding` branches on
+  `active_backend()` first, so the key is used only when the server already
+  had one of its own.
+- The hosted app deliberately has none (pilot plan, decision 4). **So every
+  hosted user is scored with potion whatever they paste, and the key changes
+  only bullet rewriting.**
+
+The UI copy does not claim otherwise, so nothing lies today. But A7's
+comparison measures a path no hosted user can take. And the process-global
+has the shape multi-tenancy breaks: were it ever keyed on a user's key, one
+user's backend would become everyone's.
+
+**What threading it would take.** Count the readers; do not assume two (R80).
+Seven places read or depend on the backend decision, and each moves from one
+answer per process to one per run:
+
+1. `active_backend()` itself. It becomes a resolver that takes the run's key,
+   called once and stored on the `ResumeParser`.
+2. `_normalise`, which picks the calibration.
+3. `_embedding_cache`, which is keyed by dimensions.
+4. `_get_embedding`: the branch, and the model in the cache key.
+5. The resume cache's label (fixed to `active_backend()` by R97, so it
+   follows).
+6. `scripts/acceptance.py`, which reports the backend.
+7. **The board.** `jobs.score` does not record which backend produced it, and
+   `score_bands` takes quartiles over every score. `scoring_threshold` means
+   different things under the two calibrations (Q51). A friend who adds a key
+   after a keyless run would see two scales ranked as one, with no marker.
+   This needs an `embedding_model` column (additive, which `_migrate`
+   supports), and then either a rescore on key change or bands per model.
+
+**Other costs.**
+- The free-tier data sentence has to say that every job description goes to
+  Google for scoring, not only the bullets for rewriting.
+- About N+4 embedding calls per run count against the friend's quota. R97's
+  retry and breaker are what make that survivable.
+- `tests/test_embedding_backend.py` and `test_scope_seam.py` stub the global.
+- A test in the style of `test_backend_selection` should fail on any reader
+  of `EMBEDDING_BACKEND` outside the resolver.
+
+**Estimate:** about a day, on top of A7.
+
+**Leaning:** decide after Q51 is measured.
+- If potion ranks sensibly once the ceiling is understood, hosted stays
+  local-only for everyone. Scores stay comparable, and the key is honestly
+  "for rewriting".
+- If it does not, thread the key through per run, as above.
+
 ---
 
 # Out of scope
