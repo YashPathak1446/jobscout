@@ -9171,6 +9171,44 @@ the rule to the data. If any profile fails, the fixed window cannot do this
 job, nothing ships from R99, and the null set (Q53) is required before potion
 scoring is used.
 
+### Result, 2026-09-23: the fit failed its held-out check. The cheap version is dead.
+
+Run by the author on the same 40 jobs, potion, four profiles. `fit --write`
+refused, as pre-registered, and nothing was written.
+
+    pooled    160 raw values, 0.1213 - 0.5908
+    window    0.0744 - 0.6378   (10% margin)
+
+    profile        n     min  median     max   held out (window fit on the other three)
+    priya         40  0.1994  0.3505  0.4864    0% clipped  pass
+    rohan         40  0.1213  0.3607  0.4436    8% clipped  pass
+    senior_real   40  0.1732  0.3587  0.4854    0% clipped  pass
+    yash_pathak   40  0.2550  0.4770  0.5908   12% clipped  FAIL
+
+- **It failed on the author's own resume, not on Rohan's** as the synthetic
+  run predicted. Yash has the highest values. A window fit on the other three
+  tops out at 0.5229 and clips his best matches: the jobs at the top of his
+  board, the ones that matter most.
+- The failure is the check doing its job. A window fit on three resumes that
+  does not cover a fourth is R36's failure exactly. Loosening the rule to pass
+  would have been fitting the rule to the data, and the author declined that
+  before the run.
+- **So no fixed window is shipped for potion.** The blind comparison is not
+  run, because there is no fitted window to compare. The local window stays
+  R98's void `(0.00, 0.10)` for now, which means keyword order with ties, and
+  the guard still reports it on every local run.
+- **Q53's third trigger has fired.** The null set is the fix, not a later one.
+
+What survives from this R: the guard (every run reports clipped jobs in its
+summary), and the fitting tool (`calibration_probe.py --dump / fit / ab`),
+which Q53 reuses for its own held-out check on `Z_TOP`.
+
+**One thing to take into Q53.** The three profiles that passed have medians
+within 0.01 of each other (0.3505–0.3607). Yash's median is 0.12 above them.
+The spread between resumes is not noise around one level: one resume sits
+higher. That is what a per-resume anchor corrects and a shared window cannot,
+so this failure is evidence *for* Q53's design, not only against R99's.
+
 ## R100. A model's reply to a resume is kept for what it holds, and the import says who read it
 
 **Decided 2026-09-23.** Found importing the real six-year resume with a
@@ -10125,8 +10163,7 @@ answer per process to one per run:
 
 ## Q53. The structural fix for the local scale: anchor each resume against a fixed set of unrelated postings
 
-**Status:** Open, deferred 2026-09-23 by R99, which ships the cheap version
-first. **Build it when any trigger fires, whichever comes first:**
+**Status:** **Trigger 3 fired, 2026-09-23.** R99's fit failed its held-out check (yash_pathak 12% clipped), so no fixed window can ship and this is the fix. Originally deferred by R99, which tried the cheap version first. **Build it when any trigger fires, whichever comes first:**
 1. **The window guard fires on a new resume.** A run summary reports jobs at
    the floor or the ceiling for a resume unlike the four the window was fit on.
    The guard exists to make this visible (R99). On the hosted app the author
