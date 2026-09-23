@@ -9471,6 +9471,65 @@ A list of skills from the model is R100's correction, committed separately:
 a different bug in a different function. The code before this change fails 5
 of the 10 new tests.
 
+## R104. The page is budgeted first, and every component is capped by its own master
+
+**Decided 2026-09-23.** Q59's budget half, the last of the three fixes, done
+after the parser (R102) and import (R103), so the budget is measured on
+masters that read back correctly.
+
+**The defect.** `exp_budget_table` and `proj_budget_table` were measured on
+resumes with both sections full (Q3: 3 + 3 = 12 bullets), so each describes
+half a page. R74 let the jobs take the page when there were no projects, and
+only then. With **one** project the jobs kept their half:
+- 3 jobs + 1 project budgeted `[2,2,2] + [3] = 9`, against 3 jobs alone at
+  `[3,3,3]`. **A one-line project cost every job a bullet.**
+- The per-job cap was a constant 3, so a 5-bullet lead role showed 3
+  whatever the page had left.
+- A component was budgeted beyond what its master held. Priya's third role
+  has 2 bullets and was budgeted 3, which on the model path asks for a bullet
+  with no source.
+
+**The rule.**
+- **Every component is capped by the smaller of its master's bullet count
+  and validation's per-component maximum** (`EXPERIENCE_MAX_BULLETS` = 4,
+  `PROJECT_MAX_BULLETS` = 3, and 2 for projects when there are four or
+  more). That is the author's condition: capped by what the master has, not
+  just by the page, so a 12-bullet role gets 4 and cannot fill a page on its
+  own. The maxima are validation's own constants, not new ones.
+- **The page is budgeted before the sections share it:**
+  - It is the larger of `PAGE_BULLETS` (12, Q3's measurement) and what the
+    tables give a full resume, then limited by the sum of the caps.
+  - Each section keeps its table share up to its caps, and what one cannot
+    use flows to the other, jobs first.
+  - R74's zero-projects case is now one instance of this rule rather than a
+    special branch.
+- **A full resume is budgeted exactly as before.** Both halves full leaves
+  nothing to flow and no cap binds.
+
+**Measured** (model path):
+
+    shape                                   before              after
+    Rohan 3 jobs + 1 project                [2,2,2]+[3]  = 9    [3,3,2]+[1]    = 9  (master-bound)
+    Rohan 3 jobs + 0 projects               [3,3,3]      = 9    [3,3,2]        = 8  (third role holds 2)
+    Rohan as selected (3 + 4)               [2,2,2]+[2,2,2,1]   [3,3,2]+[1,2,1,1] = 13
+    senior, long masters (5,4,4 + 2)        9                   12              (the page, used)
+    both halves full (3+3, 6 bullets each)  [2,2,2]+[2,2,2]     unchanged
+
+Rohan's total does not rise, but it moves: bullets that were asked of
+1-bullet projects (invention pressure on the model path) go to the jobs that
+hold them.
+
+**Tests** (`test_page_budget`) run on parsed masters (the committed fixtures
+and synthetic shapes), not on `yash_pathak`, so a clean clone runs them. The
+old logic fails 5 of the 7. R74's own nine tests (`test_page_is_a_page`)
+need `yash_pathak` only for its profile; run against a scratch copy with
+Priya's profile, all nine pass on the new code as on the old.
+
+**Not measured:** the PDFs. A budget is a claim about the page, and 12
+bullets at 2 lines each must still fit one page for a real senior's resume.
+A11's pre-flight on the friends' real resumes is where that gets checked,
+now that it reads the budget that ships.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -10556,8 +10615,8 @@ field, where the choice is made.
 
 ## Q59. Sparse resumes get three-quarters of a page, and a single project costs every job a bullet
 
-**Status:** Open, found 2026-09-23 from the SDE II profile's PDFs. The budget
-is measured below; nothing is proposed yet. **R74's shape:** that R fixed a
+**Status:** Resolved 2026-09-23 by R102 (parser), R103 (import; plus R100's
+correction) and R104 (budget). Found from the SDE II profile's PDFs. **R74's shape:** that R fixed a
 section that is *absent*, and this is a section that is *sparse*.
 
 ### The author's read, checked
