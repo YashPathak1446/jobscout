@@ -151,8 +151,8 @@ it is not a random board.
    the score with a below-the-bar state.
 4. **Q58's copy: what changes between postings without a key.** It lives in
    A7's key step.
-   - *Proposed, needs the author's call:* the rest of A7 that is cheap and
-     not about scoring rides with it:
+   - *Decided 2026-09-23:* the rest of A7 that is cheap and not about
+     scoring rides with it:
      - the free-tier data-use sentence, which decision 4 relies on;
      - `localStorage` for the key, without which every visit re-pastes it.
 
@@ -165,7 +165,7 @@ it is not a random board.
    part of it.
 8. **A11:** resume pre-flight on the friends' real resumes. After Q59, so it
    reads the budget that will ship.
-9. **A11b: a clean clone runs green.** *Not in the author's list; kept here
+9. **A11b: a clean clone runs green.** *Confirmed 2026-09-23, kept before A12
    because A12 depends on it.* `docker build --target verify` runs the suite
    from a clone, and the 14 `yash_pathak` errors would fail it.
 10. **A12:** deploy, acceptance, invite.
@@ -177,7 +177,7 @@ it is not a random board.
   which is 3–6 tailored resumes per friend per day.
 - **Q61: quota-aware embedding backoff and token pacing.** Before any Gemini
   embedding measurement is trusted again, and before Q53 runs on Gemini.
-- *Proposed, needs the author's call:* **A9b** ("0 discovered" says why). A0
+- *Decided 2026-09-23:* **A9b** ("0 discovered" says why), with a trigger. A0
   found no board blocking, and Q56 put scrape coverage at 15 of 20 from home,
   so it is diagnostic rather than blocking. Pull it forward if the first
   friend sees an empty board.
