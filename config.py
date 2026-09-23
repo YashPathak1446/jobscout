@@ -235,9 +235,12 @@ def gemini_key_problem(key: str):
     pasted into the key field. It was reported as "Gemini could not be
     reached" (R101), which sent the reader to the wrong place entirely.
 
-    Checks only what makes a key unsendable (non-ASCII characters and
-    whitespace), not the key's format, which Google may change. The message
-    never repeats the key.
+    Checks only what breaks a key, never its format: non-ASCII characters
+    (httpx cannot encode them), whitespace, and quote characters (left behind
+    by `.env` quoting and sent as part of the key). **No prefix and no
+    length.** Keys were `AIza…` and 39 characters, and current AI Studio keys
+    are `AQ…` and 53; a check built on either would have refused every new
+    key (R101's correction). The message never repeats the key.
     """
     if not key:
         return None
@@ -250,6 +253,10 @@ def gemini_key_problem(key: str):
             return (f"The Gemini key contains a space or line break at position "
                     f"{position}. A Gemini key has none, so something was probably "
                     f"copied with it. Paste just the key.")
+        if char in "\"'`":
+            return (f"The Gemini key contains a quote character ({char}) at "
+                    f"position {position}. A Gemini key has none; in `.env`, put "
+                    f"the quotes around the value, not inside it. Paste just the key.")
     return None
 
 

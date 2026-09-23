@@ -9350,6 +9350,29 @@ check, each fails its tests. The first version of these tests checked the
 classifier and not the call site, and passed with the old label restored. The
 call-site test exists because of that.
 
+### Correction, 2026-09-23: a key has no fixed format, and quotes break it too
+
+This entry said "a Gemini key is 39 characters", and its tests built keys as
+`AIza…` + 33. **Current AI Studio keys start `AQ` and are 53 characters.**
+The author's new key: length 53, `isascii()` True. The em dash came from the
+old, malformed value.
+
+The code never checked a prefix or a length. Only the prose and the fixtures
+assumed one, and a fixture that assumes a format is one refactor away from a
+check that refuses every new key. So:
+
+- **`gemini_key_problem` checks only what breaks a key:** a non-ASCII
+  character (httpx cannot encode it), whitespace, and now **quote
+  characters** (`"`, `'`, `` ` ``), which `.env` quoting leaves inside a
+  value and which would be sent as part of the key.
+- **The tests are format-free:** an `AQ…` key, an old `AIza…` key, a
+  200-character key and a one-character key all pass. The position
+  assertions are computed from the fixture, not written as 39. Adding a
+  prefix-or-length check makes them fail (mutation-checked).
+- The "position 76" reasoning above still stands, but for a 39-character key
+  of that era it meant about 37 extra characters. Read it as "longer than the
+  key", not as a statement about key length.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

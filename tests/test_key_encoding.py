@@ -29,7 +29,11 @@ sys.path.insert(0, str(ROOT))
 
 import config  # noqa: E402
 
-GOOD = "AIzaSy" + "A" * 33
+# Deliberately format-free: a key is whatever Google issues. Old keys were
+# `AIza…`/39 and current ones `AQ…`/53, and the check must pass both and any
+# successor (R101's correction). Nothing here encodes a prefix or a length.
+GOOD = "AQ." + "Ab3_x-9" * 7 + "Zq"
+OLD_STYLE = "AIzaSy" + "A" * 33
 BAD = GOOD + "  # free tier key from AI Studio — personal"
 
 
@@ -46,9 +50,17 @@ class TestTheMechanism(unittest.TestCase):
 
 class TestTheKeyCheck(unittest.TestCase):
 
-    def test_a_real_shaped_key_passes(self):
-        self.assertIsNone(config.gemini_key_problem(GOOD))
+    def test_any_sendable_key_passes_whatever_its_format(self):
+        for key in (GOOD, OLD_STYLE, "x" * 200, "k"):
+            with self.subTest(length=len(key)):
+                self.assertIsNone(config.gemini_key_problem(key))
         self.assertIsNone(config.gemini_key_problem(""))
+
+    def test_quote_characters_are_named(self):
+        for quote in "\"'`":
+            with self.subTest(quote=quote):
+                self.assertIn("quote character",
+                              config.gemini_key_problem(quote + GOOD + quote))
 
     def test_a_copied_comment_is_named_by_character_and_position(self):
         problem = config.gemini_key_problem(GOOD + "—note")
@@ -60,7 +72,7 @@ class TestTheKeyCheck(unittest.TestCase):
 
     def test_the_message_never_repeats_the_key(self):
         self.assertNotIn(GOOD, config.gemini_key_problem(BAD))
-        self.assertNotIn("AIza", config.gemini_key_problem(BAD))
+        self.assertNotIn(GOOD[:8], config.gemini_key_problem(BAD))
 
     def test_the_client_is_refused_before_it_is_built(self):
         from google import genai
@@ -164,7 +176,7 @@ class TestEveryConsumerSaysSo(unittest.TestCase):
                                                    report=report), [])
         self.assertEqual(report[0]["kind"], "fatal")
         # The first unsendable character is the space where the real key ends.
-        self.assertIn("position 39", report[0]["error"])
+        self.assertIn(f"position {len(GOOD)}", report[0]["error"])
 
     def test_import_says_the_key_not_the_network(self):
         from tools.resume import resume_import
