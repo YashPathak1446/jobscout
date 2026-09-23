@@ -9446,6 +9446,31 @@ regression (a separate commit), and the budget. The zero budget here is the
 zero case of the budget change's cap by master count, pulled forward because
 this fix is what lets bullet-less entries reach the budget at all.
 
+## R103. Skill groups laid out on one line import as the groups they are
+
+**Decided 2026-09-23.** Q59's import half. A PDF often extracts
+`Languages: … | Cloud: … | Data: …` as a single line. `_heuristic_skills` read
+one `Label: values` per line, so the first label won and the other two groups,
+labels included, became part of its value. Three categories imported as one.
+
+**The rule is structural and conservative:** split a line at an explicit
+separator (`|`, `•`, `·`, `;`) **only when every piece carries its own
+label.**
+- `Python | Go | AWS` is one list, not three groups.
+- A partly labelled line is not split.
+- Labels with no separator between them (`Languages: Python, Go Cloud: AWS`)
+  are left for a person. Is "Go Cloud" a skill? That is content, and the
+  pattern reader never guesses at content; R33's confirmation screen is where
+  it gets decided.
+
+**Twin path:** a model reply with a single skills group whose value holds
+labelled groups (`{"Skills": "Languages: Python; Cloud: AWS"}`) goes through
+the same rule. Several groups are left exactly as the model gave them.
+
+A list of skills from the model is R100's correction, committed separately:
+a different bug in a different function. The code before this change fails 5
+of the 10 new tests.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

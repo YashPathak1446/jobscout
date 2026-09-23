@@ -232,6 +232,16 @@ def _unwrap(reply):
     if isinstance(skills, list) and skills and all(isinstance(x, str) for x in skills):
         lowered["skills"] = {"Skills": ", ".join(x.strip() for x in skills if x.strip())}
 
+    # One group holding labelled groups is the pattern reader's one-line case
+    # arriving through the model (R103): the same rule, the same bar.
+    skills = lowered.get("skills")
+    if isinstance(skills, dict) and len(skills) == 1:
+        (value,) = skills.values()
+        if isinstance(value, str):
+            pieces = _skill_segments(value.strip())
+            if len(pieces) > 1:
+                lowered["skills"] = _heuristic_skills(pieces)
+
     # A section of the wrong type is dropped, not trusted and not fatal: a
     # string where the prompt asked for a list would fail in `_normalise`.
     # But never silently: every one dropped is named, and the import says so.
@@ -598,6 +608,27 @@ def _heuristic_education(lines) -> list:
 # become one.
 _SKILL_CATEGORY = re.compile(r"^([A-Za-z][A-Za-z0-9 &/+-]{0,28}):\s*(.+)$")
 
+# Separators a PDF leaves between skill groups that were laid out on one line.
+_SKILL_GROUP_SEPARATOR = re.compile(r"\s*[|•·;]\s*")
+
+
+def _skill_segments(line: str) -> list:
+    """
+    One skills line as the labelled groups it holds (R103).
+
+    `Languages: Python, Go | Cloud: AWS | Data: Kafka` is three groups on one
+    line, and was read as one: `Languages`, holding the other two labels as
+    values. It is split only on an explicit separator, and **only when every
+    piece carries its own label.** `Python | Go | AWS` is one list, not three
+    groups, and label-looking text with no separator between it
+    (`Languages: Python, Go Cloud: AWS`) is left alone. Is "Go Cloud" a skill?
+    That is content, and the confirmation screen is where a person decides it.
+    """
+    pieces = [p for p in _SKILL_GROUP_SEPARATOR.split(line) if p.strip()]
+    if len(pieces) > 1 and all(_SKILL_CATEGORY.match(p.strip()) for p in pieces):
+        return [p.strip() for p in pieces]
+    return [line]
+
 
 def _heuristic_skills(lines) -> dict:
     """
@@ -624,10 +655,9 @@ def _heuristic_skills(lines) -> dict:
     """
     categories, current = {}, None
 
-    for line in (lines or []):
-        line = line.strip()
-        if not line:
-            continue
+    segments = [seg for raw in (lines or []) for seg in _skill_segments(raw.strip())
+                if raw.strip()]
+    for line in segments:
         match = _SKILL_CATEGORY.match(line)
         if match:
             label, values = match.group(1).strip(), match.group(2).strip()
