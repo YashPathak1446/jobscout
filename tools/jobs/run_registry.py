@@ -128,13 +128,23 @@ class RunRegistry:
         # the connection has to be usable across both. Serialised by the lock
         # below rather than by sqlite's own thread check.
         self._db = sqlite3.connect(str(self.path), check_same_thread=False)
-        self._db.row_factory = sqlite3.Row
-        self._db.executescript(SCHEMA)
-        have = {row["name"] for row in self._db.execute("PRAGMA table_info(runs)")}
-        for column, kind in _ADDED_COLUMNS.items():
-            if column not in have:
-                self._db.execute(f"ALTER TABLE runs ADD COLUMN {column} {kind}")
-        self._db.commit()
+        # Closed here if setting up fails. A corrupt file fails in
+        # `executescript`, before this object exists for a caller's `with` or
+        # `finally` to close. The connection stayed open, and on Windows the
+        # file could then not be deleted (WinError 32 in the startup sweep's
+        # test, which feeds it a corrupt registry on purpose).
+        try:
+            self._db.row_factory = sqlite3.Row
+            self._db.executescript(SCHEMA)
+            have = {row["name"]
+                    for row in self._db.execute("PRAGMA table_info(runs)")}
+            for column, kind in _ADDED_COLUMNS.items():
+                if column not in have:
+                    self._db.execute(f"ALTER TABLE runs ADD COLUMN {column} {kind}")
+            self._db.commit()
+        except BaseException:
+            self._db.close()
+            raise
         self._lock = threading.Lock()
 
     # -- writing --------------------------------------------------------------

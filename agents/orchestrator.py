@@ -545,7 +545,13 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
 
         beating = threading.Thread(target=beat, name=f"jobscout-beat-{run_id}",
                                    daemon=True)
-        beating.start()
+        # Outside the `try` below, whose `finally` joins this thread; so a
+        # failed start closes the registry here instead.
+        try:
+            beating.start()
+        except BaseException:
+            registry.close()
+            raise
         try:
             orchestrator = JobScoutOrchestrator(
                 profile_name=profile_name,

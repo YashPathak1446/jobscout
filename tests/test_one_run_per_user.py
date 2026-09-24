@@ -266,6 +266,37 @@ class TestTheStartupSweep(_Home):
             self.assertEqual(orchestrator.reap_stale_runs(), 1)
         self.assertEqual(self.row(dead, "alice")["state"], "failed")
 
+    def test_a_registry_that_cannot_be_read_leaves_no_connection_open(self):
+        """
+        The sweep's `with` never ran for bob: `RunRegistry` failed inside its
+        own constructor, with the connection already open. On Windows that
+        locked `runs.db` and the temporary home could not be deleted (WinError
+        32). Linux deletes an open file, so this checks the connection itself.
+        """
+        import sqlite3
+        from unittest import mock
+
+        broken = run_registry.db_path("bob")
+        broken.parent.mkdir(parents=True)
+        broken.write_bytes(b"not a database, and not recoverable")
+        opened = []
+        real_connect = sqlite3.connect
+
+        def tracking(*args, **kwargs):
+            opened.append(real_connect(*args, **kwargs))
+            return opened[-1]
+
+        with mock.patch.object(run_registry.sqlite3, "connect", tracking):
+            with self.assertRaises(sqlite3.DatabaseError):
+                run_registry.RunRegistry(broken)
+            with self.assertLogs("agents.orchestrator", "ERROR"):
+                orchestrator.reap_stale_runs()
+        self.assertTrue(opened, "no connection was opened; test is blind")
+        for connection in opened:
+            with self.assertRaises(sqlite3.ProgrammingError,
+                                   msg="a registry connection was left open"):
+                connection.execute("SELECT 1")
+
     def test_local_it_judges_by_heartbeat(self):
         alive = self.dead_row(seconds_silent=5)
         dead = self.dead_row("alice")
