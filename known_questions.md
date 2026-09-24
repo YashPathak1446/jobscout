@@ -10752,6 +10752,67 @@ through the form:
 - a four-job account searching for a term matching nothing showed the
   filter message and not the empty state.
 
+## R124. A failed page scrape now uses the posting's full text from the ATS API, which discovery already had
+
+**Decided 2026-09-24**, from the first live deploy.
+
+**What was seen.** All three Ashby jobs (Vanta, `jobs.ashbyhq.com/vanta/...`)
+were logged "no description could be read" and given no resume. The summary
+still said 5 of 5 enriched (R125 fixes that count).
+
+**What was found.**
+- **Discovery had the full description.** `ats_search._ashby` reads
+  Ashby's posting API, which returns `descriptionPlain`, and `_listing`
+  keeps it as `JobListing.full_jd`. Greenhouse's `?content=true` does the
+  same.
+- **Enrichment never read `full_jd`.** It scraped every job's page, and when
+  that failed it fell back to `description`, which `_listing` cuts to the
+  first 300 characters. The Vanta jobs were scored on that snippet and
+  marked unreadable (R61), with their full text on the listing: CLAUDE.md's
+  recurring bug, a field computed and never read.
+
+**Why the page scrape failed on Fly: not established.** This container's
+network proxy refuses Ashby (403 at the tunnel), so the page could not be
+fetched here. Discovery reached Ashby's API from Fly, so Ashby is not
+blocked from Fly outright.
+- **Reasoned, unverified:** `jobs.ashbyhq.com` pages are a client-side app,
+  and `_scrape_ashby` looks for description `div`s and a `__NEXT_DATA__`
+  blob. If the served HTML has neither, it falls to the generic scraper and
+  fails.
+- **To settle it on the instance:** `fly ssh console`, `cd /app && python`,
+  then fetch one Vanta job URL with `tools.scraping.jd_scraper._SESSION`.
+  Print the status, whether `__NEXT_DATA__` or `__appData` is in the text,
+  and what `scrape_jd(url)` returns.
+
+The fix below does not depend on the answer.
+
+**The fix, contained to the failure path.** In
+`EnrichmentAgent._real_scrape`, when the page scrape fails and the listing's
+`full_jd` is at least `MIN_JD_LENGTH`:
+- it is used as the job description, with requirements extracted from it;
+- it is marked readable (`scraper_used: "ats_api (<source>)"`), since it is
+  the employer's own posting text, not a snippet and not an invention.
+
+Unchanged:
+- **A job whose scrape works.** Its scored text is unchanged, so no
+  measurement moves.
+- **A job with no or short API text.** It still fails honestly, per R61.
+
+**Not done, logged as Q80:** the module's docstring says API-sourced jobs
+"skip [enrichment] entirely". Doing that would change the text scored for
+every Greenhouse and Ashby job, so it is a scoring change to measure, not a
+fix.
+
+**Tests** (`test_ats_description_fallback.py`):
+- a failed scrape with API text is readable and uses the whole text;
+- a working scrape is untouched;
+- no or short API text still fails, with nothing invented;
+- a listing without the field takes the old path;
+- Ashby's discovery really does fill `full_jd`.
+
+Against the old enrichment, the two tests that need the full text fail. The
+R61 tests (`test_no_invented_jd`) still pass.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
