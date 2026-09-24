@@ -67,6 +67,15 @@ def _scrub_breadcrumb(crumb, hint=None):
     return _scrub_value(crumb)
 
 
+def _disabled_integrations() -> list:
+    """The SDK integrations this app turns off (R126): google-genai's."""
+    try:
+        from sentry_sdk.integrations.google_genai import GoogleGenAIIntegration
+        return [GoogleGenAIIntegration()]
+    except Exception:  # an SDK that predates it, or google-genai absent
+        return []
+
+
 def start_error_reporting() -> bool:
     """
     Start Sentry if `SENTRY_DSN` is set. Returns whether it started.
@@ -88,6 +97,15 @@ def start_error_reporting() -> bool:
             "Install requirements.txt, or unset it.") from exc
 
     sentry_sdk.init(
+        # Not the SDK's own google-genai integration (R126). It is enabled
+        # automatically when google-genai is installed. It wraps
+        # `generate_content`, reports *every* exception it sees as unhandled,
+        # then re-raises. So a Gemini 503 that generation caught and survived
+        # by falling back to the next model reached Sentry as an unhandled
+        # error on /api/run (seen on the first live deploy). Our own code
+        # decides what a failure is: a fallback logs WARNING, and exhausting
+        # every model logs ERROR, which the logging integration still sends.
+        disabled_integrations=_disabled_integrations(),
         dsn=dsn,
         send_default_pii=False,
         include_local_variables=False,

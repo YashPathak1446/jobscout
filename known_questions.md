@@ -10834,6 +10834,57 @@ all-readable run, and the run record through `start_run` with a stub
 pipeline. Against the old code, 2 of 3 fail; the all-readable case passes
 there by construction.
 
+## R126. A Gemini 503 that generation survived was reported to Sentry as an unhandled error
+
+**Decided 2026-09-24**, from the first live deploy's Sentry project.
+
+**What was seen.** Two events, "ServerError: This model is currently
+experiencing high demand", tagged Unhandled on `/api/run`, with only
+google-genai frames. The run's log showed the 503 handled: generation fell
+back from gemini-3.5-flash to gemini-3.1-flash-lite and wrote a valid resume.
+
+**What reported it: sentry-sdk's own google-genai integration.**
+- sentry-sdk (2.70.0 here) enables `GoogleGenAIIntegration` automatically
+  whenever google-genai is installed. We never asked for it.
+- It wraps `Models.generate_content`, and on any exception calls
+  `_capture_exception` with `mechanism={"type": "google_genai", "handled":
+  False}`, then re-raises. So every 503 became an "unhandled" event before
+  our fallback ever saw it.
+- The `/api/run` tag is the request's scope, carried into the run thread.
+- Reproduced before the fix: a 503 raised inside google-genai (its request
+  method patched, no network) and caught by the caller produced exactly one
+  event, mechanism `google_genai`, `handled: False`.
+
+**A second, smaller source.** `rate_limiter.retry_with_backoff` logged "Max
+retries exceeded" at ERROR when one model's retries ran out. Its only caller,
+generation, then moves on to the next model. The logging integration sends
+ERROR records as events, so a fallback that went on to succeed could still
+be reported.
+
+**The fix.**
+- `start_error_reporting` passes `disabled_integrations=[GoogleGenAI
+  Integration()]` (guarded for an SDK that lacks it).
+- The retry helper logs WARNING; its raise carries the failure.
+
+Our code keeps deciding what a failure is:
+- a model falling back logs WARNING (already);
+- every model exhausted logs ERROR ("Gemini tailoring failed"), which is
+  still sent;
+- a request that actually fails is still reported by the web framework's
+  integration.
+
+**Tests** (`test_handled_fallbacks_stay_quiet.py`). Each scenario runs in its
+own process (`tests/sentry_probe.py`), because the SDK is process-global,
+with a fake DSN and a capturing transport; nothing is sent. The scenarios:
+- **`POST /api/run` during a Gemini 503:** 200, the run finishes, no event.
+- **A direct handled 503:** no event.
+- **One model's 429 retries running out:** no event.
+- **Every model exhausted:** one event (positive control).
+- **A route that really raises:** a 500 and one event (positive control).
+
+Reverting either change alone fails two tests, each time the `/api/run`
+scenario and the one that change covers.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

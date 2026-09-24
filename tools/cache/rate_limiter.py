@@ -86,8 +86,12 @@ def retry_with_backoff(
                 raise
             
             if attempt == max_retries:
-                # Max retries reached
-                logger.error(f"❌ Max retries ({max_retries}) exceeded")
+                # Max retries reached. WARNING, not ERROR (R126): the raise
+                # below carries the failure, and the one caller falls back to
+                # its next model. It logs ERROR itself only when every model
+                # is exhausted, and an ERROR here reached Sentry as an event
+                # for a fallback that then succeeded.
+                logger.warning(f"⚠️  Max retries ({max_retries}) exceeded")
                 raise RateLimitError(f"Rate limit exceeded after {max_retries} retries") from e
             
             delay = backoff_delay(attempt, error_msg, base_delay, max_delay, jitter)
