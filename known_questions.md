@@ -12570,6 +12570,19 @@ lists three more items that were not in the list R120 built:
 
 **Carries over (R114)?** Yes, all three.
 
+## Q74. A worker that hangs without dying is never reaped
+
+**Status:** Open, logged 2026-09-24 with R120. R120's heartbeat comes from
+a timer thread, so it reports on the worker's process, not its progress. A
+pipeline that hangs mid-run (a scrape with no timeout, a lock never
+released) keeps beating and stays `running` forever. Q49 asked for a timeout
+as the fallback for this. Sizing one still needs what Q49 named: the longest
+real gap between progress ticks, or ticks per ATS board so the gap is small.
+Until then, the operator's `admin.py delete-user --ignore-active-runs` is the
+only way out, and a restart clears it.
+
+**Carries over (R114)?** Yes.
+
 ---
 
 # Out of scope
