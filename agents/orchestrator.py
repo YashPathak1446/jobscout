@@ -237,7 +237,7 @@ def board_jobs(user_id, status=None, min_score=None, has_resume=None, company=No
 
 def board_total(user_id, status=None, min_score=None, has_resume=None, company=None,
                 source=None, search=None, include_ineligible=False,
-                unconfirmed=False) -> int:
+                unconfirmed=False, unreadable=False) -> int:
     """
     How many jobs match, ignoring the page window.
 
@@ -245,6 +245,11 @@ def board_total(user_id, status=None, min_score=None, has_resume=None, company=N
     (A4): a requirement met by a question you have not answered, or a posting
     that could not be read. The board states that number next to the hidden
     one, because a badge you have to scroll to find is not a count.
+
+    `unreadable=True` counts only the shown jobs whose description could not
+    be read (R131), a subset of `unconfirmed`. The default sort puts them
+    last, and moving jobs down a board without saying how many is the same
+    silent subtraction R62 forbids.
     """
     store = _board(user_id)
     try:
@@ -252,7 +257,7 @@ def board_total(user_id, status=None, min_score=None, has_resume=None, company=N
                            has_resume=has_resume, company=company,
                            source=source, search=search,
                            eligible=None if include_ineligible else True,
-                           unconfirmed=unconfirmed)
+                           unconfirmed=unconfirmed, unreadable=unreadable)
     finally:
         store.close()
 

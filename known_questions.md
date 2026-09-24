@@ -11057,6 +11057,57 @@ freeze, reproduced in the suite.
 Any step that holds the interpreter lock, or eats the CPU, freezes the site
 for everyone. The speedyapply list now yields nothing at all (Q86).
 
+## R131. Postings we could not read sort below readable ones, and the board counts them
+
+**Decided 2026-09-24.** Every job from the GitHub new-grad source links to a
+jobright.ai page (Q87 measured 646 of 646), and the scraper cannot read those
+pages. On the live board they carried the "Unconfirmed: its description could
+not be read" badge. They had no resume, because `_split_unreadable` skips them
+at generation. They sat among the top rows anyway, scored on a one-line snippet.
+
+**What changed.**
+- `JobStore.SORTS["best"]`, the default ordering, now sorts one key first:
+  whether the posting is unreadable. Unreadable postings go below every
+  readable job, scored or not. Below that key the order is unchanged.
+- "newest", "recent" and "company" keep their meaning. Someone who picks
+  "newest" asked for newest.
+- `query`/`count` take `unreadable=True`; `board_total` passes it through;
+  `GET /api/board` returns `unreadable` under the same filters as `hidden`
+  and `unconfirmed`.
+- React shows "N jobs we couldn't read." When the sort is "best", it adds
+  that they are listed after the rest. The unconfirmed line now counts
+  `unconfirmed − unreadable`, so no job is counted on both lines.
+- Nothing is deleted or hidden. The page is cut in SQL after the ordering,
+  so a page is still full.
+
+**How "unreadable" is known.** The board has no `scraped_successfully`
+column. The signal is the gate's own verdict: `undecidable` with
+`UNREADABLE_REASON`, which `judge_body` returns exactly when the stored text
+is too thin to read and nothing else decides the job. The constant is
+imported, not copied, so rewording the reason cannot silently un-sort the
+board. `test_unreadable_last` builds its rows through the real gate for the
+same reason.
+
+**Rejected: a new `readable` column.** It would need a migration and a
+writer in `record`. It would also duplicate what the gate already decides
+from the same text, and the two could disagree (Q39's shape).
+
+**What breaks if this is wrong.**
+- An unreadable posting that *also* has an unanswered requirement shows the
+  unanswered reason (the gate ranks it higher), so it is not demoted. It is
+  still badged and counted as unconfirmed.
+- A row no gate has judged yet is not called unreadable. It has no verdict,
+  and an unknown is not a value.
+- Streamlit reads the same facade, so its board gets the new order without
+  an edit (R115). It does not get the count line.
+
+**Tests.** `test_unreadable_last.py`: order under "best" (an unreadable job
+scored 90 lands below an unscored readable one); an unknown sort falls back to
+the same rule; the first page excludes it; "company" is unaffected; nothing is
+removed; the count is a subset of unconfirmed; an unjudged row is not counted;
+the route returns the count and honours filters. `test_gate_badge_renders`
+now pins both React lines.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

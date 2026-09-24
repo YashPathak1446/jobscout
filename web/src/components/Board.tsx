@@ -7,6 +7,7 @@ import {
   ExternalLink,
   EyeOff,
   FileDown,
+  FileQuestion,
   Loader2,
   MapPin,
   Search,
@@ -62,6 +63,9 @@ export function Board({
   // Null until the server has said. A count that has not arrived is not
   // zero, and rendering it as zero would claim the board is all confirmed.
   const [unconfirmed, setUnconfirmed] = useState<number | null>(null)
+  // Of those, postings whose description could not be read (R131). Null for
+  // the same reason as above.
+  const [unreadable, setUnreadable] = useState<number | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
   const [bands, setBands] = useState<Bands | null>(null)
   const [filters, setFilters] = useState<Filters | null>(null)
@@ -129,6 +133,7 @@ export function Board({
         setTotal(result.total)
         setHidden(result.hidden)
         setUnconfirmed(result.unconfirmed)
+        setUnreadable(result.unreadable)
         setError(null)
       })
       .catch((e: Error) => setError(e.message))
@@ -416,20 +421,41 @@ export function Board({
         </div>
       )}
 
-      {/* Shown but unconfirmed (A4): a requirement met by a question the
-          profile has not answered, or a posting that could not be read. Each
-          row carries its badge; this says how many, under the same filters,
-          so nobody has to page through the board to tally them. */}
-      {unconfirmed !== null && unconfirmed > 0 && (
+      {/* Postings we could not read (R131). The default sort moves them
+          below every readable job, and moving jobs down without saying how
+          many is the silent subtraction R62 forbids. Nothing is removed. */}
+      {unreadable !== null && unreadable > 0 && (
         <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
-          <CircleHelp className="size-4 shrink-0" />
+          <FileQuestion className="size-4 shrink-0" />
           <span>
-            {`${unconfirmed} ${
-              unconfirmed === 1 ? 'job is' : 'jobs are'
-            } unconfirmed — a requirement you have not answered, or a description that could not be read. Answering the work-authorization questions in setup settles the first kind.`}
+            {`${unreadable} ${
+              unreadable === 1 ? 'job' : 'jobs'
+            } we couldn't read. A tailored resume needs the description${
+              sort === 'best'
+                ? `, so ${unreadable === 1 ? 'it is' : 'they are'} listed after the rest`
+                : ''
+            }.`}
           </span>
         </div>
       )}
+
+      {/* Shown but unconfirmed (A4): a requirement met by a question the
+          profile has not answered, or a location the posting does not name.
+          Unreadable postings are counted on the line above, not twice. Each
+          row carries its badge; this says how many, under the same filters,
+          so nobody has to page through the board to tally them. */}
+      {unconfirmed !== null &&
+        unreadable !== null &&
+        unconfirmed - unreadable > 0 && (
+          <div className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
+            <CircleHelp className="size-4 shrink-0" />
+            <span>
+              {`${unconfirmed - unreadable} ${
+                unconfirmed - unreadable === 1 ? 'job is' : 'jobs are'
+              } unconfirmed — most often a requirement you have not answered. Answering the work-authorization questions in setup settles those.`}
+            </span>
+          </div>
+        )}
 
       {/* The total travels with the page. A page cap with no total looks
           exactly like running out of jobs (R65). */}

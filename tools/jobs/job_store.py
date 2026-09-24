@@ -33,6 +33,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from tools import paths
+from tools.jobs.job_filter import UNDECIDABLE, UNREADABLE_REASON
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,20 @@ CREATE INDEX IF NOT EXISTS idx_history_url ON status_history(url, changed_at);
 # before `gate_verdict` existed are backfilled once by `_migrate`, so this is
 # the only reading of NULL anywhere.
 _VERDICT = "COALESCE(gate_verdict, 'shown')"
+
+
+def _sql_text(value: str) -> str:
+    """A string as an SQL literal, for the fixed constants inlined below."""
+    return "'" + value.replace("'", "''") + "'"
+
+
+# A posting whose description could not be read (R131): the gate found it
+# undecidable for that reason and no other. Read from the verdict rather than
+# a column of its own because the board has no `scraped_successfully` — the
+# gate judges readability from the stored text, and this is its answer.
+# An unjudged row is not unreadable: no gate has said so yet.
+_UNREADABLE = (f"({_VERDICT} = {_sql_text(UNDECIDABLE)}"
+               f" AND gate_reason = {_sql_text(UNREADABLE_REASON)})")
 
 
 def url_key(url: str) -> str:
@@ -416,8 +431,13 @@ class JobStore:
 
     # How the board may order itself. Kept here rather than in the view so the
     # screen never builds SQL, and so an unknown value cannot reach the query.
+    #
+    # "best", the default, puts postings that could not be read below every
+    # readable one (R131). Their score is keyword overlap with a snippet, and
+    # at the top of the board they crowd out jobs that can get a resume. The
+    # explicit orderings keep their meaning: "newest" is newest.
     SORTS = {
-        "best": "score IS NULL, score DESC, last_seen DESC",
+        "best": f"{_UNREADABLE}, score IS NULL, score DESC, last_seen DESC",
         "newest": "first_seen DESC",
         "recent": "last_seen DESC",
         "company": "company COLLATE NOCASE, score IS NULL, score DESC",
@@ -425,7 +445,8 @@ class JobStore:
 
     def query(self, status=None, min_score=None, company=None, source=None,
               unscored=False, has_resume=None, search=None, sort="best",
-              limit=200, offset=0, eligible=None, unconfirmed=False) -> list:
+              limit=200, offset=0, eligible=None, unconfirmed=False,
+              unreadable=False) -> list:
         """
         The board's read path: filter, then order.
 
@@ -451,6 +472,9 @@ class JobStore:
                 badged (A4).
             unconfirmed: Only the undecidable ones — what the board counts
                 as "shown, but unconfirmed".
+            unreadable: Only the undecidable ones whose description could
+                not be read (R131) — a subset of `unconfirmed`, counted on
+                its own because "best" sorts them last.
         """
         where, params = [], []
 
@@ -460,6 +484,8 @@ class JobStore:
             where.append(f"{_VERDICT} = 'hidden'")
         if unconfirmed:
             where.append(f"{_VERDICT} = 'undecidable'")
+        if unreadable:
+            where.append(_UNREADABLE)
 
         if status:
             wanted = [status] if isinstance(status, str) else list(status)
@@ -495,7 +521,8 @@ class JobStore:
             sql += " WHERE " + " AND ".join(where)
 
         # Scored jobs first and best-scoring at the top; unscored fall to the
-        # bottom rather than sorting as if they scored zero.
+        # bottom rather than sorting as if they scored zero. Under "best",
+        # unreadable postings fall below both (R131).
         sql += f" ORDER BY {self.SORTS.get(sort, self.SORTS['best'])}"
         sql += " LIMIT ? OFFSET ?"
         params.extend([int(limit), int(offset)])
