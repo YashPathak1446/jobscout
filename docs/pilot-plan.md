@@ -1169,6 +1169,14 @@ instance `none` is what it runs anyway). Seed the volume with Priya's fixture at
 `/data/data/master_resumes/priya_raghunathan.{tex,pdf}` — the doubled `data/` is
 real. Then invite.
 
+**Deploy checklist, before the invite:**
+- **No LLM keys as Fly secrets during the pilot.** `fly secrets list` shows
+  none of `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`,
+  `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `TOGETHER_API_KEY` or
+  `DEEPSEEK_API_KEY`. R113 already ignores them in hosted mode; this keeps
+  the instance from holding a key nothing should read, and keeps Q67's
+  reversal a decision rather than a leftover.
+
 **Discovery breadth last, after the invite is proven:** enable Adzuna
 (`adzuna_search.py` is fully implemented and needs only `ADZUNA_APP_ID` /
 `ADZUNA_APP_KEY`) and grow `tools/assets/ats_companies.json` beyond its current

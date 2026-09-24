@@ -11840,6 +11840,53 @@ with hostile input.
   (`looks_like_latex`). It would then be compiled as LaTeX, so it belongs
   in the sandbox work's tests.
 
+## Q67. Whose key pays, per plan
+
+**Status:** Open, logged 2026-09-24 by the author. Decide when a paid tier
+is designed; nothing to build before then.
+
+**R113 is pilot policy, not a permanent rule.** During the pilot a hosted
+instance uses only the key a request carries, so each friend pays for their
+own model calls on Google's free tier and the operator pays nothing. That
+matches the $10/month ceiling (OOS5) and the pilot having no revenue. A
+paid tier will want the opposite for at least some users: the operator's
+key, metered and billed, so a paying user never has to find one. When that
+happens R113 is reversed for that tier, deliberately and per plan, not by
+setting a secret and discovering what reads it.
+
+**What pins R113 today, and so what the reversal has to change:**
+- `config.environment_keys_allowed()` is the single switch: true only in
+  local mode. Both guards ask it.
+- **Guard 1:** `config.resolve_api_key(explicit)` returns the request's key,
+  else the environment's `GOOGLE_API_KEY` only when the switch allows. Every
+  Gemini client (`config.gemini_client`, R101) and the embedding backend's
+  choice go through it.
+- **Guard 2:** `llm_backends.env_openai_key()` returns an OpenAI-compatible
+  key from the environment only when the switch allows.
+- **The test that pins them:** `tests/test_hosted_keys.py`,
+  `TestNothingElseReadsAKey.test_only_the_two_readers_touch_key_variables`.
+  It walks the syntax tree of `agents/`, `tools/`, `scripts/`, `config.py`,
+  `app.py` and `api/main.py`. It requires the set of files reading any
+  provider key variable to **equal** `{config.py,
+  tools/generation/llm_backends.py}`: a third reader fails it, and so does a
+  blind walk that finds none.
+
+**What the reversal needs decided first:**
+- Which plan pays with whose key, and whether "bring your own key" stays as
+  an option on a paid plan.
+- Where the answer lives. It is per user, not per process, so the switch
+  can no longer be a mode check. It needs the caller's plan, which means it
+  takes `user_id` like every other per-user decision (R90).
+- Metering. An operator key spent without a per-user count is R113's
+  original risk with a bill attached. Q61's free-tier limits do not apply to
+  a paid key, and its quota breaker (R97) would need a per-user budget
+  instead.
+- The cache keys. The LLM cache is keyed by rung and model (R45, R80), not
+  by whose key paid. Whether a paid user may be served a reply another
+  user's key bought is a question the cache key currently answers "yes"
+  without having been asked (CLAUDE.md, "A cache key encodes how much
+  variation lives inside a category").
+
 ---
 
 # Out of scope
