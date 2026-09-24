@@ -5,7 +5,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, type Backend } from '@/lib/api'
+import { api, type Backend, type Session } from '@/lib/api'
 
 const HEADLINE: Record<string, string> = {
   gemini: 'Bullets will be rewritten by Google Gemini.',
@@ -28,9 +28,11 @@ const HEADLINE: Record<string, string> = {
  * component selection all work with nothing configured.
  */
 export function BackendPanel({
+  mode,
   apiKey,
   onKey,
 }: {
+  mode: Session['mode']
   apiKey: string
   onKey: (key: string) => void
 }) {
@@ -94,6 +96,10 @@ export function BackendPanel({
           <AlertDescription className="space-y-2">
             {none && backend.key_problem ? (
               <p>Fix the key above, and bullets will be rewritten by Gemini.</p>
+            ) : none && mode === 'hosted' ? (
+              // A hosted instance cannot reach an Ollama on the friend's
+              // machine, so the key is the only true advice there (Q68).
+              <p>To get tailored bullets, add a Gemini key above.</p>
             ) : none ? (
               <p>
                 To get tailored bullets, add a Gemini key above, or run{' '}

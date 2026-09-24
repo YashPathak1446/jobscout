@@ -104,6 +104,7 @@ export default function App() {
         </>
       ) : (
         <Wizard
+          mode={session.mode}
           profile={profile}
           onProfile={setProfile}
           onOpenBoard={() => setView('board')}

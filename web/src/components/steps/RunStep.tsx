@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, type Backend, type RunStatus } from '@/lib/api'
+import { api, type Backend, type RunStatus, type Session } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const STAGES = ['discovery', 'enrichment', 'analysis', 'generation'] as const
@@ -55,11 +55,13 @@ const RUNGS = [
 ] as const
 
 export function RunStep({
+  mode,
   profile,
   apiKey,
   onBack,
   onOpenBoard,
 }: {
+  mode: Session['mode']
   profile: string
   apiKey: string
   onBack: () => void
@@ -189,7 +191,12 @@ export function RunStep({
               Unavailable rungs stay listed and disabled with the reason, not
               hidden. Hiding them is what kept Ollama a secret; showing it
               greyed out with "not running" is how somebody finds out it
-              exists. */}
+              exists.
+
+              Except Ollama on a hosted instance, which is hidden: there it is
+              not "not running" but unreachable, since it would have to run on
+              the server, and greying it out tells a friend to go and start
+              something they cannot start (Q68). */}
           <div className="space-y-1.5">
             <Label htmlFor="rung">Rewrite bullets with</Label>
             <Select
@@ -200,7 +207,9 @@ export function RunStep({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {RUNGS.map(({ value, label, needs }) => {
+                {RUNGS.filter(
+                  ({ value }) => !(mode === 'hosted' && value === 'ollama'),
+                ).map(({ value, label, needs }) => {
                   const ready = backend.available?.[value] ?? value === 'none'
                   return (
                     <SelectItem key={value} value={value} disabled={!ready}>

@@ -305,6 +305,88 @@ class TestARunLeavesNoKey(_HostedHome):
         self.assertNowhere(KEY, logs)
 
 
+class TestTwoUsersRunningAtOnce(_HostedHome):
+    """
+    Two users' runs, in two threads, each with its own key, both held at once.
+
+    The scrubber's registry has to hold every key in use, not the latest one:
+    a single "current key" slot would be overwritten by the second run to
+    start, and the first run's key would then be written as plain text by
+    its own thread. Each run's model error quotes that run's key, and it
+    raises only once both keys are held, so the overlap is certain rather
+    than hoped for.
+    """
+
+    OTHER_KEY = "AQ.second-user-key-0b9e4d2c7a1f8e3b6d5c4a2f9e8d7c6b5a4"
+
+    def setUp(self):
+        super().setUp()
+        from tools.paths import user_home
+        self.other = make_account("other@example.com")
+        for user in (self.user, self.other):
+            home = user_home(user)
+            (home / "user_profiles").mkdir(parents=True, exist_ok=True)
+            (home / "data" / "master_resumes").mkdir(parents=True, exist_ok=True)
+            shutil.copy(ROOT / "user_profiles" / f"{FIXTURE}.json",
+                        home / "user_profiles")
+            shutil.copy(ROOT / "data" / "master_resumes" / f"{FIXTURE}.tex",
+                        home / "data" / "master_resumes")
+
+    def test_neither_key_reaches_a_log_record_or_file(self):
+        from agents import generation_agent, orchestrator
+
+        real_pipeline = orchestrator.JobScoutOrchestrator
+        real_agent = orchestrator.GenerationAgent
+        seen, lock, both = set(), threading.Lock(), threading.Event()
+
+        def pipeline(**kwargs):
+            return real_pipeline(**{**kwargs, "mock_mode": True, "use_cache": False})
+
+        def live_generation(*args, **kwargs):
+            return real_agent(*args, **{**kwargs, "mock_mode": False})
+
+        def gemini_client(explicit=None):
+            with lock:
+                seen.add(explicit)
+                if {KEY, self.OTHER_KEY} <= seen:
+                    both.set()
+            # Nobody echoes a key until both runs are holding theirs.
+            both.wait(30)
+            return FakeClient(error=RuntimeError(f"401 key {explicit} rejected"))
+
+        runs = {}
+        with mock.patch.object(orchestrator, "JobScoutOrchestrator", pipeline), \
+                mock.patch.object(orchestrator, "GenerationAgent", live_generation), \
+                mock.patch.object(generation_agent, "gemini_client", gemini_client), \
+                CapturedLogs() as logs:
+            for user, key in ((self.user, KEY), (self.other, self.OTHER_KEY)):
+                runs[user] = orchestrator.start_run(
+                    user, FIXTURE, api_key=key, max_jobs=5, max_resumes=2,
+                    generate_pdf=False)
+            for user, run_id in runs.items():
+                for thread in threading.enumerate():
+                    if thread.name == f"jobscout-run-{run_id}":
+                        thread.join(120)
+            statuses = {user: orchestrator.run_status(user, run_id)
+                        for user, run_id in runs.items()}
+
+        self.assertTrue(both.is_set(), "the runs never overlapped; test is blind")
+        for user, status in statuses.items():
+            with self.subTest(user=user):
+                self.assertEqual(status["state"], "finished", status)
+                self.assertIn(config.REDACTED_KEY,
+                              " ".join(status["result"]["degraded"]),
+                              "no failure text reached the record; test is blind")
+                self.assertNotIn(KEY, json.dumps(status))
+                self.assertNotIn(self.OTHER_KEY, json.dumps(status))
+        self.assertIn(config.REDACTED_KEY, logs.text, "the log was not captured")
+        self.assertNowhere(KEY, logs.text)
+        self.assertNowhere(self.OTHER_KEY, logs.text)
+        # Both released afterwards: the registry is a hold, not a history.
+        self.assertEqual(config.redact_keys(KEY + self.OTHER_KEY),
+                         KEY + self.OTHER_KEY)
+
+
 class TestTheScrubber(unittest.TestCase):
 
     def test_only_while_in_use(self):
@@ -368,6 +450,48 @@ class TestThePageSendsAndKeepsTheKey(unittest.TestCase):
         self.assertIn("https://aistudio.google.com/app/apikey", step)
         self.assertIn("Forget key", step)
         self.assertIn("The server never stores it.", step)
+
+    def test_the_key_page_says_what_the_free_tier_does_with_your_data(self):
+        step = self.read("components/steps/KeyStep.tsx")
+        self.assertIn("https://ai.google.dev/gemini-api/terms", step)
+        self.assertIn("On the free tier, Google may use what you send it", step)
+        self.assertIn("resume and the job descriptions", step)
+
+
+class TestAHostedPageOffersNothingLocal(unittest.TestCase):
+    """
+    Q68: a hosted instance cannot reach an Ollama on the friend's machine.
+
+    Source-level, like the class above. Each check names the mode reaching the
+    place it is used, because a component that is never told the mode shows
+    the local copy everywhere and still typechecks.
+    """
+
+    WEB = ROOT / "web" / "src"
+
+    def read(self, path):
+        return (self.WEB / path).read_text(encoding="utf-8")
+
+    def test_the_mode_reaches_every_place_that_says_local(self):
+        self.assertIn("mode={session.mode}", self.read("App.tsx"))
+        wizard = self.read("components/Wizard.tsx")
+        self.assertEqual(wizard.count("mode={mode}"), 2)  # KeyStep and RunStep
+        self.assertIn("<BackendPanel mode={mode}",
+                      self.read("components/steps/KeyStep.tsx"))
+
+    def test_the_subtitle_says_locally_only_when_local(self):
+        wizard = self.read("components/Wizard.tsx")
+        self.assertIn("{mode === 'local' ? ', locally.' : '.'}", wizard)
+        self.assertNotIn("each one,\n            locally.", wizard)
+
+    def test_the_keyless_advice_names_ollama_only_when_local(self):
+        panel = self.read("components/BackendPanel.tsx")
+        hosted = panel.index("none && mode === 'hosted'")
+        self.assertLess(hosted, panel.index("<strong>Ollama</strong> locally"))
+
+    def test_the_rung_list_drops_ollama_when_hosted(self):
+        run = self.read("components/steps/RunStep.tsx")
+        self.assertIn("!(mode === 'hosted' && value === 'ollama')", run)
 
 
 if __name__ == "__main__":

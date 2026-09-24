@@ -2,6 +2,7 @@ import { ExternalLink, KeyRound } from 'lucide-react'
 
 import { BackendPanel } from '@/components/BackendPanel'
 import { Button } from '@/components/ui/button'
+import type { Session } from '@/lib/api'
 
 /**
  * The key page (Q58, R117). First, because the resume step's import is the
@@ -15,12 +16,14 @@ import { Button } from '@/components/ui/button'
  * better matches" would be false on both modes.
  */
 export function KeyStep({
+  mode,
   apiKey,
   persisted,
   onKey,
   onForget,
   onContinue,
 }: {
+  mode: Session['mode']
   apiKey: string
   /** Whether this browser let the key be saved. False: memory only. */
   persisted: boolean
@@ -75,7 +78,7 @@ export function KeyStep({
         </p>
       </section>
 
-      <BackendPanel apiKey={apiKey} onKey={onKey} />
+      <BackendPanel mode={mode} apiKey={apiKey} onKey={onKey} />
 
       <section className="space-y-2 text-sm">
         <p className="flex items-center gap-1.5 font-medium">
@@ -97,6 +100,25 @@ export function KeyStep({
             it.
           </p>
         )}
+        {/* Worded against Google's Gemini API Additional Terms, "Unpaid
+            Services", as read 2026-09-24: content submitted on the free
+            tier is used to improve Google's products, and human reviewers
+            may read it. Re-read the terms before changing this. */}
+        <p className="text-muted-foreground">
+          On the free tier, Google may use what you send it (here, your
+          resume and the job descriptions) to improve its products, and
+          people at Google may read it. See{' '}
+          <a
+            href="https://ai.google.dev/gemini-api/terms"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-4"
+          >
+            Google's Gemini API terms
+            <ExternalLink className="size-3" />
+          </a>
+          .
+        </p>
         {apiKey && (
           <Button variant="outline" size="sm" onClick={onForget}>
             Forget key

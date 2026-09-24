@@ -11,7 +11,7 @@ import { PreferencesStep } from '@/components/steps/PreferencesStep'
 import { ResumeStep } from '@/components/steps/ResumeStep'
 import { RunStep } from '@/components/steps/RunStep'
 import { TuningStep } from '@/components/steps/TuningStep'
-import { api, type ProfileSummary } from '@/lib/api'
+import { api, type ProfileSummary, type Session } from '@/lib/api'
 import { forgetKey, loadKey, saveKey } from '@/lib/keyStore'
 import { cn } from '@/lib/utils'
 
@@ -28,10 +28,13 @@ export const STEPS = [
 ] as const
 
 export function Wizard({
+  mode,
   profile,
   onProfile,
   onOpenBoard,
 }: {
+  /** Hosted cannot reach anything on the friend's machine (Q68). */
+  mode: Session['mode']
   profile: string | null
   onProfile: (name: string) => void
   onOpenBoard: () => void
@@ -82,8 +85,9 @@ export function Wizard({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">JobScout</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Find roles at your level and tailor your resume to each one,
-            locally.
+            {/* "Locally" is false on a hosted instance (Q68). */}
+            Find roles at your level and tailor your resume to each one
+            {mode === 'local' ? ', locally.' : '.'}
           </p>
         </div>
         {profile && (
@@ -128,6 +132,7 @@ export function Wizard({
 
       {step === 0 && (
         <KeyStep
+          mode={mode}
           apiKey={apiKey}
           persisted={persisted}
           onKey={changeKey}
@@ -204,6 +209,7 @@ export function Wizard({
 
       {step === 5 && profile && (
         <RunStep
+          mode={mode}
           profile={profile}
           apiKey={apiKey}
           onBack={() => setStep(4)}

@@ -10315,6 +10315,32 @@ item 3. It has to be read from Google's current terms, and it was not in
 this request. The frontend has no test runner, so the page itself was
 typechecked, linted and built, not exercised in a browser.
 
+### Follow-ups (2026-09-24)
+
+- **Does the registry hold every key, or one?** Every key. `_KEYS_IN_USE`
+  is a process-wide `Counter` that each run and import adds to and releases,
+  so two users' runs in two threads are both scrubbed. Nothing changed in
+  the code. `TestTwoUsersRunningAtOnce` now proves it: two hosted users,
+  two keys, the real mock pipeline with generation live, and each model
+  error quotes its own run's key. No error is raised until both keys are
+  held. Neither key reaches either run record, the log or any file.
+  Mutation-checked: a registry that keeps only the latest key fails it.
+- **Q68's first two items, React only.** The session's mode now reaches the
+  wizard. When hosted, the subtitle drops "locally". The keyless advice
+  says only "add a Gemini key", and the run step's rung list omits Ollama.
+  Omitted, not greyed out: on a hosted instance Ollama cannot be reached
+  at all, so "not running" would send a friend off to start something they
+  cannot start. Local mode is unchanged.
+- **The free-tier data-use sentence**, from pilot-plan item 3, is on the Key
+  step under "Where your key goes", with a link to Google's Gemini API
+  terms. It is worded against the terms' "Unpaid Services" section as read
+  on 2026-09-24: content submitted on the free tier is used to improve
+  Google's products, and human reviewers may read it. That page could not
+  be fetched from this environment, so the wording was taken from its
+  quoted text in search results. Check it against the live page before
+  the invite goes out. The same section also says not to submit personal
+  information, which is Q69.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -12090,8 +12116,14 @@ setting a secret and discovering what reads it.
 
 ## Q68. The key page shows a hosted friend local-only advice, and a saved key outlives sign-out
 
-**Status:** Open, logged 2026-09-24 while building R117. Not fixed there,
-because R117 was limited to Q58's list.
+**Status:** Partly resolved 2026-09-24 (R117 follow-ups). The Ollama text,
+the Ollama rung and the "locally" subtitle are mode-aware in React.
+**Still open:** the `LLM_BACKEND` / config.py line. Also still open: on a
+hosted instance the OpenAI-compatible rung is greyed out with "needs a key",
+a key a friend cannot supply there, and "Detected on this machine" under
+the rung picker is local wording. The saved key outliving sign-out is also
+still open. Logged 2026-09-24 while building R117. Not fixed there, because
+R117 was limited to Q58's list.
 
 - **The key panel tells a hosted user to run Ollama.** `BackendPanel`'s
   keyless text reads "add a Gemini key above, or run **Ollama** locally …
@@ -12113,6 +12145,29 @@ because R117 was limited to Q58's list.
 
 **Carries over (R114)?** All three do: they are the hosted product's copy
 and its key handling, not pilot workarounds.
+
+## Q69. Google's free-tier terms say not to submit personal information, and a resume is personal information
+
+**Status:** Open, logged 2026-09-24 while wording R117's data-use sentence.
+
+The Gemini API terms' "Unpaid Services" section says content is used to
+improve Google's products, and that human reviewers may read it. The page
+now says both. The same section also says, in effect, **do not submit
+sensitive, confidential or personal information to the unpaid services.**
+A resume import sends a whole resume, with name, email, phone and history,
+through a friend's free-tier key. Generation sends their bullets. So the
+recommended setup, a free key, is one the provider's terms tell the user
+not to use for this.
+
+This is not a code defect, and the page is not false. It is a product
+question for the pilot and for the paid product:
+- tell users this in the terms' own words, not only "may use";
+- or redact contact details before anything goes to the model (the import
+  needs them, and generation mostly does not);
+- or recommend a paid key, or use an operator key on a paid tier (Q67).
+
+**Carries over (R114)?** Yes. It is about what the hosted product sends to
+a third party on a user's behalf.
 
 ---
 
