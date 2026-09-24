@@ -10721,6 +10721,37 @@ imported a resume and closed the tab before running now lands on an empty
 board with "Edit setup", not a fresh wizard. The layout Q79 describes is the
 fuller answer.
 
+## R123. An empty board says so and offers the first run
+
+**Decided 2026-09-24**, React only.
+
+The board's list said "No jobs match these filters" whenever it was empty.
+On a first visit, which R122 now lands on the board, that blamed filters
+nobody had set and offered no way to the run that fills the board. Now three
+cases, each claiming only what is known:
+- **nothing stored** (`stats.total === 0`): "No jobs yet — run your first
+  search", plus a line on what a search does, and a **Run your first
+  search** button that opens the wizard on its Run step. The button appears
+  only when there is a profile to run.
+- **jobs stored, none matching the filters:** the filter message, with the
+  stored count, as before.
+- **counts not arrived or failed:** "No jobs to show.", neither claim.
+
+The button goes through `App`, which owns the board/wizard switch.
+`Wizard` gained an optional `initialStep`. "Edit setup" still opens the first
+step.
+
+**Tests** (`test_empty_board.py`, source-level): the three branches and the
+wiring. Against the old code, all fail.
+
+**Seen in a browser.** The built React, hosted mode, Chromium, signing in
+through the form:
+- an account with a profile and no jobs showed the empty state and not the
+  filter message;
+- its button opened the wizard on Run, with "Jobs to look at" on screen;
+- a four-job account searching for a term matching nothing showed the
+  filter message and not the empty state.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

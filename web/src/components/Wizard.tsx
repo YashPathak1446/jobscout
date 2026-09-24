@@ -32,14 +32,17 @@ export function Wizard({
   profile,
   onProfile,
   onOpenBoard,
+  initialStep,
 }: {
   /** Hosted cannot reach anything on the friend's machine (Q68). */
   mode: Session['mode']
   profile: string | null
   onProfile: (name: string) => void
   onOpenBoard: () => void
+  /** Which step to open on; the board's empty state opens Run (R123). */
+  initialStep?: number
 }) {
-  const [step, setStep] = useState(0)
+  const [step, setStep] = useState(initialStep ?? 0)
   // The furthest screen reached, so stepping back does not strand someone
   // behind screens they have already completed.
   //

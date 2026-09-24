@@ -49,7 +49,13 @@ function since(stamp: string | null): string {
   return `${Math.floor(days / 30)}mo ago`
 }
 
-export function Board() {
+export function Board({
+  onStartRun,
+}: {
+  /** Opens the wizard on its Run step. Absent when there is no profile to
+   *  run, and then the empty board offers no button (R123). */
+  onStartRun?: () => void
+} = {}) {
   const [jobs, setJobs] = useState<Job[]>([])
   const [total, setTotal] = useState(0)
   const [hidden, setHidden] = useState(0)
@@ -279,14 +285,34 @@ export function Board() {
               </div>
             ))}
           </div>
-        ) : jobs.length === 0 ? (
+        ) : jobs.length === 0 && stats !== null && stats.total === 0 ? (
+          // Nothing stored at all (R123): a first visit, not a filter. This
+          // said "No jobs match these filters", which blamed filters nobody
+          // had set, and offered no way to the one thing that fills a board.
+          <div className="p-12 text-center">
+            <p className="font-medium">No jobs yet — run your first search</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              A search finds postings for your profile, scores them, and
+              writes a tailored resume for the best.
+            </p>
+            {onStartRun && (
+              <Button className="mt-4" onClick={onStartRun}>
+                Run your first search
+              </Button>
+            )}
+          </div>
+        ) : jobs.length === 0 && stats !== null ? (
           <div className="p-12 text-center">
             <p className="font-medium">No jobs match these filters.</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              {total === 0 && stats?.total
-                ? `${stats.total} jobs are stored — try clearing the filters.`
-                : 'Run a discovery pass to fill the board.'}
+              {stats.total} jobs are stored — try clearing the filters.
             </p>
+          </div>
+        ) : jobs.length === 0 ? (
+          // The counts have not arrived (or failed), so whether the board is
+          // empty or filtered is not known, and neither is claimed.
+          <div className="p-12 text-center">
+            <p className="font-medium">No jobs to show.</p>
           </div>
         ) : (
           <ul className={cn('divide-y', loading && 'opacity-60')}>

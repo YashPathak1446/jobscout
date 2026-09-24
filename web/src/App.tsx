@@ -3,7 +3,7 @@ import { ArrowLeft } from 'lucide-react'
 
 import { Board } from '@/components/Board'
 import { SignIn } from '@/components/SignIn'
-import { Wizard } from '@/components/Wizard'
+import { STEPS, Wizard } from '@/components/Wizard'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { api, SIGNED_OUT, type Session } from '@/lib/api'
@@ -20,6 +20,9 @@ export default function App() {
   // one. It resolves to 'board' or 'setup' as soon as health answers.
   const [view, setView] = useState<'signin' | 'home' | 'setup' | 'board'>('setup')
   const [profile, setProfile] = useState<string | null>(null)
+  // The wizard's opening step: undefined is its first, and the board's empty
+  // state asks for Run (R123).
+  const [wizardStep, setWizardStep] = useState<number | undefined>(undefined)
 
   // Where a signed-in hosted account starts (R122): its board when it has a
   // profile, the wizard only when it has none. Signing in used to land every
@@ -124,7 +127,14 @@ export default function App() {
       {view === 'board' ? (
         <>
           <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-6 pt-6">
-            <Button variant="ghost" size="sm" onClick={() => setView('setup')}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setWizardStep(undefined)
+                setView('setup')
+              }}
+            >
               <ArrowLeft className="size-4" />
               Edit setup
             </Button>
@@ -134,7 +144,16 @@ export default function App() {
               </span>
             )}
           </div>
-          <Board />
+          <Board
+            onStartRun={
+              profile
+                ? () => {
+                    setWizardStep(STEPS.indexOf('Run'))
+                    setView('setup')
+                  }
+                : undefined
+            }
+          />
         </>
       ) : (
         <Wizard
@@ -142,6 +161,7 @@ export default function App() {
           profile={profile}
           onProfile={setProfile}
           onOpenBoard={() => setView('board')}
+          initialStep={wizardStep}
         />
       )}
     </div>
