@@ -12996,6 +12996,14 @@ modules, starlette, stdlib, threading`.
 The second is cheap and catches the next surprise at upgrade time rather
 than in production. The first removes the class.
 
+**Interim pin (2026-09-24):** `requirements.txt` now says
+`sentry-sdk==2.70.0`, the version R126 was tested on, so no release changes
+the enabled set before this is decided. **When Q81 is done, revisit the pin.**
+Keep it, cap it, or go back to a range, depending on which option is built.
+`pyproject.toml`'s `hosted` extra still says `sentry-sdk>=2.0.0`, and was left
+as it is. The image installs from `requirements.txt`; a `pip install
+.[hosted]` would not be pinned.
+
 ---
 
 # Out of scope
