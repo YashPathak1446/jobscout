@@ -26,6 +26,9 @@ that product; otherwise log it in `known_questions.md` and defer it.** A
 guard on the hosted partition carries over; a workaround for one friend's
 machine or one pilot-only shortcut does not.
 
+**Streamlit is frozen (R115).** New UI behaviour goes to React only.
+Streamlit is fixed when something breaks, and gets shared rules for free
+because they live in the Python facade, not in either UI.
 
 ---
 

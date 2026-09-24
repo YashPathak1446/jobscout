@@ -10091,6 +10091,29 @@ and a rough edge is feedback the pilot exists to collect. The opposite
 error, pilot-only polish, spends the $10/month project's scarce hours on
 code that is thrown away at launch.
 
+## R115. Streamlit is frozen
+
+**Decided 2026-09-24 by the author.** Recorded in CLAUDE.md and the pilot
+plan.
+
+- New UI behaviour goes to **React only**.
+- Streamlit gets a fix **only when something breaks**.
+- A rule both UIs need lives in the **Python facade**, so Streamlit inherits
+  it without being edited. R110's run bounds and R111's name check are the
+  pattern: the facade enforces, and each UI only reads.
+
+**What this changes in practice.** `test_ui_contract.test_both_views_read_
+the_same_facade` fails when the API imports a facade name Streamlit does
+not. Under R115 that is the normal case for a new feature, so each such
+name goes in `HTTP_ONLY` with "Streamlit is frozen (R115)" as its reason.
+The test keeps its value: it still catches a name added to the API
+*without* a stated reason, and a stale exemption.
+
+**What breaks if wrong:** a developer on the local CLI and Streamlit stops
+getting new screens. Correctness does not diverge, because the rules are in
+the facade; only features do. The local CLI stays the developer surface,
+per CLAUDE.md.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
