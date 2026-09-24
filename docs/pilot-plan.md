@@ -1037,8 +1037,8 @@ they reach either front end.
 
   | Input | Where | What it drives | Trusted? |
   |---|---|---|---|
-  | `max_jobs` | `POST /api/run` body, default 20 | Discovery's output cap, then one scrape per job (server egress and time) and one embedding per job (potion CPU, or the user's Gemini quota) | **Yes, unbounded.** React's input says 1–100 and Streamlit's slider 5–50; both are client-side only |
-  | `max_resumes` | `POST /api/run` body, default 3 | LLM calls (user's key) and **one `pdflatex` compile per resume**, the heaviest server CPU per unit | **Yes, unbounded.** 0 falls through to the profile's `max_jobs_to_generate`; a negative value slices from the end |
+  | `max_jobs` | `POST /api/run` body, default 20 | Discovery's output cap, then one scrape per job (server egress and time) and one embedding per job (potion CPU, or the user's Gemini quota) | **Bounded since R110:** 1–50, a 400 outside. Both UIs read the bound from `/api/health` or the facade |
+  | `max_resumes` | `POST /api/run` body, default 3 | LLM calls (user's key) and **one `pdflatex` compile per resume**, the heaviest server CPU per unit | **Bounded since R110:** 1–10, a 400 outside. 0 no longer falls through to the profile (CLI `None` only) |
   | `agent_preferences.max_jobs_to_generate` | profile, default 10 | The resume cap when `max_resumes` is 0 | Now server-set only: R107 refuses it on PATCH |
   | `agent_preferences.max_jobs_to_discover` / `max_jobs_to_enrich` | profile | **Nothing.** Read only by `profile_loader`'s summary print. The run uses the request's `max_jobs` | n/a, computed and never read (CLAUDE.md's recurring bug) |
   | `max_retries`, `retry_on_validation_fail`, `fallback_to_snippet`, `discovery_source_priority` | profile | Nothing in production code | n/a, never read |
@@ -1048,10 +1048,9 @@ they reach either front end.
   | ATS slugs searched | `ats_companies.json`, per user | Discovery fan-out; grows as discovery learns slugs | Server-written only; not user-editable, but unbounded growth |
   | Discovery per-source caps | constants (ATS 200, Serper 10, Adzuna 15) | Upstream fetches | Server constants |
 
-  A10 therefore adds server-side bounds on `max_jobs` and `max_resumes` (at
-  least Streamlit's 50 and 10, and refuse ≤ 0), an upload size cap, and a
-  test that fails when an operator key is set in hosted mode, or a rule that
-  hosted runs never read one.
+  Done: the run-size bounds (R110). Left for A10: an upload size cap, one
+  active run per user (above), and hosted runs never reading an operator key
+  (proposed after R110, not yet built).
 
 - **Trimming streamlit forces a dependency split, and that has to be decided
   here.** `requirements.txt` is deliberately the install list for people running

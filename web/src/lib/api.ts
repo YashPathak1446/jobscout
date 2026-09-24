@@ -256,6 +256,8 @@ export const api = {
       profiles: string[]
       /** How many profiles this account may hold: 1 hosted, null local (R109). */
       profile_limit: number | null
+      /** The run sizes the server accepts, inclusive (R110). */
+      run_limits: Record<'max_jobs' | 'max_resumes', { min: number; max: number }>
       backend: { backend: string; forced: boolean; description: string }
       pdflatex: boolean
       statuses: string[]

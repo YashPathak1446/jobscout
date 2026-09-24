@@ -42,6 +42,7 @@ from agents.orchestrator import (
     pdflatex_available,
     previous_runs,
     refresh_board_gate,
+    run_limits,
     run_status,
     score_bands,
     start_run,
@@ -961,9 +962,13 @@ def screen_run():
         _render_running(running, has_latex)
         return
 
+    # The bounds `start_run` enforces (R110), read rather than restated.
+    limits = run_limits()
     left, right = st.columns(2)
-    max_jobs = left.slider("Jobs to search for", 5, 50, 20, step=5)
-    max_resumes = right.slider("Resumes to generate", 1, 10, 3)
+    max_jobs = left.slider("Jobs to search for", 5, limits["max_jobs"]["max"], 20,
+                           step=5)
+    max_resumes = right.slider("Resumes to generate", limits["max_resumes"]["min"],
+                               limits["max_resumes"]["max"], 3)
     review = st.checkbox(
         "Show me the jobs before writing resumes",
         help="Stops after scoring so you can see what was found. Generation is "

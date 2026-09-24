@@ -9843,6 +9843,45 @@ present. `fly.toml` sets `JOBSCOUT_MODE = "hosted"`, and
 `test_hosted_boundary` fails if it stops. Re-checked 2026-09-24 by importing
 with `FLY_APP_NAME=x` and the mode unset, then `local`: both refuse to start.
 
+## R110. A run's size is bounded by the server, and zero resumes means zero
+
+**Decided 2026-09-24**, at the author's request, from R107's A10 inventory.
+
+**What.**
+- `agents.orchestrator.RUN_LIMITS`: `max_jobs` 1–50, `max_resumes` 1–10,
+  inclusive.
+- `start_run`, the one entry point both UIs use, checks both before a
+  registry row exists. It raises `RunSizeRefused` on a value out of range, a
+  non-integer, or a `bool` (`True` is an `int` in Python and is not a job
+  count). `POST /api/run` answers 400 naming the field.
+- `/api/health` carries `run_limits`. React's inputs take their bounds from
+  it, and are disabled while health is loading or has failed: an unknown
+  bound is not guessed. Streamlit's sliders read the same function. Neither
+  UI restates the numbers, and a source test holds that.
+- The CLI calls `JobScoutOrchestrator.run` directly and is not bounded: a
+  developer's own machine and quota.
+
+**Why 50 and 10.** They are Streamlit's existing slider ranges, and both
+defaults (20 and 3) sit inside them. React allowed 100 of each. A job costs a
+scrape and an embedding. A resume costs LLM calls on the user's key plus one
+`pdflatex` compile, the heaviest server CPU per unit. **What breaks if
+wrong:** a friend who wants more than 10 resumes a run has to run twice. On
+Flash's 20 requests a day (Q61) that is not the binding limit.
+
+**The `max_resumes=0` fallback: kept for its reason, removed for zero.** It
+exists for the CLI without `--max-resumes` (`default=None`), which uses the
+profile's `max_jobs_to_generate`. It was written `self.max_resumes or
+profile...`, so 0 fell through too: a request for no resumes became 10 by
+default, or whatever PATCH had set before R107. `_resume_cap` now falls back
+on `None` only. The UIs cannot send 0 at all now; the CLI's `--max-resumes 0`
+means score and write nothing.
+
+**Tests** (`test_run_limits.py`): 15 refused values across both fields, none
+recording a run or starting a thread; the bounds accepted; the route's 400
+and an empty registry; health equal to `RUN_LIMITS`; the cap for 0, 3 and
+`None`; a source check on both UIs. Removing the check fails 16 subtests,
+and reverting to `or` fails the zero test.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

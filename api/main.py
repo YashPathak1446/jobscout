@@ -63,6 +63,7 @@ from agents.orchestrator import (
     InviteRefused,
     PassphraseRefused,
     RunInProgress,
+    RunSizeRefused,
     account_email,
     active_runs,
     available_profiles,
@@ -91,6 +92,7 @@ from agents.orchestrator import (
     set_job_status,
     sign_in,
     start_run,
+    run_limits,
     run_status,
     user_outputs_root,
     YEARS_EXPERIENCE_MAX,
@@ -391,6 +393,9 @@ def health(user: Optional[str] = Depends(_caller)) -> dict:
         # How many this account may hold: 1 hosted, None local (R109). The
         # wizard offers "replace" rather than a name field that would 409.
         "profile_limit": profile_limit(user),
+        # The bounds `start_run` enforces (R110), so the run screen's inputs
+        # stop where the server would refuse.
+        "run_limits": run_limits(),
         "backend": backend_status(),
         "pdflatex": pdflatex_available(),
         "statuses": list(job_statuses()),
@@ -866,15 +871,18 @@ def run_start(request: RunRequest, user: Optional[str] = Depends(_caller)) -> di
     ends — which is the whole point: a reloaded page can find the run again.
     """
     _own_profile(user, request.profile)
-    run_id = start_run(
-        user,
-        request.profile,
-        api_key=request.api_key,
-        max_jobs=request.max_jobs,
-        max_resumes=request.max_resumes,
-        generate_pdf=request.generate_pdf,
-        backend=request.backend or None,
-    )
+    try:
+        run_id = start_run(
+            user,
+            request.profile,
+            api_key=request.api_key,
+            max_jobs=request.max_jobs,
+            max_resumes=request.max_resumes,
+            generate_pdf=request.generate_pdf,
+            backend=request.backend or None,
+        )
+    except RunSizeRefused as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"run_id": run_id}
 
 

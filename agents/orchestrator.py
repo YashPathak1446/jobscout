@@ -379,6 +379,36 @@ def _registry(user_id):
     return RunRegistry(db_path(user_id))
 
 
+# How large a run a UI may ask for (R110), inclusive. `start_run` refuses
+# anything outside, so every UI gets the same bound whatever its widget
+# allows. `/api/health` hands this to the React run screen and Streamlit's
+# sliders read it. The CLI calls `JobScoutOrchestrator.run` directly and is
+# not bounded: it is a developer's own machine and quota.
+#
+# 50 and 10 are Streamlit's existing slider ranges; React allowed 100. Each
+# job is a scrape and an embedding. Each resume is LLM calls on the user's
+# key plus one `pdflatex` compile, the heaviest server CPU per unit (A10).
+RUN_LIMITS = {"max_jobs": (1, 50), "max_resumes": (1, 10)}
+
+
+class RunSizeRefused(ValueError):
+    """A run asked for more (or less) than `RUN_LIMITS` allows."""
+
+
+def run_limits() -> dict:
+    """`RUN_LIMITS` as the UIs want it: {field: {"min": a, "max": b}}."""
+    return {field: {"min": lo, "max": hi} for field, (lo, hi) in RUN_LIMITS.items()}
+
+
+def _check_run_size(**sizes) -> None:
+    for field, value in sizes.items():
+        lo, hi = RUN_LIMITS[field]
+        # `bool` is an `int` in Python; `True` is not a job count.
+        if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
+            raise RunSizeRefused(f"{field} must be a whole number from {lo} to {hi}; "
+                                 f"got {value!r}.")
+
+
 def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
               generate_pdf=True, output_dir="outputs", backend=None) -> str:
     """
@@ -402,6 +432,9 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
     stranger's outputs with no error anywhere (pilot plan A3).
     """
     import threading
+
+    # Before the registry row, so a refused run leaves no trace (R110).
+    _check_run_size(max_jobs=max_jobs, max_resumes=max_resumes)
 
     registry = _registry(user_id)
     run_id = registry.create(profile_name)
@@ -1330,6 +1363,20 @@ class JobScoutOrchestrator:
                 readable.append(result)
         return readable, unreadable
 
+    def _resume_cap(self) -> int:
+        """
+        How many resumes this run writes: `--max-resumes` or the run request,
+        falling back to `agent_preferences.max_jobs_to_generate` only when none
+        was given (the CLI without the flag).
+
+        `is None`, not `or`. With `or`, a request for 0 silently became the
+        profile's number: 10 by default, and settable over PATCH until R107
+        (R110). The UIs always pass one, bounded by `start_run`.
+        """
+        if self.max_resumes is not None:
+            return self.max_resumes
+        return self.profile.agent_preferences.max_jobs_to_generate
+
     def _run_generation(self):
         """Stage 4: Generate tailored resumes for the top-K best-fit jobs."""
         logger.info("\n" + "=" * 80)
@@ -1344,8 +1391,7 @@ class JobScoutOrchestrator:
         # FUNNEL: rank by overall fit score (descending) and slice to top-K.
         # Generation is the expensive stage (1-2 Gemini calls per resume), so
         # we pay for it only on the highest-scoring jobs. K is set per-run via
-        # --max-resumes, falling back to profile.agent_preferences.max_jobs_to_generate.
-        max_resumes = self.max_resumes or self.profile.agent_preferences.max_jobs_to_generate
+        max_resumes = self._resume_cap()
 
         # A resume tailored to a posting nobody could read is tailored to
         # nothing (R61). Enrichment marks a job it could not scrape, and this

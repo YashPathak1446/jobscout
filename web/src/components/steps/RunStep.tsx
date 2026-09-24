@@ -65,7 +65,10 @@ export function RunStep({
   onBack: () => void
   onOpenBoard: () => void
 }) {
-  const [health, setHealth] = useState<{ pdflatex: boolean } | null>(null)
+  const [health, setHealth] = useState<{
+    pdflatex: boolean
+    run_limits: Record<'max_jobs' | 'max_resumes', { min: number; max: number }>
+  } | null>(null)
   const [backend, setBackend] = useState<Backend | null>(null)
   // '' is "no opinion" — let the profile or detection decide — and is not
   // the same as 'auto', which is an opinion that detection should decide.
@@ -237,6 +240,7 @@ export function RunStep({
           id="max-jobs"
           label="Jobs to look at"
           value={maxJobs}
+          limits={health?.run_limits.max_jobs ?? null}
           onChange={setMaxJobs}
           disabled={running}
         />
@@ -244,6 +248,7 @@ export function RunStep({
           id="max-resumes"
           label="Resumes to write"
           value={maxResumes}
+          limits={health?.run_limits.max_resumes ?? null}
           onChange={setMaxResumes}
           disabled={running}
         />
@@ -439,12 +444,17 @@ function Number({
   id,
   label,
   value,
+  limits,
   onChange,
   disabled,
 }: {
   id: string
   label: string
   value: number
+  /** From `/api/health`: the server refuses anything outside (R110). Null
+   *  while health is loading or failed: unknown bounds are not guessed at, so
+   *  the input waits rather than offering a range the server may refuse. */
+  limits: { min: number; max: number } | null
   onChange: (value: number) => void
   disabled?: boolean
 }) {
@@ -454,11 +464,19 @@ function Number({
       <Input
         id={id}
         type="number"
-        min={1}
-        max={100}
+        min={limits?.min}
+        max={limits?.max}
         value={value}
-        disabled={disabled}
-        onChange={(e) => onChange(Math.max(1, globalThis.Number(e.target.value) || 1))}
+        disabled={disabled || limits === null}
+        onChange={(e) => {
+          if (limits === null) return
+          onChange(
+            Math.min(
+              limits.max,
+              Math.max(limits.min, globalThis.Number(e.target.value) || limits.min),
+            ),
+          )
+        }}
         className="w-28"
       />
     </div>
