@@ -1,5 +1,5 @@
 """
-Places with spaces can be entered in Preferences, one entry each (R127).
+Places with spaces can be entered in Preferences, one entry each (R129).
 
 The city, country and state inputs showed the saved list joined with ", "
 and re-split and trimmed it on every keystroke. So a space vanished before
@@ -13,7 +13,7 @@ parser returns, so "North Carolina" matches "Raleigh, NC" and the split
 "North" + "Carolina" never did. Checked here.
 
 The React half is source-level (no web runner). It was also driven once in
-Chromium against a hosted build (see R127).
+Chromium against a hosted build (see R129).
 """
 
 import re

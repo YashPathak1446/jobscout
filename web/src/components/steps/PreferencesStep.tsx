@@ -447,7 +447,7 @@ function Chip({
 }
 
 /**
- * A list of places, one entry per chip (R127).
+ * A list of places, one entry per chip (R129).
  *
  * This was one text box showing the list joined with ", ", re-split on
  * commas and trimmed on every keystroke. So a space was trimmed away before

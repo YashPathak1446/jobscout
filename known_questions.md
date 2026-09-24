@@ -10949,6 +10949,49 @@ it, and it goes to the log. That is Q83.
 
 **Test:** `test_request_key.TestTheKeyStepSaysOneThingForGemini`.
 
+## R129. Places with spaces can be entered in Preferences, one entry per chip
+
+**Decided 2026-09-24.** React only. **Numbering note:** committed as `3515441`
+with "(R127)" in its subject, a number another session had already taken for
+the duplicate-posting fix. This is the entry for that commit; the code and
+test comments say R129.
+
+**The defect.** Cities, countries and both state lists were one text box
+each. The box showed the saved list joined with ", ", and every keystroke
+re-split it on commas and trimmed each piece:
+- a space was trimmed before the next letter arrived;
+- a comma became a separator the moment it was typed.
+
+So "San Francisco", "New York", "North Carolina" and "United States" could
+not be entered.
+
+**The fix.** One `Field` component for all four lists:
+- **Entering places.** A draft is typed freely, and **Enter adds it** as one
+  chip; × removes a chip. Repeated spaces are collapsed and a duplicate (any
+  case) is ignored.
+- **Placeholders** say "Type a city, then press Enter" and the like.
+- **Separator:** Enter, not a comma, because a comma belongs to some place
+  names ("Washington, D.C.") and was the character being eaten.
+- **A typed entry is kept on blur,** so Save straight after typing keeps it.
+- **Saved lists are shown as they are.**
+
+**Matching needed no change.** `job_filter._score_us_location` compares a
+whole entry, case-insensitively, with the full state name `parse_location`
+returns. "North Carolina" matches "Raleigh, NC" and "New York" matches "New
+York, NY"; "North" + "Carolina" match nothing. Cities are never matched
+(Q84).
+
+**Tests** (`test_place_list_inputs.py`). Against the old component the
+source tests fail.
+
+**Seen in a browser.** A hosted build, Chromium, Preferences via "Edit
+setup", on a copy of Priya's profile:
+- her saved lists showed as chips, and Save with no edits left them
+  identical;
+- "San Francisco" and "New York" (Enter), and "North Carolina" as a priority
+  state, each saved as a single entry;
+- "Austin", typed without Enter before Save, was saved too.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -13068,9 +13111,10 @@ Keep it, cap it, or go back to a range, depending on which option is built.
 as it is. The image installs from `requirements.txt`; a `pip install
 .[hosted]` would not be pinned.
 
-## Q82. Cities in Preferences are never matched, and a state typed as its code matches nothing
+## Q84. Cities in Preferences are never matched, and a state typed as its code matches nothing
 
-**Status:** Open, found 2026-09-24 while fixing R127.
+**Status:** Open, found 2026-09-24 while fixing R129. (Committed first as
+"Q82" in `2f297e4`, a number another session had already used; renumbered.)
 
 - **Cities are saved and never compared with a job's location.** The one
   read, `job_filter` near line 854, uses `bool(cities or states_priority)`
