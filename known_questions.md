@@ -13366,6 +13366,41 @@ The other 95.5% (617 rows, 346 companies) have no ATS board to match against.
    from a company name is a guess, with its own false-match risk. It is a
    list edit, not a matcher.
 
+## Q88. The body gate drops most enriched jobs for a new grad, so a run writes one resume
+
+**Status:** Open, reported 2026-09-24 from a live run. Nothing built. The
+figure below is that run's log, not reproduced here.
+
+**Seen.** A new-grad profile's run enriched 10 jobs. The body gate
+(`_apply_body_gate`) hid 9, so one job reached generation and the run wrote
+one resume.
+
+**Why the count is fixed before the gate.** `discover_jobs` cuts to
+`max_jobs` (`discovery_agent.py`, `filtered_jobs[:max_jobs]`) on titles
+alone. Enrichment scrapes exactly those. The gate then reads the bodies and
+removes what rules the profile out. Nothing goes back for more, so a run's
+resume count is `max_jobs` × the pass rate. For a new grad the pass rate is
+lowest, because experience floors are the commonest thing a body states.
+
+**Proposal: enrich until N jobs pass, with a ceiling.**
+- Enrich in batches from discovery's ranked pool (which is longer than
+  `max_jobs`). Gate each batch, and stop when N jobs are shown or undecidable
+  and *readable*, since an unreadable one cannot get a resume (R61, R131).
+- A hard ceiling on scrapes per run (say 3 × N) and on wall time. Past it,
+  the run says "found K of N". A run that silently writes fewer is the
+  shape R62 forbids.
+- ATS listings arrive with `full_jd` (Q80), so they can be gated before any
+  scrape, at no cost. Only scraped sources need the loop.
+
+**Before building, check the gate rather than the loop.** If the 9 were
+hidden for "3+ years preferred" or a range such as "0-2 years", the gate is
+too strict for new grads, and a loop would only spend more scrapes to
+hide more jobs. Read the 9 reasons in that run's log first.
+
+**Costs.** More scrape requests and a longer run. A run still executes in
+the web server's process (Q85), so a longer run holds it longer. One run
+per user (R120) keeps it to one per user, not one overall.
+
 ---
 
 # Out of scope
