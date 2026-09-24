@@ -12594,6 +12594,22 @@ it. It was not in A10's list.
 
 **Carries over (R114)?** Yes: the hosted product embeds locally too.
 
+## Q76. What R120's refusal and reaper do not reach
+
+**Status:** Open, logged 2026-09-24.
+
+- **Streamlit does not catch `RunInProgress`.** In local mode Streamlit and
+  the API share the unscoped user. If a React run is going and Streamlit's
+  Run is pressed, `start_run` raises and Streamlit shows a traceback.
+  Streamlit's own Run is disabled while *it* sees a run, so this needs both
+  UIs open at once. Streamlit is frozen (R115): fix it if it breaks for
+  someone. Does not carry over.
+- **`run_status` does not reap.** A run screen polling one run by id keeps
+  showing `running` for another process's dead run until something lists
+  runs, for example a reload. Hosted, the startup sweep has already failed it
+  before any poll, so this is local mode only (a Streamlit process that died).
+  Carries over only if the product ever runs more than one process.
+
 ---
 
 # Out of scope
