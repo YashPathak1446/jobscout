@@ -13072,6 +13072,18 @@ as it is. The image installs from `requirements.txt`; a `pip install
 
 # Out of scope
 
+## Q82. Boards from before R127 can still hold one posting twice
+
+**Status:** Open, found 2026-09-24 while building R127.
+
+R127 stops new case-variant duplicates and deletes nothing, so a board that
+already has both Experian copies still shows two jobs, possibly with two
+resumes and two different statuses. Merging them means choosing whose
+status, score and resume survive, and a status belongs to the user. Options:
+leave them; show the pair as one row with both histories; or merge only
+pairs where neither copy has a user-set status. Worth counting how many
+hosted boards actually hold a pair before choosing.
+
 ## Q62. A non-remote location with no country is still shown as eligible, and the board gate ignores `exclude_countries`
 
 **Status:** Open, backlog from R105 (2026-09-23). Found while fixing Q55;
