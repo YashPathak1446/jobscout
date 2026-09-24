@@ -1065,6 +1065,14 @@ they reach either front end.
 
 ### A11. Resume pre-flight on the friends' real resumes (½ day)
 
+**Both import paths, for every resume (2026-09-24).** Run each friend's
+resume through import twice: with a key (model extraction) and without one
+(the keyless pattern reader). A hosted import has no key unless the browser
+sends one (R113), so the pattern reader is what a friend without a key gets.
+The two are forks that one machine always takes the same side of. Compare
+the two profiles field by field, and read the `parse_warnings` each import
+reports (R112): anything they list is left out of every tailored resume.
+
 Before inviting, run each friend's actual resume through `extract_resume`
 locally and read the output. The pool spans CS students to 10-year engineers, so
 formats and lengths vary far beyond Jake's template. Two specific things to
@@ -1075,6 +1083,17 @@ item 1 of the remaining order, ahead of this.* Cheap, and it is the last chance
 to find a parser bug before it costs a first impression.
 
 ### A11b. A clean clone runs green (½ day) — before A12, because the image is a clone
+
+**Fixture users move to `tests/fixtures/users/` (2026-09-24, Q65).** The
+`verify` stage copies `tests/` and `baselines/`, and `.dockerignore`
+excludes `data/` and `user_profiles/` whole. So Priya and Rohan never reach
+the image, and every test that reads them errors there. Move their profiles
+and resumes under `tests/fixtures/users/` and have tests seed a temporary
+data home from there (`tests/fixture_home.py` already does the seeding).
+**Keep `.dockerignore`'s exclusion of `data/` and `user_profiles/` as it
+is.** No carve-outs: the rule stays "never ship anyone's data", true by
+construction. The CLI's `--profile priya_raghunathan` and A12's volume
+seeding then read from the new place.
 
 **Found 2026-09-22 (Q35), verifying that A2's two commits were each green on
 their own.** Checking the Q34 commit out into a fresh worktree and running the

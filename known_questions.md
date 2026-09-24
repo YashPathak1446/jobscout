@@ -11712,6 +11712,88 @@ and acceptance's seeding (A12) reads from the new place. Not built here; it
 needs a Docker build to verify, and this container has no daemon.
 
 
+## Q66. Where a user's or a posting's string becomes a path or LaTeX: the audit
+
+**Status:** Open for one finding (2 below, the TeX sandbox, which the author
+is handling separately). Audited 2026-09-24. **Verified** means reproduced
+here; **reasoned** means read from the code.
+
+### Findings, most serious first
+
+1. **Profile name to path: cross-account write. Fixed, R111.** Verified over
+   HTTP. A profile name was joined to the profiles folder unchecked, in both
+   the importer and the loader.
+2. **The compile step can read files outside the user's own folder. Open.**
+   Verified through the repo's own `compile_pdf`, with TeX Live 2023 as
+   packaged for Ubuntu 24.04. The image's Debian TeX Live ships the same
+   upstream defaults, but the image itself was not inspected.
+   - An uploaded `.tex` is compiled as its own LaTeX: generation copies its
+     header verbatim.
+   - `pdf_builder` passes no file-access or shell settings, so the engine's
+     stock configuration applies. That configuration allows reading any
+     file the process can read; restricts writing to the working folder
+     (`openout_any = p`); and limits shell commands to a short whitelist
+     (`shell_escape = p`).
+   - None of the three is pinned in the repo.
+   - Each compile runs in the run's output folder, not a fresh one. The
+     timeout is 180 s and kills only the direct child.
+   - The fix is a sandboxed compile: pinned settings, a fresh working
+     folder per job, and a process-group timeout. It is its own R, in the
+     author's separate session.
+3. **An escaped character dropped a whole skills category. Fixed, R112.**
+   Verified. Found here as "skills values are written unescaped". Measuring
+   showed the parser dropped the category before that code could run.
+4. **A model key in the environment would have been spent on every hosted
+   user. Fixed, R113.** Reasoned from the code; nothing is set on Fly today.
+
+### Checked and contained
+
+Each of these was read, and the ones marked verified were also exercised
+with hostile input.
+- `/api/file` resolves and compares by path component. Verified: a sibling
+  folder with the same prefix, `..`, absolute paths and a symlink were all
+  404.
+- `load_run` compares the same way; verified.
+- `user_home` matches ids against `[a-z0-9_-]{1,64}`; verified.
+- `stored_path` (R108) resolves and requires the user's home; verified.
+- `_resolve_upload` compares the resolved parent; verified. `extract_resume`
+  keeps only the upload's basename; verified.
+- `_own_profile` checks the run and gate routes' profile against the
+  account's own listing.
+- The LLM and embedding caches key files by hash. The job and resume
+  caches are one fixed file each, with URLs only as keys.
+- ATS slugs harvested from postings become URL paths on fixed hosts, never
+  filesystem paths.
+- Output resume filenames keep letters, digits and underscores plus a hash.
+  Verified: slashes, backslashes, NUL and full-width solidus all come out
+  flat. The length cap came in R111.
+- **Every other string reaching LaTeX is escaped** by the one escaper
+  (`tex_renderer.escape`): importer fields, and LLM and verbatim bullets
+  through `experience_block` / `project_block`. Since R112 that includes
+  the skills builder. A PDF or Word import is escaped field by field, so
+  text in it cannot become a command. Scraped job text never reaches the
+  `.tex` as markup; it only steers which of the user's own skills are
+  chosen.
+
+### Minor, not fixed
+
+- **An upload can replace the user's own master resume** when it shares
+  its filename. It stays inside their own files. Worth a confirmation later.
+- **`stored_path` checks the resolved path and returns the joined one.**
+  No route lets a user create a symlink, so the window between the two is
+  theoretical.
+- **CLI-only paths are unchecked, and trusted:** the analysis and
+  generation `main()`s, `doctor.py`, `--output` and `--input`. The first
+  two anchor at the code root, R86's shape, which is a correctness bug for
+  an installed copy, not a security one.
+- **Streamlit's download opens paths stored on board rows** without
+  containment. Those paths are written by the pipeline, and Streamlit is
+  local and unscoped.
+- **Reasoned, unverified:** a PDF or Word upload whose extracted text
+  contains LaTeX document markers is classified as LaTeX and stored raw
+  (`looks_like_latex`). It would then be compiled as LaTeX, so it belongs
+  in the sandbox work's tests.
+
 ---
 
 # Out of scope
