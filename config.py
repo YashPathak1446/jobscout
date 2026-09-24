@@ -198,9 +198,28 @@ def classify_api_error(exc: Exception) -> str:
 API_KEY_ENV_VAR = "GOOGLE_API_KEY"
 
 
+def environment_keys_allowed() -> bool:
+    """
+    Whether a model key may come from this process's environment (R113).
+
+    **Local only.** On a hosted instance the environment is the operator's,
+    and a key found there would be spent on every user's run and import. So
+    hosted mode uses the key a request carries, or none. Both readers of
+    environment keys ask this: `resolve_api_key` for Gemini and
+    `llm_backends.env_openai_key` for the OpenAI-compatible rungs.
+
+    Imported late, because `config` is imported by everything and
+    `tools.accounts` must not have to load first. An unrecognised
+    `JOBSCOUT_MODE` raises here, as it does at boot, rather than guessing.
+    """
+    from tools.accounts import hosting_mode
+    return hosting_mode() == "local"
+
+
 def resolve_api_key(explicit: str = None) -> str:
     """
-    The key to use: an explicitly supplied one, else the environment's.
+    The key to use: an explicitly supplied one, else the environment's, and
+    the environment's **only in local mode** (R113).
 
     Args:
         explicit: A key from a caller — a UI form, a test, an orchestrator
@@ -215,6 +234,9 @@ def resolve_api_key(explicit: str = None) -> str:
 
     if explicit:
         return explicit
+
+    if not environment_keys_allowed():
+        return ""
 
     return os.getenv(API_KEY_ENV_VAR) or ""
 

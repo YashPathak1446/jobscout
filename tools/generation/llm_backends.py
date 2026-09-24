@@ -355,7 +355,18 @@ def _strip_code_fence(text: str) -> str:
 
 
 def env_openai_key() -> str:
-    """A hosted OpenAI-compatible key from the environment, if there is one."""
+    """
+    An OpenAI-compatible key from the environment, if there is one, and
+    **only in local mode** (R113).
+
+    A run request carries a Gemini key and nothing else, so on a hosted
+    instance the OpenAI-compatible rungs have no key and are not offered.
+    Before R113 a `GROQ_API_KEY` set as a Fly secret would have been spent on
+    every user's run.
+    """
+    from config import environment_keys_allowed
+    if not environment_keys_allowed():
+        return ""
     for name in ("OPENAI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY",
                  "TOGETHER_API_KEY", "DEEPSEEK_API_KEY"):
         value = os.getenv(name)

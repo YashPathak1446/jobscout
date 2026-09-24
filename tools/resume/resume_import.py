@@ -29,6 +29,49 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED = {".pdf", ".docx", ".txt", ".tex"}
 
+# What a file's first bytes must be for its extension to be believed (R116).
+# PDF allows a little junk before the header, so the first kilobyte is
+# searched rather than the first five bytes. A .docx is a zip archive.
+PDF_MAGIC = b"%PDF-"
+ZIP_MAGIC = b"PK\x03\x04"
+
+
+class UploadRefused(ValueError):
+    """An upload whose extension and contents disagree, or an unknown kind."""
+
+
+def classify_upload(file_bytes: bytes, filename: str) -> str:
+    """
+    What an upload is, by file type: `"pdf"`, `"docx"`, `"tex"` or `"txt"`.
+
+    **Decided by extension and confirmed by the file's own bytes, never by the
+    text inside it** (R116). Import used to extract a PDF's or Word file's
+    text and, if that text looked like LaTeX, keep the upload as LaTeX. What a
+    document *says* is content; what it *is* is its type, and only the type
+    decides how it is handled.
+
+    Refused, with a reason a person can act on: an unsupported extension, a
+    `.pdf` that is not a PDF, a `.docx` that is not a zip, and a `.tex` or
+    `.txt` that is really a PDF or Word file.
+    """
+    suffix = Path(filename or "").suffix.lower()
+    if suffix not in SUPPORTED:
+        raise UploadRefused(
+            f"Cannot read {suffix or 'a file with no extension'}; "
+            f"upload one of: {', '.join(sorted(SUPPORTED))}.")
+    is_pdf = PDF_MAGIC in file_bytes[:1024]
+    is_zip = file_bytes[:4] == ZIP_MAGIC
+    if suffix == ".pdf" and not is_pdf:
+        raise UploadRefused("That file is named .pdf but is not a PDF.")
+    if suffix == ".docx" and not is_zip:
+        raise UploadRefused("That file is named .docx but is not a Word document.")
+    if suffix in (".tex", ".txt") and (is_pdf or is_zip):
+        raise UploadRefused(
+            f"That file is named {suffix} but is a "
+            f"{'PDF' if is_pdf else 'Word or zip'} file. Upload it with its "
+            "real extension.")
+    return suffix[1:]
+
 EXTRACTION_PROMPT = """You are reading a resume. Return ONLY a JSON object.
 
 Extract exactly this structure, using the resume's own words. Do not invent,

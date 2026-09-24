@@ -19,6 +19,17 @@ get thrown away.
 **No fixed date, and no feature compromises.** Work runs in the background
 alongside other projects. Estimates below are focused-work days, not calendar.
 
+**The pilot is a beta (R114).** The real product is the React app with full
+accounts and authorization, and the friends pilot is its first users, not a
+separate thing. **During the pilot, build a fix only if it carries over into
+that product; otherwise log it in `known_questions.md` and defer it.** A
+guard on the hosted partition carries over; a workaround for one friend's
+machine or one pilot-only shortcut does not.
+
+**Streamlit is frozen (R115).** New UI behaviour goes to React only.
+Streamlit is fixed when something breaks, and gets shared rules for free
+because they live in the Python facade, not in either UI.
+
 ---
 
 ## Load-bearing decisions
@@ -148,18 +159,17 @@ this before the invite.**
 verified on the author's machine: 1385 tests OK, all three baselines match,
 and a re-import reads 3 experiences / 1 project / 3 skill groups.
 
+**Also done:** Q55 by R105 (2026-09-23). A remote posting is judged on
+its country, and a bare "Remote" is undecidable on the board. Q62 holds
+what it left: non-remote unknown locations, `exclude_countries` on the
+board, and a capture of real remote strings.
+
 **Before the invite, in order:**
 
-1. **Q55: remote postings bypass the country whitelist.**
-   - `location_matcher.parse_location` drops the country from any remote
-     string.
-   - `job_filter.evaluate` accepts remote before the whitelist is checked.
-   - The fix must carry three states (known in, known out, unknown), not flip
-     a default. A bare "Remote" is unknown: kept, badged and counted, never
-     silently eligible.
-2. **Q54's label: a job below the threshold is shown as "Not scored".**
-   `_store_scores` writes back only the results that pass. Store every score,
-   with a below-the-bar state, in both UIs.
+1. ~~Q55~~, done (R105).
+2. ~~Q54's label~~, done (R106): every score is stored with its bar, and
+   both UIs label a job under it "below your bar" with its score. Jobs under
+   the bar no longer take a slot in every run.
 3. **Q58's copy, with the cheap rest of A7:**
    - A plain statement, next to the key field, of what changes between
      postings without a key (which entries, which of your own bullets, skills
@@ -167,6 +177,13 @@ and a re-import reads 3 experiences / 1 project / 3 skill groups.
    - The free-tier data-use sentence, from Google's current terms, read at
      build time.
    - The key in `localStorage`, sent only in POST bodies, with "forget key".
+   - **Send that key with `/api/resume/extract` too** (R113): a hosted import
+     reads no key from the environment, so without it every PDF or Word
+     upload uses the pattern floor.
+   - **Q63's interim sentence**, at `ResumeStep`'s "Yes, replace" checkbox:
+     jobs already on your board keep the scores from your previous resume,
+     and only newly found jobs are scored against this one. Replacing is the
+     only path since R109 (one profile per hosted account).
 4. **A8:** the per-user event log (including `reached_key_step` / `key_saved`)
    and the success criterion.
 5. **A9:** Sentry, with the key scrubbed.
@@ -183,6 +200,11 @@ and a re-import reads 3 experiences / 1 project / 3 skill groups.
 **After the invite:**
 - **Q53, the null set:** anchor each resume against a fixed set of unrelated
   postings. Its triggers have fired (R99).
+- **Q63, stale scores after a resume change:** decide it with Q53, because
+  both change what a stored score means. The fix computes each row's display
+  state once, in the facade. It was scheduled before A11, but A11 runs before
+  any friend has a board. A friend replacing their resume after the invite
+  is the first real trigger, and Q58's sentence covers that until then.
 - **A7b, a second free provider (Q60):**
   - Flash is 20 requests a day per key (Q61), so a friend gets 3–6 tailored
     resumes a day.
@@ -1024,6 +1046,26 @@ they reach either front end.
   ~290 MB of a 565 MB site-packages tree. Verify the saving against Fly's
   current pricing at deploy rather than against the numbers here.
 
+- **What sets a run's size, and whether the server trusts it** (inventoried
+  2026-09-24, R107). "Trusted" means the server takes the value as given.
+
+  | Input | Where | What it drives | Trusted? |
+  |---|---|---|---|
+  | `max_jobs` | `POST /api/run` body, default 20 | Discovery's output cap, then one scrape per job (server egress and time) and one embedding per job (potion CPU, or the user's Gemini quota) | **Bounded since R110:** 1–50, a 400 outside. Both UIs read the bound from `/api/health` or the facade |
+  | `max_resumes` | `POST /api/run` body, default 3 | LLM calls (user's key) and **one `pdflatex` compile per resume**, the heaviest server CPU per unit | **Bounded since R110:** 1–10, a 400 outside. 0 no longer falls through to the profile (CLI `None` only) |
+  | `agent_preferences.max_jobs_to_generate` | profile, default 10 | The resume cap when `max_resumes` is 0 | Now server-set only: R107 refuses it on PATCH |
+  | `agent_preferences.max_jobs_to_discover` / `max_jobs_to_enrich` | profile | **Nothing.** Read only by `profile_loader`'s summary print. The run uses the request's `max_jobs` | n/a, computed and never read (CLAUDE.md's recurring bug) |
+  | `max_retries`, `retry_on_validation_fail`, `fallback_to_snippet`, `discovery_source_priority` | profile | Nothing in production code | n/a, never read |
+  | `backend` / `agent_preferences.llm_backend` | run body / profile | Which rung writes | **Closed by R113:** hosted mode reads no key from the environment; a run uses the key it was sent, or none |
+  | Resume upload | `POST /api/resume/extract` | Whole file read into memory, then PDF/DOCX parsing | **Yes, no size limit** (`await file.read()`) |
+  | Runs in flight per user | `start_run` | Threads on one machine | **No limit today**; the first bullet above |
+  | ATS slugs searched | `ats_companies.json`, per user | Discovery fan-out; grows as discovery learns slugs | Server-written only; not user-editable, but unbounded growth |
+  | Discovery per-source caps | constants (ATS 200, Serper 10, Adzuna 15) | Upstream fetches | Server constants |
+
+  Done: the run-size bounds (R110) and hosted runs never reading an
+  operator key (R113). Left for A10: an upload size cap and one active run
+  per user (above).
+
 - **Trimming streamlit forces a dependency split, and that has to be decided
   here.** `requirements.txt` is deliberately the install list for people running
   the app locally, not a dev manifest — and `app.py` is one of the two supported
@@ -1033,6 +1075,14 @@ they reach either front end.
   surprise.
 
 ### A11. Resume pre-flight on the friends' real resumes (½ day)
+
+**Both import paths, for every resume (2026-09-24).** Run each friend's
+resume through import twice: with a key (model extraction) and without one
+(the keyless pattern reader). A hosted import has no key unless the browser
+sends one (R113), so the pattern reader is what a friend without a key gets.
+The two are forks that one machine always takes the same side of. Compare
+the two profiles field by field, and read the `parse_warnings` each import
+reports (R112): anything they list is left out of every tailored resume.
 
 Before inviting, run each friend's actual resume through `extract_resume`
 locally and read the output. The pool spans CS students to 10-year engineers, so
@@ -1044,6 +1094,17 @@ item 1 of the remaining order, ahead of this.* Cheap, and it is the last chance
 to find a parser bug before it costs a first impression.
 
 ### A11b. A clean clone runs green (½ day) — before A12, because the image is a clone
+
+**Fixture users move to `tests/fixtures/users/` (2026-09-24, Q65).** The
+`verify` stage copies `tests/` and `baselines/`, and `.dockerignore`
+excludes `data/` and `user_profiles/` whole. So Priya and Rohan never reach
+the image, and every test that reads them errors there. Move their profiles
+and resumes under `tests/fixtures/users/` and have tests seed a temporary
+data home from there (`tests/fixture_home.py` already does the seeding).
+**Keep `.dockerignore`'s exclusion of `data/` and `user_profiles/` as it
+is.** No carve-outs: the rule stays "never ship anyone's data", true by
+construction. The CLI's `--profile priya_raghunathan` and A12's volume
+seeding then read from the new place.
 
 **Found 2026-09-22 (Q35), verifying that A2's two commits were each green on
 their own.** Checking the Q34 commit out into a fresh worktree and running the
@@ -1107,6 +1168,14 @@ instance `none` is what it runs anyway). Seed the volume with Priya's fixture at
 `/data/user_profiles/priya_raghunathan.json` and
 `/data/data/master_resumes/priya_raghunathan.{tex,pdf}` — the doubled `data/` is
 real. Then invite.
+
+**Deploy checklist, before the invite:**
+- **No LLM keys as Fly secrets during the pilot.** `fly secrets list` shows
+  none of `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`,
+  `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `TOGETHER_API_KEY` or
+  `DEEPSEEK_API_KEY`. R113 already ignores them in hosted mode; this keeps
+  the instance from holding a key nothing should read, and keeps Q67's
+  reversal a decision rather than a leftover.
 
 **Discovery breadth last, after the invite is proven:** enable Adzuna
 (`adzuna_search.py` is fully implemented and needs only `ADZUNA_APP_ID` /

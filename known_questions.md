@@ -9530,6 +9530,664 @@ bullets at 2 lines each must still fit one page for a real senior's resume.
 A11's pre-flight on the friends' real resumes is where that gets checked,
 now that it reads the budget that ships.
 
+## R105. A remote posting is judged on its country, and one that names none is unknown
+
+**Decided 2026-09-23.** Resolves Q55, pilot item 1.
+
+**Three defects, not the two Q55 recorded:**
+1. **`parse_location` returned early from every remote string** with
+   `country=None`, apart from a short list of US phrasings. That list missed
+   `"Remote - US"` itself, because `", us"` needs a comma.
+2. **`evaluate` accepted a remote job before either country list.**
+3. **Found while fixing the first: "Argentina" was not a country by name.**
+   - R68's guard strikes `AR`, `CO` and `MA` from `COUNTRY_CODES`, because
+     they are Arkansas, Colorado and Massachusetts.
+   - The loop that makes every coded country recognisable by name read the
+     *filtered* map, so Argentina, Colombia and Morocco went with their codes.
+   - So "Argentina Remote" would still have parsed to nothing with (1) fixed
+     alone. The name loop now reads every code. The code is ambiguous; the
+     name never was.
+
+**The parse.** A remote string keeps `is_remote` and then has its remote
+words taken off. What is left goes through the same steps as any other
+location:
+- one country → `country`;
+- several (`"Remote - US or Canada"`, `"Remote (US, Canada)"`) → the new
+  `countries` field, with `country` left None;
+- none (`"Remote"`) → both empty.
+- A string naming a US state is one place, so `"Remote - Dublin, Ohio"` is not
+  split into Ireland and Ohio.
+
+Two narrow additions, both of them needed to read `"Remote - US"` and
+`"Remote - UK"`:
+- `US`/`USA`/`U.S.` as **whole tokens**. `us` is inside Austin, Houston,
+  Brussels and Russia.
+- A two-letter code that is the whole string.
+
+Also, **bare `america` is no longer the United States when `latin`, `south`
+or `central` precedes it, or when it is `americas`.** This applies to
+non-remote strings too: "Latin America" used to parse as the US and is now
+unknown.
+
+**One judgement, both gates.** `job_filter.country_decision` returns in / out
+/ unknown, and both gates call it:
+- discovery's `evaluate`, for remote and non-remote locations alike;
+- the board's `gate_verdict`.
+
+A posting naming several countries is in when any of them is acceptable.
+
+| | discovery (`evaluate`) | board (`gate_verdict`) |
+|---|---|---|
+| out | excluded, same reason text as before | hidden |
+| in | as before (remote: `location_score` 3) | as the body says |
+| unknown, profile names countries | kept, `location_score` −1 ("Remote, country not stated"), counted in the discovery log | **undecidable**, "remote, but the posting does not say which countries it hires in" |
+| profile names no countries | unchanged | unchanged |
+
+**Chose / rejected / breaks if wrong:**
+- **Several countries → a `countries` field** rather than the first match.
+  The first match turns "US or Canada" into Canada, and that job would be
+  lost to a US profile that today sees it. Also rejected: treating several
+  countries as unknown. That badges jobs plainly open to the reader. Both
+  gates read the field in this change, so it is not written and left unread.
+- **Unknown ranks at −1, not 3.** On a run capped by `--max-jobs`, bare-Remote
+  postings now compete with "Location unclear" rather than with named
+  priority states, so fewer of them reach generation. That is the cost of
+  not ranking unknown as the best known answer. If it proves too harsh on real
+  boards, the knob is that one number, not the three states.
+- **An undecidable body keeps its own reason** on the board. A row has one
+  reason, and an unread description is the larger unknown.
+- **`location_matcher.py` joins `_GATE_FILES`.** The stored verdicts are
+  fingerprinted on gate source. Without it, this parse change would have left
+  every "Remote - Ireland" row judged by the old parse, exactly as the
+  comment above that list warns.
+
+**Tests:** `test_remote_country` (27). The old code fails 29 subtests and
+errors on 4. One class walks both gates over the same strings and asserts
+that excluded ⇔ hidden, and remote-unclear ⇔ undecidable. The suite is
+otherwise unchanged: the same 14 `yash_pathak` errors as before (A11b).
+
+**Not measured on real boards.** The sandbox this was written in is refused
+by the ATS APIs (403 at the egress proxy). Apart from the two strings seen,
+every test string is a common format written here. That is the fixture that
+agrees with you. Q62 holds the capture that should replace it.
+
+## R106. A job scored under the bar is stored and labelled as that, never "Not scored"
+
+**Decided 2026-09-23.** It resolves Q54's label, the part of Q54 that its
+correction left standing as a fact about the code.
+
+**The defect.** `AnalysisAgent` scored every job it was given, then dropped
+the ones under `scoring_threshold` before anything was written. So:
+- the board read `score NULL` and said **"Not scored"** ("analysis has not
+  scored it yet") about a job analysis had scored 39.9 and set aside. That is
+  a known value shown as unknown: the invariant, pointed the other way from
+  its usual instances;
+- **a pipeline cost nobody had seen:** discovery works only on
+  `unprocessed_urls()` (`score IS NULL`), so every job under the bar was
+  re-enriched, re-scored and re-dropped on every run. Each took a slot in the
+  run's job limit (20 on a UI run) that a new posting could have had.
+
+**The change.**
+- **Every score is stored, with the bar it was judged against.**
+  `AnalysisAgent.below_bar` keeps what it sets aside. `_store_scores` writes
+  passing and set-aside jobs with `bar`, a new additive column.
+  - **A bar, not a pass/fail flag.** The label can say *which* bar ("below
+    your bar of 40"), and the claim stays true if the profile's threshold
+    later changes.
+  - Rejected: reading the current profile's threshold at display time. A
+    board row is not tied to one profile, and the threshold can change after
+    scoring.
+  - A row scored before this has `bar NULL` and makes no claim either way.
+- **Both UIs label it.** React's `MatchBadge` shows **"Below your bar"** with
+  the score, decided before banding, since its bar and not its quartile is
+  what set it aside. Streamlit's board row shows "below your bar of 40, no
+  resume written".
+- **Match bands are computed over jobs that met their bar** (and pre-bar
+  rows): exactly the set that had scores before. Letting set-aside jobs into
+  the quartiles would only move everyone else's labels down.
+- **The run summary counts them:** "Below your bar of 40: N job(s) scored
+  under it. They are on your board, marked, with their scores, and no resume
+  was written for them."
+
+**Blast radius, stated.** A job under the bar is now *processed*. It is not
+re-analysed on later runs, exactly like a job that passed. The cost is the
+same one passing jobs already carry: a job under the bar is not re-scored
+after a resume or threshold change until something re-scores the board. Jobs
+that failed to score (R97) keep `score NULL` and are retried as before.
+`stats()["scored"]` now counts them too, which is true.
+
+**Not changed:** the threshold itself (Q54: arbitrary on Gemini until its
+window is measured; inert on potion until Q53), and what counts for
+generation. Only jobs that passed get resumes.
+
+### Corrections after review, 2026-09-23
+
+- **The bar comes from what analysis applied, not the profile.** The first
+  version read `self.profile...scoring_threshold` in both `_store_scores` and
+  the summary line. That is the *current* threshold, the very distinction the
+  board's `bar` column exists to keep. `scoring_summary` now carries `bar`
+  (the threshold that run applied), and `_run_analysis` passes it to
+  `_store_scores` and the summary. The defensive "no profile" branch is
+  gone; the tests build an orchestrator with no profile at all and supply
+  the applied bar. A test sets the profile to 50 after a run judged at 40 and
+  requires 40, end to end through `_run_analysis`.
+- **React shows the bar's number** ("Below your bar of 40"), as Streamlit
+  does.
+- **Tests: counts corrected.**
+  - Against the complete pre-change code, 11 of the 12 tests fail. The one
+    that passes, `test_a_row_scored_before_bars_is_still_banded`, guards the
+    new band query's `bar IS NULL OR`. Rows scored before bars existed must
+    still be banded. It passes on the old code by construction, and fails
+    when that clause is dropped.
+  - The first report's "5 and 3" came from two partial reverts, each leaving
+    the other half passing, so the numbers could not be subtracted from the
+    total.
+- **The count reconciled.** 1412 collected before R106, 1422 after (+10),
+  none removed, now 1424. A clean clone's "Ran" line reads 5 lower because
+  `test_api_payload.TestTheBoardPayload` skips in `setUpClass` on an empty
+  board, which unittest counts as one skip, not five runs.
+- **No frontend test runner exists** (`web/package.json` has no
+  vitest/jest/jsdom). The React badge is checked by a source test.
+  Adding a runner is a dependency decision for the author.
+- **The "1424 OK" above was wrong for the author's machine.** R106 put `bar`
+  on every board row, and `test_api_payload`'s allow-list of fields that may
+  reach the browser did not name it. So `test_no_field_reaches_the_browser_
+  unreviewed` would have failed on any machine with a stored board: the
+  author's. It passed here only because it skipped here. The class skipped on
+  an empty board, so the one test written to catch a new column on the wire
+  could only run where nobody but the author runs the suite.
+  - It now builds its own board in a temporary `JOBSCOUT_HOME`: a job that met
+    its bar, one scored 39.9 under a bar of 40, and a row scored before bars
+    existed. It asserts the below-bar row's `(score, bar)` reaches the
+    payload as `(39.9, 40.0)` and the legacy row's bar is `None`. `bar` is
+    allow-listed with its reason.
+  - Mutation check: dropping `bar` from the allow-list fails the test with
+    "new field(s) on the wire: ['bar']". The checkout's `data/jobs.db` is
+    not touched.
+  - **On a clean clone, "Ran" now equals the collected count: 1426 and
+    1426**, with 0 skips raised from `setUpClass`. The 64 remaining skips are
+    individual tests, each counted as run.
+
+## R107. `PATCH /api/profile/{name}` writes only what the two wizard screens save
+
+**Decided 2026-09-24**, at the author's request, before Q58.
+
+**What it was.** The route merged any dict it was sent into the profile,
+validated the result against the schema, and wrote it. The schema checks
+types, not authority. So a hand-built request could set:
+- `agent_preferences.max_jobs_to_generate`: the run's resume cap whenever
+  `max_resumes` is 0 (`orchestrator.py:1348`), so a run cost the server
+  could not bound;
+- `agent_preferences.scoring_threshold`: Q63's lowered-bar case, with no
+  screen offering it;
+- `resume_preferences.master_resume_path`: **a cross-partition read.**
+  `paths.stored_path` checks an *absolute* path against the user's home but
+  joins a *relative* one without resolving it, so
+  `../<other id>/data/master_resumes/x.tex` resolved into another user's
+  partition. The pipeline would have read that resume and written its
+  contents into PDFs served to the caller. Verified by resolving that string
+  for `alice`: it lands in `users/<other id>/`. The path gap itself is Q64.
+
+**What it is.** `api/main.py`'s `PROFILE_PATCHABLE` names every field the
+route may write. Anything else is a **400** naming each refused path, and
+nothing is written. A request mixing allowed and refused fields writes none
+of it.
+
+**Chosen over the literal ask.** The request was "the fields the Preferences
+screen saves". About you (`AboutYouStep.save`) saves through the same route:
+`personal_info.location` and the three `work_authorization` answers. A list
+of Preferences' fields alone would have made About you's Save a 400 for
+every user, the dead-button failure (R72, R75) with a server behind it. So
+the list is both screens' fields. Neither screen sends
+`locations.exclude_countries`, and it is refused.
+
+**Where it lives, and what it does not cover.** In `api/main.py`, because
+it is a policy of the HTTP surface. `update_profile_fields` is unchanged, so
+Streamlit, which calls it in-process for one local user, can still save the
+fields its own screens show. The list applies in both modes: the React app
+sends nothing else in either.
+
+**Both directions tested** (`tests/test_profile_patch.py`):
+- both screens' payloads save; six refused requests are 400s that name the
+  field and leave the file byte-identical; a mixed request writes nothing;
+- a source test reads the object literal each screen passes to
+  `api.updateProfile` and requires every key on the list at its depth. A
+  screen that starts saving a new field fails this test rather than failing
+  for users.
+- Mutations: no guard gives 7 failures; dropping `holds_clearance` gives 1
+  (the source test); dropping `willing_to_relocate` gives 2 (route and
+  source).
+
+## R108. A stored resume path is resolved before it is trusted, relative or absolute
+
+**Decided 2026-09-24.** Resolves Q64.
+
+`paths.stored_path` is where a profile's `master_resume_path` becomes a file
+location, and every reader goes through it: the orchestrator's
+`master_resume_path`, `init_profile`'s component editor, the probe and the
+path snapshot. Scoped (`user_id` set), it now:
+1. joins a relative path to the user's home, as before;
+2. **resolves** the result (`..` collapsed, symlinks followed);
+3. requires `is_relative_to(user_home(user_id).resolve())`, a comparison
+   by path component, so `users/bobby` is not inside `users/bob`;
+4. otherwise raises `ValueError` ("points outside this account's own files,
+   so it was not read"). There is no fallback, because there is no right
+   file to fall back to.
+
+A run surfaces that message as its failure. `GET /api/profile/{name}`, which
+reads the path through the component editor, answers 422 with it instead of
+a 500.
+
+**Unscoped is unchanged:** the CLI's user owns the disk and may keep a
+resume anywhere. That exemption is pinned by an existing test. The returned
+path is the joined one, not the resolved one, so `path_snapshot verify` is
+unmoved. Reading it follows the same symlinks the check followed, and no
+hosted route can create a symlink.
+
+**Tests** (`test_scope_seam`): alice → `../bob/...`, relative and through a
+symlink planted in alice's folder pointing at bob's file, refused both as
+the relative spelling and as the absolute one; `bob` vs `bobby`, relative
+and absolute; and an in-home `..`, which still resolves.
+- All three tests fail against the old code.
+- A string-prefix mutation (`startswith`) fails the sibling test on both
+  spellings.
+- The old absolute check already compared by component, so it was right for
+  `bobby`. The relative branch never reached any check.
+
+## R109. A hosted account holds one profile
+
+**Decided 2026-09-24**, proposed after Q63 and confirmed by the author.
+
+**Why.** The board has no profile column. It belongs to the user (R90's
+partition), so every stored score, gate verdict and applied/rejected mark on
+it was made against one resume. A second profile under a new name was ranked
+against the first one's scores, with no warning (Q63). It would also have
+mixed two resumes' judgements into the labels Q53 needs.
+
+**What.**
+- `init_profile.profile_limit(user_id)` returns **1 when scoped, `None`
+  unscoped**. It is the one source for the rule.
+- `create_profile` refuses a new name when the account already holds a
+  different profile, raising `ProfileLimit`, which the route returns as a
+  409 naming the profile it has. Replacing that profile (`force`) is
+  unchanged. R30's backup beside it is not counted: the listing already
+  skips `.bak`.
+- `/api/health` carries `profile_limit`. With the account full, the wizard's
+  resume step fixes the name to the existing profile, disables the field,
+  says "a new resume replaces this one", and shows the replace checkbox.
+  The screen does not offer what the server would refuse. The 409 is the
+  backstop if health failed to load.
+- The CLI, Streamlit and local-mode React are unscoped: any number, as
+  before.
+
+**Chosen:** the check in `create_profile`, the importer both UIs call.
+**Rejected:** the check in the route alone, since a second hosted entry
+point would miss it ("two paths, one walked"); and an account column, more
+than the rule needs. **If wrong:** a hosted path that reaches
+`create_profile` with `user_id=None` has no limit. `_caller` returns `None`
+only in local mode, and A5's `test_hosted_mode_has_no_unscoped_call_site`
+holds that.
+
+**Tests** (`test_one_profile.py`): the limit's two values; a second scoped
+name is refused and writes nothing; a replace still works and lists one
+profile; the limit is per account; unscoped keeps two; hosted through the
+route (health says 1, a second name is a 409 naming the first, `force` on the
+same name is 200); local health says `null`; a source check on the wizard.
+Making `profile_limit` return `None` fails 4 of them.
+
+**Fly without hosted mode set** was already handled (R95, A5). `check_boot`
+runs when `api.main` is imported and raises `HostingMisconfigured` if
+`JOBSCOUT_MODE` is unset or `local` while a platform marker (`FLY_APP_NAME`,
+`FLY_MACHINE_ID`, and those of Cloud Run, Heroku, Render and Railway) is
+present. `fly.toml` sets `JOBSCOUT_MODE = "hosted"`, and
+`test_hosted_boundary` fails if it stops. Re-checked 2026-09-24 by importing
+with `FLY_APP_NAME=x` and the mode unset, then `local`: both refuse to start.
+
+## R110. A run's size is bounded by the server, and zero resumes means zero
+
+**Decided 2026-09-24**, at the author's request, from R107's A10 inventory.
+
+**What.**
+- `agents.orchestrator.RUN_LIMITS`: `max_jobs` 1–50, `max_resumes` 1–10,
+  inclusive.
+- `start_run`, the one entry point both UIs use, checks both before a
+  registry row exists. It raises `RunSizeRefused` on a value out of range, a
+  non-integer, or a `bool` (`True` is an `int` in Python and is not a job
+  count). `POST /api/run` answers 400 naming the field.
+- `/api/health` carries `run_limits`. React's inputs take their bounds from
+  it, and are disabled while health is loading or has failed: an unknown
+  bound is not guessed. Streamlit's sliders read the same function. Neither
+  UI restates the numbers, and a source test holds that.
+- The CLI calls `JobScoutOrchestrator.run` directly and is not bounded: a
+  developer's own machine and quota.
+
+**Why 50 and 10.** They are Streamlit's existing slider ranges, and both
+defaults (20 and 3) sit inside them. React allowed 100 of each. A job costs a
+scrape and an embedding. A resume costs LLM calls on the user's key plus one
+`pdflatex` compile, the heaviest server CPU per unit. **What breaks if
+wrong:** a friend who wants more than 10 resumes a run has to run twice. On
+Flash's 20 requests a day (Q61) that is not the binding limit.
+
+**The `max_resumes=0` fallback: kept for its reason, removed for zero.** It
+exists for the CLI without `--max-resumes` (`default=None`), which uses the
+profile's `max_jobs_to_generate`. It was written `self.max_resumes or
+profile...`, so 0 fell through too: a request for no resumes became 10 by
+default, or whatever PATCH had set before R107. `_resume_cap` now falls back
+on `None` only. The UIs cannot send 0 at all now; the CLI's `--max-resumes 0`
+means score and write nothing.
+
+**Tests** (`test_run_limits.py`): 15 refused values across both fields, none
+recording a run or starting a thread; the bounds accepted; the route's 400
+and an empty registry; health equal to `RUN_LIMITS`; the cap for 0, 3 and
+`None`; a source check on both UIs. Removing the check fails 16 subtests,
+and reverting to `or` fails the zero test.
+
+## R111. A profile name is a name, checked where it becomes a file; resume filenames are capped
+
+**Decided 2026-09-24.** The first of the two cross-account findings in the
+path audit (Q66).
+
+**The defect.** `init_profile._profile_file` and the loader's `_load_from`
+each joined a profile name to the profiles folder as given. A signed-in
+hosted user could name a new profile so that it landed in another account's
+partition. That was reproduced over HTTP before this change.
+- It was a write only: a new file, never an overwrite, because the backup
+  step refused the odd path.
+- It also bypassed R109, since the sender's own count stayed at zero.
+- It locked the victim out: the planted file filled their one profile.
+
+**The fix.** `profile_loader.profile_file(name, directory)` is the one
+resolver, and both the importer and the loader go through it:
+1. the name must match `PROFILE_NAME`, `[a-z0-9_]{1,40}`;
+2. behind that, the resolved file must lie inside the resolved folder, by
+   path component. That is R108's shape, kept so that a later loosening of
+   the pattern cannot quietly reopen this.
+
+A bad name raises `BadProfileName` before any directory is made. On create it
+is a 400 with the rule in words. On read, PATCH and component writes it is
+the same 404 as a profile that does not exist.
+
+**No hyphen, deliberately.** The author's example allowed one. The schema's
+`user_id` validator, which the name becomes, refuses a hyphen, so
+`jane-doe` would have been writable and then never loaded. The pattern
+matches what can load.
+
+**It applies to reads too, in both modes.** A local profile whose name has
+capitals, a hyphen or a dot will not load until it is renamed; the error
+says what a name may be. The committed fixtures and the author's names fit.
+Reads are checked as well because a rule on writes alone leaves the loader
+as the second path.
+
+**The screens say so first.** Streamlit asks `profile_name_problem` and
+disables Read. React holds a copy of the pattern, pinned equal to the
+Python one by a test. Neither reads a resume under a name the save will
+refuse.
+
+**Resume filenames are capped** at 120 UTF-8 bytes before the hash suffix.
+`isalnum` keeps non-ASCII letters, and a scraped title of 200 two-character
+Japanese words came to 1220 bytes, past ext4's 255-byte limit. 120 bytes
+keeps `<name>_<hash>.aux` under 255 on every filesystem, and a full path
+under Windows' 260. The cut never splits a character.
+
+**Tests** (`test_profile_names.py`, 13):
+- accepted and refused names, including `..`, slashes, a NUL, capitals,
+  hyphens, 41 characters and non-strings;
+- the loader and the importer both refuse, and the importer leaves no
+  directory behind;
+- over HTTP, hosted: the planting request is a 400 and neither account gains
+  a profile; A cannot overwrite B's existing profile even with `force`, and
+  B's file is byte-identical with no backup beside it; B can still create
+  their own afterwards; bad names on GET, PATCH and PUT are 404;
+- React's pattern equals Python's, and Streamlit gates on the helper;
+- the filename cap in bytes and at a character boundary, an ordinary name
+  unchanged, path characters flattened.
+
+Mutations: removing the pattern fails 12 and errors 2, and removing both
+checks fails 16 and errors 3. Raising the cap fails the filename test.
+
+## R112. An escaped character dropped a whole skills category, and a line the parser cannot read is now said, not dropped
+
+**Decided 2026-09-24**, before A11. Found by the path and LaTeX audit (Q66)
+and measured before anything changed.
+
+**The defect, measured.** A resume was rendered through `tex_renderer`
+with `C# node_js 50% R&D $5M` in every field the parser reads, then parsed
+back. Two fields were wrong:
+- **Skills: every category was gone.** The value pattern `[^\\}]+` stopped
+  at the first backslash, so `C\#` never reached its closing brace and the
+  category failed to match. Nothing said so. A resume listing C#, an
+  underscore, a percentage or R&D in a skills value lost that whole line
+  from every tailored resume. On Rohan's master, the Languages line vanished.
+- **Bullets: two dollar signs became one math span.** `_clean_latex`
+  un-escaped `\$` before reading math, so `$5M and $3M` came back as
+  `5M and3M`.
+
+Headings, titles, companies, locations, education, project names and tech
+all round-tripped already. The existing property tests could not see either
+defect: they run over the masters on disk, and none has these characters in
+those places.
+
+**The fix.**
+- **Parser.** Skills are read by balanced braces (`_skill_categories`), not
+  by a pattern, so a value is read to its closing brace whatever it holds.
+  `_braced` skips escaped characters, so `\{`, `\}` and `\\` inside an
+  argument no longer unbalance it. `_clean_latex` holds `\$` aside until the
+  math spans are read, then restores it.
+- **Builder.** `_build_skills_section` escaped `&` in the label only and
+  wrote values raw. Both now go through the one escaper, since the parser
+  hands back plain text. Before, a `C#` that survived the parse would have
+  reached the `.tex` as a bare `#` and stopped the compile. It never did,
+  only because the parser dropped the category first.
+
+**Never a silent drop.** The parsed resume carries `warnings`, each also
+logged. A warning is raised for:
+- a skills category whose value cannot be read;
+- an Experience or Projects entry whose heading cannot be read (these used
+  to `continue` in silence);
+- an entry with more `\resumeItem`s than were read, with the count;
+- a section after Experience that nothing reads, such as Publications or
+  Awards, which is not carried into tailored resumes.
+
+The consumer ships in the same change: `create_profile` and
+`read_component_rules` return `parse_warnings` beside `id_problems`. Both UIs
+show them at import and again on the rules screen, so a profile imported
+before this is told too.
+
+**No regression on real masters.** Old and new parsers were run over every
+tracked `.tex`. The results are identical apart from the new, empty
+`warnings` field: no false warnings on Priya, Rohan or the preamble
+fixture.
+
+**Compiled, not only parsed.** With TeX Live installed in this container
+(the Dockerfile's package set), Rohan's master with `C#`, an underscore
+name, `50%` and `R&D` added to Languages compiles, and the PDF reads back
+with the line present. The underscore reads back as a space: that is the
+PDF text extractor reading the underscore glyph, and the `.tex` holds
+`scikit\_learn`.
+
+**Tests** (`test_escape_round_trip.py`, 13):
+- each of `# _ % & $` alone, and all together, in every field;
+- two dollars in one bullet;
+- the rendered resume compiles, where an engine exists;
+- the builder writes `C\#`, `scikit\_learn`, `R\&D` and `50\%` into
+  Rohan's Languages line;
+- one test per warning kind, plus a clean resume with none;
+- `create_profile` and `read_component_rules` both return the warnings;
+- both UIs render them in both places.
+
+Against the old parser and builder: 9 failures and 12 errors. With only the
+builder reverted, the builder test fails.
+
+## R113. A hosted instance uses the key a request carries, or none, never one from its environment
+
+**Decided 2026-09-24**, at the author's request (proposed after R110).
+
+**Where it goes in the precedence chain: nowhere, and that is the point.**
+`resolve_backend`'s chain (`--backend` > `JOBSCOUT_LLM_BACKEND` > profile >
+`LLM_BACKEND` > auto) picks a *rung*, and is unchanged. Keys are resolved by
+two other functions, and only they read the environment:
+- `config.resolve_api_key(explicit)` for Gemini. Every Gemini client goes
+  through `gemini_client` (R101), and embeddings choose their backend by
+  asking it.
+- `llm_backends.env_openai_key()` for the OpenAI-compatible rungs. It had
+  no request path at all.
+
+Both now ask `config.environment_keys_allowed()`, which is true only in
+local mode. The key chain becomes:
+- **local:** the request's key > the environment's > none (unchanged);
+- **hosted:** the request's key > none.
+
+A test walks the syntax tree and requires exactly those two files to read
+any provider key variable, so a third reader fails the build.
+
+**What a hosted user gets, stated because it follows from this:**
+- **Bullets:** Gemini with the key they send; otherwise the `none` rung.
+  The OpenAI-compatible rungs are never available, because a request
+  carries a Gemini key only. Adding one is A7b's business (Q60).
+- **Embeddings:** always potion. `active_backend` chooses Gemini only when
+  `resolve_api_key()` finds a key, and the request's key never reached
+  embeddings anyway (the A7 finding).
+- **Import:** a PDF or Word upload is read by the pattern floor, because
+  `/api/resume/extract` carries no key. The key a friend saves in the
+  browser (Q58) will need to be sent with the extract request for their
+  import to use a model. That is noted for Q58.
+- **A CLI run on the server** (`fly ssh console`) inherits
+  `JOBSCOUT_MODE=hosted` and ignores any key in the environment. That is
+  intended.
+
+**On Fly today nothing changes:** no operator key is set (decision 4). This
+pins that state, rather than relying on nobody ever setting a secret.
+
+**An unrecognised mode raises**, as it does at boot (`HostingMisconfigured`),
+rather than being read as local.
+
+**Tests** (`test_hosted_keys.py`, 7): local reads the environment; hosted
+does not; the request's key wins in both; an unknown mode raises; a hosted
+`backend_status` with keys in the environment reports `none`; hosted
+embeddings stay local; exactly the two readers. Mutations: removing the
+Gemini guard fails 4, removing the OpenAI one fails 2, and a planted third
+reader fails the tree walk.
+
+## R114. The pilot is a beta: build only what carries into the product
+
+**Decided 2026-09-24 by the author.** Recorded in CLAUDE.md ("Working here")
+and at the top of `docs/pilot-plan.md`.
+
+The real product is the React app with full accounts and authorization. The
+friends pilot is a beta of it, not a separate thing to polish. **A fix is
+built during the pilot only if it carries over into that product;
+otherwise it is logged here and deferred.**
+
+- **Carries over, so build it:** the partition and path guards (R108, R111),
+  one profile per account (R109), run bounds (R110), the parse warnings
+  (R112), the key policy's guards (R113).
+- **Does not carry over, so log it:** a workaround for one friend's machine,
+  a copy tweak only the pilot will see, anything that exists because five
+  people are invited rather than signing up.
+
+**What breaks if wrong:** a friend meets a pilot-only rough edge that was
+logged rather than fixed. That is the cost accepted: they are beta users,
+and a rough edge is feedback the pilot exists to collect. The opposite
+error, pilot-only polish, spends the $10/month project's scarce hours on
+code that is thrown away at launch.
+
+## R115. Streamlit is frozen
+
+**Decided 2026-09-24 by the author.** Recorded in CLAUDE.md and the pilot
+plan.
+
+- New UI behaviour goes to **React only**.
+- Streamlit gets a fix **only when something breaks**.
+- A rule both UIs need lives in the **Python facade**, so Streamlit inherits
+  it without being edited. R110's run bounds and R111's name check are the
+  pattern: the facade enforces, and each UI only reads.
+
+**What this changes in practice.** `test_ui_contract.test_both_views_read_
+the_same_facade` fails when the API imports a facade name Streamlit does
+not. Under R115 that is the normal case for a new feature, so each such
+name goes in `HTTP_ONLY` with "Streamlit is frozen (R115)" as its reason.
+The test keeps its value: it still catches a name added to the API
+*without* a stated reason, and a stale exemption.
+
+**What breaks if wrong:** a developer on the local CLI and Streamlit stops
+getting new screens. Correctness does not diverge, because the rules are in
+the facade; only features do. The local CLI stays the developer surface,
+per CLAUDE.md.
+
+## R116. Every compile runs with fixed engine settings in a fresh directory, and a resume with no PDF is never valid
+
+**Decided 2026-09-24.** Closes Q66's open finding (the compile step).
+
+**`pdf_builder.compile_pdf`:**
+- **An explicit environment.** A copy of `os.environ` with `openin_any=p`,
+  `openout_any=p` and `shell_escape=f` (`SANDBOX_ENV`), and `TEXMFOUTPUT`
+  removed so an inherited one cannot widen the paranoid settings. Set in
+  code, not in the image's configuration, so the Dockerfile's TeX package
+  cannot change them.
+- **Shell escape off by flag, in each engine's spelling**
+  (`NO_SHELL_ESCAPE`), beside the existing `--enable-installer` rule:
+  - TeX Live gets `-no-shell-escape`;
+  - MiKTeX gets `--disable-write18`;
+  - an unknown engine gets TeX Live's spelling, which is pdfTeX's own.
+
+  MiKTeX does not read the kpathsea variables, so on MiKTeX the flag is the
+  setting. **Not yet checked against MiKTeX 25.12**, because there is no
+  MiKTeX here. The author confirms it locally.
+- **A fresh temporary directory per compile,** holding only that job's
+  `.tex`. The PDF is copied back beside the `.tex`; byproducts only with
+  `keep_aux`. The directory is removed however the compile ends. A PDF
+  already beside the `.tex` is deleted first, so a failed compile cannot
+  leave an older PDF next to a new `.tex`.
+
+**A resume with no PDF is never `valid`.** `compile_pdf` already returned
+`timeout` or `failed`. Generation used the status from content validation
+alone, so such a resume was reported valid, with no PDF and no reason.
+- `GenerationAgent._pdf_problem` words the reason, and a resume whose
+  attempted compile produced nothing moves to `needs_review`.
+- `skipped` (no engine on the machine) is not a problem with a resume and
+  is already stated once for the run.
+- The reason flows the way `degraded` does: `pdf_problem` on each result,
+  `pdf_problems` in the run registry's result, a "No PDF for N of M"
+  section in `summary.md`, and a line on React's run screen. Streamlit is
+  unchanged (R115).
+
+**Uploads are classified by file type** (`resume_import.classify_upload`).
+The extension decides the kind, and the file's own bytes must agree: `%PDF-`
+in a PDF's first kilobyte, a zip header for `.docx`, and neither for `.tex`
+or `.txt`. A mismatch or an unknown extension is refused with a reason.
+`extract_resume` no longer asks whether a PDF's or Word file's *text* looks
+like LaTeX. Before, such an upload was kept and later compiled as LaTeX,
+which was Q66's last unverified item.
+
+**Timeout.** It stays 180 s, the value chosen for MiKTeX's first-run
+package download. It still ends only the direct child process. A
+process-group or job-object kill was raised earlier and is not in this
+change. With shell escape off, the TeX Live engine starts no children;
+MiKTeX's on-demand package installer might, and a Windows run should
+check for that.
+
+**Tests** (`test_compile_sandbox.py`, 11; the subprocess is mocked, so
+they are engine-independent):
+- the environment carries the three settings and drops `TEXMFOUTPUT`;
+- each engine gets its own flag, and only MiKTeX gets `--enable-installer`;
+- two compiles get two fresh directories, each holding only the job's
+  `.tex`, and both are removed afterwards;
+- the PDF comes back beside the `.tex`, and the run folder's other files
+  are untouched;
+- a timeout is reported and leaves no stale PDF;
+- generation words each outcome;
+- a mock-mode pipeline on Rohan whose compiles time out produces no
+  `valid` resume, and its summary names the reason;
+- the reason reaches the run record and the run screen;
+- uploads are classified by type, and a PDF whose text looks like LaTeX is
+  imported as a PDF;
+- **Priya and Rohan still compile**, each to one page, wherever an engine
+  is installed. They were run here with TeX Live 2023 and the Dockerfile's
+  packages; the test skips, saying why, where no engine exists.
+
+Reverting any one of `pdf_builder`, generation, the importer or the
+orchestrator fails at least one test.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -10381,7 +11039,7 @@ potion's ordering loses, the null set would too.
 
 ## Q54. On Gemini the threshold decides by a fifth of a point, and the jobs it drops are shown as never scored
 
-**Status:** Open, found 2026-09-23 on the real six-year resume (the one R99
+**Status:** The label is resolved by R106 (2026-09-23). The threshold's arbitrariness on Gemini stays open. Originally open, found 2026-09-23 on the real six-year resume (the one R99
 fits with; not committed), Gemini, 20 jobs. **Feeds R99's threshold
 re-measure; not fixed here.**
 
@@ -10453,9 +11111,10 @@ explain. Worth confirming before Q59 uses either shape.
 
 ## Q55. A remote posting passes a country whitelist without its country ever being read
 
-**Status:** Open, found 2026-09-23 on the real six-year resume. A US-only
-profile was shown **"Argentina Remote"** and **"Remote - Ireland"**. R55's
-shape, one branch over. Not fixed here.
+**Status:** Resolved 2026-09-23 by R105, which found a third defect under
+these two (Argentina was not a country by name). Found 2026-09-23 on the real
+six-year resume. A US-only profile was shown **"Argentina Remote"** and
+**"Remote - Ireland"**. R55's shape, one branch over.
 
 **What was observed, and what was not.** Both postings were seen **on the
 board**, as `Argentina Remote` and `Remote - Ireland`, for a profile whose
@@ -10922,9 +11581,419 @@ shorter than a "retry in Ns" the error states (R97).
 before any Gemini-embedding measurement is trusted again, and before Q53's
 null set embeds 60 more descriptions per resume on Gemini.
 
+## Q63. Below-bar scores are permanent: a resume re-parse (A11) or a lowered threshold leaves stale exclusions
+
+**Status:** Open, found 2026-09-23 reviewing R106. **Decide after the
+invite, next to Q53.** It was first scheduled "before A11", and that reasoning
+was wrong (see *When it bites* below). Until then, Q58 carries one line of
+copy where a resume can be replaced.
+
+### What re-scores a stored job today (checked in the code)
+
+- **Nothing in normal use.** Discovery passes on only
+  `JobStore.unprocessed_urls()`, the rows with `score IS NULL`. Once a job
+  has a score it is never analysed again by a run: `start_run`, the CLI, and
+  both UIs' run buttons all go through discovery.
+- **The CLI replay is the one path** (`--input <enriched_jobs.json>`). It
+  runs analysis on the jobs in that file and `set_score` overwrites their
+  score and bar. It needs an old run's `outputs/<date>/enriched_jobs.json`.
+  No UI offers it.
+- **`scripts/purge_fabricated.py`** sets `score` back to NULL for jobs whose
+  job description was invented (R61), which puts them back in
+  `unprocessed_urls()`. It is the only reset, and it is for one defect.
+- **No UI path re-scores anything.** There is no "re-score my board" control.
+
+### What a re-score would have to read
+
+**The store does not hold the job description that was scored.**
+`jobs.full_jd` is what *discovery* recorded (often a short description), and
+enrichment never writes the scraped text back (Q40, open). So a re-score from
+the store would score a different, thinner text than the original. A real
+re-score needs one of:
+- the JD cache (`tools/cache/job_cache.py`), which enrichment reads first;
+  it holds scraped text for **7 days** and then forgets by design;
+- the run's `outputs/<date>/enriched_jobs.json` (what the CLI replay uses);
+- a fresh scrape.
+
+Fixing Q40 (write the scraped JD back to the store) would make a re-score
+cheap and scrape-free, and it is a prerequisite for doing this well.
+
+### What goes stale, and what R106 changed
+
+- **A resume change** (A11's re-import, or any edit to the master) leaves
+  every stored score computed against the old resume. That was already true
+  of passing jobs. **R106 extends it to jobs under the bar,** which before
+  were accidentally re-analysed on every run (at the cost of a slot each) and
+  so did pick up a new resume.
+- **A lowered threshold** never reaches a job stored under the old bar. Its
+  label ("below your bar of 40") stays true as history, but the job never
+  becomes eligible for a resume. Before R106 it would have been re-analysed
+  and passed. **A raised threshold** leaves passing jobs marked as passing
+  under a bar they no longer meet. The generation cap limits the damage, but
+  the board's claim is out of date.
+
+So R106 traded an expensive, accidental self-healing for correctness of the
+label and the slot. The trade is right, but it needs a deliberate way to
+re-score.
+
+### Options (not decided)
+
+1. **A resume fingerprint stored with the score.** A hash of the parsed
+   master's components, plus the embedding model and the scoring code's
+   version. A score whose fingerprint differs from the current one is
+   **stale**, which is a third state, not "not scored": shown with its old
+   number and marked. Re-scored on the next run, or on demand.
+   - This is `refresh_gate`'s shape (R62): a stored fingerprint covering the
+     code and the profile fields the gate reads, re-judged when it changes.
+     The precedent already works.
+   - Needs Q40 (or the JD cache while it lasts) to avoid a re-scrape.
+   - Cost: one column, and a re-score pass whose embedding calls count
+     against a key's quota (Q61).
+2. **Re-evaluate the bar without re-scoring.** When the threshold changes,
+   compare stored scores to the new bar. This is free, and exact as long as
+   the resume and model are unchanged. It handles the lowered-threshold case
+   only; a resume change still needs option 1.
+3. **A "re-score my board" action.** Explicit, user-triggered, and it does
+   the work option 1 detects. Needs a facade function and both UIs.
+
+**Leaning:** 1 with 2 folded in. The fingerprint decides *when* a score is
+stale; a threshold change needs no re-score, only the comparison. Q40 comes
+first, or alongside, so re-scoring reads what was originally scored.
+
+### Whatever the fix: the row's display state is computed once, in the facade
+
+A row's state is one of **below bar / stale / strong / typical / weak**, and
+possibly "not scored". Today each UI derives it itself, and each orders the
+rule itself: `MatchBadge.tsx` checks `score < bar` before its bands, and
+Streamlit's `_board_row` makes the same check in its own code. Adding
+"stale" would make that a third rule written twice. That is CLAUDE.md's
+two-paths-one-walked shape, and R69/R70 showed how it ends: fixed in one
+renderer and left in the other.
+
+So the fix puts a `display_state` (name open) on each board row in the facade
+payload (`board_jobs`), and both UIs render it without re-deriving it. The
+order of precedence (stale before below-bar? below-bar before bands?) is then
+written once and tested once in Python, which also covers the missing
+frontend test runner. The UIs keep the copy; the facade decides the state.
+The payload test's allow-list gains the field in the same change.
+
+### When it bites: checked 2026-09-23 against the hosted React app
+
+**The threshold: no screen changes it.** `PreferencesStep` saves only
+`job_preferences`; `AboutYouStep` saves its own three answers; no component
+in `web/src` writes `agent_preferences.scoring_threshold`. `RunStep.tsx:345`
+only displays it. One caveat: `PATCH /api/profile/{name}` takes a free
+`updates` dict, so a hand-built request can set it. That is the user's own
+partition and needs devtools, so it is not a product path, but "no UI" is not
+"cannot".
+
+**The resume: yes, two ways, both in `ResumeStep.tsx`.**
+1. **Replace the profile.** Typing an existing profile name shows "“name”
+   already exists" and a "Yes, replace" checkbox (`ResumeStep.tsx:182-197`).
+   That sends `force: true` to `POST /api/profile` (line 80), which rebuilds
+   the profile and its master resume. The board keeps every score computed
+   against the old resume, and none is re-scored.
+2. **A second profile under a new name.** `jobs.db` has no profile column:
+   the board is per user (R90's partition), not per profile. So a second
+   resume, imported under a new name, is ranked against a board scored for
+   the first. No warning appears on this path at all.
+
+Both hit passing jobs too, which was true before R106. What R106 adds is
+that jobs under the bar no longer heal on the next run.
+
+**Why "before A11" was the wrong trigger.** A11 is the author running
+friends' resumes through `extract_resume` locally, *before* the invite. No
+friend has a board then, so there is nothing stored to go stale. The first
+time a stored score can go stale is a friend replacing their resume after
+their first run. That happens after the invite, so the full fix is scheduled
+there. The copy covers the gap:
+
+- **Q58 copy (both paths):** at the replace checkbox, and at the import step
+  whenever the user already has a profile, one sentence: jobs already on
+  your board keep the scores from your previous resume; only newly found
+  jobs are scored against this one. It is true today and stays true until
+  this is fixed, so it needs no hedge.
+
+## Q64. `stored_path` checks an absolute path against the user's home, and joins a relative one unchecked
+
+**Status:** Resolved 2026-09-24 by R108. Found while inventorying R107,
+which had already closed the HTTP route to it.
+
+`tools/paths.stored_path` exists to keep a profile's `master_resume_path`
+inside its user's partition. Its docstring says an out-of-home path would be
+"the partition's whole purpose undone by one string". It enforces that for
+absolute paths only:
+
+```python
+if not path.is_absolute():
+    return user_home(user_id) / path      # no resolve, no containment check
+```
+
+`stored_path("../bob/data/master_resumes/r.tex", user_id="alice")` resolves
+to `users/bob/data/master_resumes/r.tex`. Checked by running it.
+
+**What could write such a path.** Until R107, `PATCH /api/profile/{name}`.
+Now: `create_profile`, which writes a server-chosen relative path; a
+hand-edited file, which in hosted mode means someone with the volume already;
+and any future route or import that stores a path. The guard sits in the
+resolver so that the writers do not have to be trusted, and it is the
+resolver that has the gap.
+
+**The fix is one check,** applied to both branches: resolve, then require the
+home among its parents when `user_id` is set. Unscoped stays as it is: the
+CLI's user owns the whole disk. A test resolves `..`, a symlink out of the
+home, and a plain relative path. It is small and I would take it as its own R
+whenever you say.
+
+## Q65. Sixty-two of the sixty-four skips are missing data, and thirty-six of those test code, not data
+
+**Status:** Open, inventoried 2026-09-24 on a clean clone (1430 run, 64
+skipped, 14 errors). No fixes yet. Belongs with A11b: the image runs the
+suite from a clone, so these are the tests that never run there. The 14
+errors are Q35's and are not counted here.
+
+**By cause:**
+
+| Cause | Skips | Tests |
+|---|---:|---|
+| Platform: no LaTeX engine | 2 | `test_latex_escaping.TestTheRenderedGlyph` |
+| Dependency or network | 0 | none |
+| **Data: `yash_pathak`'s profile or resume, testing a mechanism** | **36** | `test_component_editor` (16: `TestComponentEditor` 9, `TestAlwaysAndNeverInclude` 7), `test_pipeline_integration` (9: `TestPipelineDrivenLikeTheUI` 7, `TestReviewBeforeGenerating` 2), `test_fabrication_guards.TestFactualFieldsAreRestored` (5), `test_silent_degradation` (5: `TestTheFloorRecordsWhyItWasReached` 3, `TestTheUserIsToldInTheSummary` 2), `test_import_confirmation.TestLatexSkipsConfirmation` (1) |
+| Data: `yash_pathak`'s profile, pinning *his* behaviour | 7 | `test_location_country.TestTheFilterNowExcludesIt` (3), `test_experience_profile.TestTheAuthorsProfileIsUnchanged` (2, one also needs the frozen baseline), `test_seniority_queries.TestTheRealProfileIsUnaffected` (1), `test_board_gate.TestAgainstTheRealStore` (1, also needs a real `jobs.db`) |
+| Data: frozen baselines or real runs (gitignored contents) | 19 | `test_posting_facts.TestAgainstTheRealPostings` (6), `test_body_gate.TestAgainstTheRealPostings` (3), `test_eligibility_gate.TestAgainstTheRealRun` (3), `test_selection_report.TestAgainstTheRealRun` (3), `test_job_score_blend.TestAgainstTheRealCorpus` (2), `test_score_shape_independence.TestTheAuthorsScoresDoNotMove` (1), `test_skill_evidence.TestAgainstTheRealRun` (1) |
+
+**Flagged: all 62 data skips.** None is about platform, dependency or
+network. They split into three kinds that want different answers:
+
+1. **The 36 are the payload test's shape (R106's correction).** They test
+   code (the component editor, the fabrication guards, the degradation
+   record, the pipeline driven as the UI drives it) and take yash's profile
+   only because it was the one on disk. On a clone they skip, so the
+   mechanisms they guard have never been tested in CI or the image. Most look
+   portable to a committed fixture. Two cautions:
+   - `test_component_editor` also skips with "profile has no authored project
+     rules", and Priya has no projects, so it may want Rohan.
+   - Porting to Priya is porting to a fixture written here (R77, R78). That
+     is fine for mechanism tests, but it is the reason not to port the next
+     group.
+2. **The 7 are about yash's profile on purpose.** "The author's profile is
+   unchanged" is a legacy-migration check, which is what CLAUDE.md says his
+   profile is for. They should keep skipping without it, but say *whose*
+   profile they need: the message reads "needs a real profile", and Priya,
+   who is committed, is a real profile by any reading of that sentence.
+   `test_location_country`'s 3 are the exception to check: they test that a
+   Brazilian posting is excluded, which is a mechanism and may belong in
+   group 1.
+3. **The 19 are measurements** against frozen, gitignored corpora. They
+   cannot run on a clone without committing employers' posting text (R60),
+   so skipping is correct. They could say which baseline they want, as the
+   `baseline.py` verifier already does.
+
+**The count, for A11b:** porting group 1 would take a clone from 64 skips to
+28, and the image would run 36 more tests of code it ships.
+
+### Ported, 2026-09-24: fabrication guards and silent degradation (10 of the 36)
+
+At the author's request, the rest of group 1 waits until after the invite.
+- `test_fabrication_guards.TestFactualFieldsAreRestored` (5) and
+  `test_silent_degradation`'s two classes (5) now run once per committed
+  fixture, **Priya and Rohan**, as `…ForPriya` / `…ForRohan` subclasses of
+  one base: 20 tests where there were 10 skips.
+- Priya has no projects and Rohan has four, so the verbatim floor is walked
+  with and without a projects section. A guard fails if either stops being
+  true.
+- A fixture that loses the component a test relies on now **fails**; it used
+  to skip ("this profile does not have the expected component").
+- Each test reads its fixture through a temporary `JOBSCOUT_HOME` seeded by
+  `tests/fixture_home.py`, not the checkout's own `user_profiles/`, so it
+  resolves paths the way a user's data does.
+- Mutations: disabling `_restore_factual_fields` fails 6 (three per
+  fixture); dropping the `_verbatim_reason` assignment fails 2.
+- A clean clone now runs 1460 tests with 52 data skips, down from 62. (This
+  container also got a TeX engine for R108's audit: the two
+  `TestTheRenderedGlyph` skips now run, and `test_no_engine_is_a_skip_not_a_
+  failure` skips instead, because an engine is present.)
+
+**They do not yet run in the image, and porting cannot make them.** The
+`verify` stage copies `tests/` and `baselines/` only, and `.dockerignore`
+excludes `user_profiles/` and `data/` whole, committed fixtures included. So
+in the image every test that reads Priya or Rohan from the checkout hits
+`FileNotFoundError`: these ten, and about 15 modules that already read Priya
+that way. That is A11b's business, and larger than Q65. The smallest fix I
+see:
+- move the fixture users' committed files under `tests/fixtures/users/`
+  (already in the image's `verify` stage); or
+- re-include the four files in `.dockerignore`, `COPY` them in `verify` only,
+  and keep `runtime` shipping none.
+
+The first keeps "never ship anyone's data" true by construction. It also
+means `--profile priya_raghunathan` on the CLI needs the fixture copied in,
+and acceptance's seeding (A12) reads from the new place. Not built here; it
+needs a Docker build to verify, and this container has no daemon.
+
+
+## Q66. Where a user's or a posting's string becomes a path or LaTeX: the audit
+
+**Status:** All four findings fixed: R111, R112, R113, and R116 for the
+compile step (2 below). The MiKTeX flag is still to be confirmed locally. Audited 2026-09-24. **Verified** means reproduced
+here; **reasoned** means read from the code.
+
+### Findings, most serious first
+
+1. **Profile name to path: cross-account write. Fixed, R111.** Verified over
+   HTTP. A profile name was joined to the profiles folder unchecked, in both
+   the importer and the loader.
+2. **The compile step can read files outside the user's own folder. Open.**
+   Verified through the repo's own `compile_pdf`, with TeX Live 2023 as
+   packaged for Ubuntu 24.04. The image's Debian TeX Live ships the same
+   upstream defaults, but the image itself was not inspected.
+   - An uploaded `.tex` is compiled as its own LaTeX: generation copies its
+     header verbatim.
+   - `pdf_builder` passes no file-access or shell settings, so the engine's
+     stock configuration applies. That configuration allows reading any
+     file the process can read; restricts writing to the working folder
+     (`openout_any = p`); and limits shell commands to a short whitelist
+     (`shell_escape = p`).
+   - None of the three is pinned in the repo.
+   - Each compile runs in the run's output folder, not a fresh one. The
+     timeout is 180 s and kills only the direct child.
+   - The fix is a sandboxed compile: pinned settings, a fresh working
+     folder per job, and a process-group timeout. It is its own R, in the
+     author's separate session.
+3. **An escaped character dropped a whole skills category. Fixed, R112.**
+   Verified. Found here as "skills values are written unescaped". Measuring
+   showed the parser dropped the category before that code could run.
+4. **A model key in the environment would have been spent on every hosted
+   user. Fixed, R113.** Reasoned from the code; nothing is set on Fly today.
+
+### Checked and contained
+
+Each of these was read, and the ones marked verified were also exercised
+with hostile input.
+- `/api/file` resolves and compares by path component. Verified: a sibling
+  folder with the same prefix, `..`, absolute paths and a symlink were all
+  404.
+- `load_run` compares the same way; verified.
+- `user_home` matches ids against `[a-z0-9_-]{1,64}`; verified.
+- `stored_path` (R108) resolves and requires the user's home; verified.
+- `_resolve_upload` compares the resolved parent; verified. `extract_resume`
+  keeps only the upload's basename; verified.
+- `_own_profile` checks the run and gate routes' profile against the
+  account's own listing.
+- The LLM and embedding caches key files by hash. The job and resume
+  caches are one fixed file each, with URLs only as keys.
+- ATS slugs harvested from postings become URL paths on fixed hosts, never
+  filesystem paths.
+- Output resume filenames keep letters, digits and underscores plus a hash.
+  Verified: slashes, backslashes, NUL and full-width solidus all come out
+  flat. The length cap came in R111.
+- **Every other string reaching LaTeX is escaped** by the one escaper
+  (`tex_renderer.escape`): importer fields, and LLM and verbatim bullets
+  through `experience_block` / `project_block`. Since R112 that includes
+  the skills builder. A PDF or Word import is escaped field by field, so
+  text in it cannot become a command. Scraped job text never reaches the
+  `.tex` as markup; it only steers which of the user's own skills are
+  chosen.
+
+### Minor, not fixed
+
+- **An upload can replace the user's own master resume** when it shares
+  its filename. It stays inside their own files. Worth a confirmation later.
+- **`stored_path` checks the resolved path and returns the joined one.**
+  No route lets a user create a symlink, so the window between the two is
+  theoretical.
+- **CLI-only paths are unchecked, and trusted:** the analysis and
+  generation `main()`s, `doctor.py`, `--output` and `--input`. The first
+  two anchor at the code root, R86's shape, which is a correctness bug for
+  an installed copy, not a security one.
+- **Streamlit's download opens paths stored on board rows** without
+  containment. Those paths are written by the pipeline, and Streamlit is
+  local and unscoped.
+- **Reasoned, unverified:** a PDF or Word upload whose extracted text
+  contains LaTeX document markers is classified as LaTeX and stored raw
+  (`looks_like_latex`). It would then be compiled as LaTeX, so it belongs
+  in the sandbox work's tests.
+
+## Q67. Whose key pays, per plan
+
+**Status:** Open, logged 2026-09-24 by the author. Decide when a paid tier
+is designed; nothing to build before then.
+
+**R113 is pilot policy, not a permanent rule.** During the pilot a hosted
+instance uses only the key a request carries, so each friend pays for their
+own model calls on Google's free tier and the operator pays nothing. That
+matches the $10/month ceiling (OOS5) and the pilot having no revenue. A
+paid tier will want the opposite for at least some users: the operator's
+key, metered and billed, so a paying user never has to find one. When that
+happens R113 is reversed for that tier, deliberately and per plan, not by
+setting a secret and discovering what reads it.
+
+**What pins R113 today, and so what the reversal has to change:**
+- `config.environment_keys_allowed()` is the single switch: true only in
+  local mode. Both guards ask it.
+- **Guard 1:** `config.resolve_api_key(explicit)` returns the request's key,
+  else the environment's `GOOGLE_API_KEY` only when the switch allows. Every
+  Gemini client (`config.gemini_client`, R101) and the embedding backend's
+  choice go through it.
+- **Guard 2:** `llm_backends.env_openai_key()` returns an OpenAI-compatible
+  key from the environment only when the switch allows.
+- **The test that pins them:** `tests/test_hosted_keys.py`,
+  `TestNothingElseReadsAKey.test_only_the_two_readers_touch_key_variables`.
+  It walks the syntax tree of `agents/`, `tools/`, `scripts/`, `config.py`,
+  `app.py` and `api/main.py`. It requires the set of files reading any
+  provider key variable to **equal** `{config.py,
+  tools/generation/llm_backends.py}`: a third reader fails it, and so does a
+  blind walk that finds none.
+
+**What the reversal needs decided first:**
+- Which plan pays with whose key, and whether "bring your own key" stays as
+  an option on a paid plan.
+- Where the answer lives. It is per user, not per process, so the switch
+  can no longer be a mode check. It needs the caller's plan, which means it
+  takes `user_id` like every other per-user decision (R90).
+- Metering. An operator key spent without a per-user count is R113's
+  original risk with a bill attached. Q61's free-tier limits do not apply to
+  a paid key, and its quota breaker (R97) would need a per-user budget
+  instead.
+- The cache keys. The LLM cache is keyed by rung and model (R45, R80), not
+  by whose key paid. Whether a paid user may be served a reply another
+  user's key bought is a question the cache key currently answers "yes"
+  without having been asked (CLAUDE.md, "A cache key encodes how much
+  variation lives inside a category").
+
 ---
 
 # Out of scope
+
+## Q62. A non-remote location with no country is still shown as eligible, and the board gate ignores `exclude_countries`
+
+**Status:** Open, backlog from R105 (2026-09-23). Found while fixing Q55;
+deliberately not fixed there.
+
+**Three things R105 left alone:**
+1. **A non-remote posting whose country does not parse** (`"Multiple
+   Locations"`, `""`, a city the tables do not know, such as Brussels) is
+   kept with `location_score` −1 by discovery. On the board it is still
+   **shown** plainly.
+   - The invariant says unknown is never a value, so it should be
+     undecidable, like a bare "Remote".
+   - Left out because it badges a much larger share of the board than Q55
+     did, and that is a product decision, not a parse fix.
+   - `test_an_absent_location_is_not_newly_badged` pins today's behaviour so
+     the change is visible when it is made.
+2. **`gate_verdict` checks the whitelist and never `exclude_countries`.**
+   Discovery applies both. So a country the user excludes *after* a job was
+   stored stays on the board.
+   - Fixing it means passing the list to `country_decision` and adding it to
+     `gate_fingerprint`.
+   - The fingerprint half is the part that gets forgotten: a field the gate
+     reads but does not fingerprint leaves stale verdicts standing.
+3. **Real remote strings.** R105's tests are formats written here. The next
+   live run should dump every distinct `location` containing a remote word
+   from `jobs.db`, and each string should be checked against
+   `parse_location` for:
+   - a region (`EMEA`, `Europe`, `APAC`, `LATAM`), which R105 leaves unknown;
+   - a country the tables lack (Russia and Belgium's cities, for two).
 
 ## OOS1. DOCX output format
 

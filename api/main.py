@@ -63,6 +63,7 @@ from agents.orchestrator import (
     InviteRefused,
     PassphraseRefused,
     RunInProgress,
+    RunSizeRefused,
     account_email,
     active_runs,
     available_profiles,
@@ -91,14 +92,18 @@ from agents.orchestrator import (
     set_job_status,
     sign_in,
     start_run,
+    run_limits,
     run_status,
     user_outputs_root,
     YEARS_EXPERIENCE_MAX,
 )
 from scripts.init_profile import (
+    BadProfileName,
     ProfileInvalid,
+    ProfileLimit,
     create_profile,
     extract_resume,
+    profile_limit,
     read_component_rules,
     read_personal,
     read_preferences,
@@ -386,6 +391,12 @@ def health(user: Optional[str] = Depends(_caller)) -> dict:
     """What this machine can do, which the UI has to say out loud (R43)."""
     return {
         "profiles": available_profiles(user),
+        # How many this account may hold: 1 hosted, None local (R109). The
+        # wizard offers "replace" rather than a name field that would 409.
+        "profile_limit": profile_limit(user),
+        # The bounds `start_run` enforces (R110), so the run screen's inputs
+        # stop where the server would refuse.
+        "run_limits": run_limits(),
         "backend": backend_status(),
         "pdflatex": pdflatex_available(),
         "statuses": list(job_statuses()),
@@ -681,8 +692,10 @@ def profile_create(request: ProfileRequest, user: Optional[str] = Depends(_calle
                    if request.schema_ else source)
     try:
         return create_profile(user, resume_path, request.name, force=request.force)
-    except FileExistsError as exc:
+    except (FileExistsError, ProfileLimit) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BadProfileName as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # surfaced, not swallowed
         raise HTTPException(
             status_code=400,
@@ -700,12 +713,68 @@ def profile_read(name: str, user: Optional[str] = Depends(_caller)) -> dict:
             "preferences": read_preferences(user, name),
             "components": read_component_rules(user, name),
         }
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, BadProfileName) as exc:
+        # A name that cannot be a profile is one that does not exist (R111).
         raise HTTPException(status_code=404, detail=NO_SUCH_PROFILE) from exc
+    except ValueError as exc:
+        # A stored resume path that resolves outside this account (R108).
+        # Refused in words, not as a 500.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class ProfileUpdate(BaseModel):
     updates: dict[str, Any]
+
+
+# Everything `PATCH /api/profile/{name}` may write: exactly what the two
+# screens that call it save. That is Preferences (`job_preferences`) and
+# About you (`personal_info`). A dict is a section whose own keys are checked;
+# `True` is a leaf, whose value the schema validates on save.
+#
+# An allow-list, not a denylist, for the payload test's reason: the route used
+# to merge any dict it was sent. So a hand-built request could set
+# `agent_preferences.max_jobs_to_generate` (run cost, A10), the scoring
+# threshold (Q63), or `resume_preferences.master_resume_path`, which a
+# relative `..` walked into another user's partition. A field reaches this
+# list when a screen starts saving it, in the same change.
+PROFILE_PATCHABLE: dict[str, Any] = {
+    "job_preferences": {
+        "target_roles": True,
+        "years_experience": True,
+        "seniority": True,
+        "exclude_keywords": True,
+        "locations": {
+            "cities": True,
+            "remote_ok": True,
+            "countries": True,
+            "states_priority": True,
+            "states_acceptable": True,
+            "willing_to_relocate": True,
+        },
+    },
+    "personal_info": {
+        "location": True,
+        "work_authorization": {
+            "us_person": True,
+            "needs_sponsorship": True,
+            "holds_clearance": True,
+        },
+    },
+}
+
+
+def _unpatchable(updates: Any, allowed: dict, prefix: str = "") -> list[str]:
+    """Every dotted path in `updates` that `allowed` does not name."""
+    if not isinstance(updates, dict):
+        return [prefix.rstrip(".") or "updates"]
+    refused = []
+    for key, value in updates.items():
+        rule = allowed.get(key)
+        if rule is None:
+            refused.append(f"{prefix}{key}")
+        elif isinstance(rule, dict):
+            refused += _unpatchable(value, rule, f"{prefix}{key}.")
+    return refused
 
 
 @app.patch("/api/profile/{name}")
@@ -718,10 +787,19 @@ def profile_update(name: str, request: ProfileUpdate, user: Optional[str] = Depe
     `locations`' seven fields, and a wholesale replace dropped `countries`,
     which the schema requires — walking the wizard left a profile that would
     not load. A form must not destroy what it never showed (R30).
+
+    Only the fields in `PROFILE_PATCHABLE` are written. Anything else is a 400
+    naming each refused field, and nothing is written.
     """
+    refused = _unpatchable(request.updates, PROFILE_PATCHABLE)
+    if refused:
+        raise HTTPException(
+            status_code=400,
+            detail="These fields cannot be changed here: " + ", ".join(refused))
     try:
         path = update_profile_fields(user, name, request.updates)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, BadProfileName) as exc:
+        # A name that cannot be a profile is one that does not exist (R111).
         raise HTTPException(status_code=404, detail=NO_SUCH_PROFILE) from exc
     except ProfileInvalid as exc:
         # Nothing was written. A string detail, not FastAPI's error list, so
@@ -766,7 +844,8 @@ def components_write(name: str, request: ComponentRules,
     try:
         saved = write_component_rules(user, name, request.importance, request.triggers,
                                       request.always, request.never)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, BadProfileName) as exc:
+        # A name that cannot be a profile is one that does not exist (R111).
         raise HTTPException(status_code=404, detail=NO_SUCH_PROFILE) from exc
     return {"saved": name, "id_problems": saved["id_problems"]}
 
@@ -798,15 +877,18 @@ def run_start(request: RunRequest, user: Optional[str] = Depends(_caller)) -> di
     ends — which is the whole point: a reloaded page can find the run again.
     """
     _own_profile(user, request.profile)
-    run_id = start_run(
-        user,
-        request.profile,
-        api_key=request.api_key,
-        max_jobs=request.max_jobs,
-        max_resumes=request.max_resumes,
-        generate_pdf=request.generate_pdf,
-        backend=request.backend or None,
-    )
+    try:
+        run_id = start_run(
+            user,
+            request.profile,
+            api_key=request.api_key,
+            max_jobs=request.max_jobs,
+            max_resumes=request.max_resumes,
+            generate_pdf=request.generate_pdf,
+            backend=request.backend or None,
+        )
+    except RunSizeRefused as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"run_id": run_id}
 
 

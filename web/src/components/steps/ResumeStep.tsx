@@ -28,17 +28,21 @@ import { api, type Extraction, type ProfileSummary, type ResumeSchema } from '@/
  * format, so there is nothing a model guessed at. A PDF or Word file stops at
  * the confirmation screen, always.
  */
+const PROFILE_NAME = /^[a-z0-9_]{1,40}$/
+
 export function ResumeStep({
   profiles,
+  profileLimit,
   onProfileReady,
   onSkipAhead,
 }: {
   profiles: string[]
+  profileLimit: number | null
   onProfileReady: (name: string, summary: ProfileSummary | null) => void
   onSkipAhead: (name: string) => void
 }) {
   const [file, setFile] = useState<File | null>(null)
-  const [name, setName] = useState('')
+  const [typedName, setTypedName] = useState('')
   const [existing, setExisting] = useState<string>('')
   const [replace, setReplace] = useState(false)
   const [busy, setBusy] = useState<'reading' | 'building' | null>(null)
@@ -50,7 +54,18 @@ export function ResumeStep({
   // twice and leaves a stale value if the list arrives later.
   const selected = existing || profiles[0] || ''
 
+  // A hosted account holds one profile (R109): the board has no profile
+  // column, so a second resume would be ranked against the first one's
+  // scores. With the account full, the name is the profile it has, and the
+  // only way forward is replacing it. The server refuses a second name with a
+  // 409 either way. This keeps the screen from offering what it would refuse.
+  const full = profileLimit !== null && profiles.length >= profileLimit
+  const name = full ? profiles[0] : typedName
+
   const clash = Boolean(name) && profiles.includes(name)
+  // The server's rule (`profile_loader.PROFILE_NAME`, R111), copied so the
+  // screen says so before a resume is read; a test holds the two equal.
+  const nameOk = PROFILE_NAME.test(name)
 
   async function read() {
     if (!file || !name) return
@@ -141,7 +156,9 @@ export function ResumeStep({
             </Button>
           </div>
           <p className="text-sm text-muted-foreground">
-            Or upload a resume below to start fresh.
+            {full
+              ? 'Or upload a new resume below to replace it.'
+              : 'Or upload a resume below to start fresh.'}
           </p>
         </div>
       )}
@@ -167,13 +184,21 @@ export function ResumeStep({
           <Input
             id="profile-name"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => setTypedName(e.target.value)}
             placeholder="e.g. jane_doe"
             className="max-w-sm"
+            disabled={full}
           />
           <p className="text-sm text-muted-foreground">
-            Used for the profile file and generated resume filenames.
+            {full
+              ? 'Your account holds one profile, so a new resume replaces this one.'
+              : 'Used for the profile file and generated resume filenames.'}
           </p>
+          {name && !nameOk && (
+            <p className="text-sm text-destructive">
+              Use 1 to 40 lowercase letters, digits or underscores, like jane_doe.
+            </p>
+          )}
         </div>
 
         {/* Overwriting is never implicit. Rebuilding discards every rule the
@@ -204,7 +229,7 @@ export function ResumeStep({
 
         <Button
           onClick={read}
-          disabled={!file || !name || (clash && !replace) || busy !== null}
+          disabled={!file || !name || !nameOk || (clash && !replace) || busy !== null}
         >
           {busy ? (
             <Loader2 className="size-4 animate-spin" />

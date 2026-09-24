@@ -379,6 +379,36 @@ def _registry(user_id):
     return RunRegistry(db_path(user_id))
 
 
+# How large a run a UI may ask for (R110), inclusive. `start_run` refuses
+# anything outside, so every UI gets the same bound whatever its widget
+# allows. `/api/health` hands this to the React run screen and Streamlit's
+# sliders read it. The CLI calls `JobScoutOrchestrator.run` directly and is
+# not bounded: it is a developer's own machine and quota.
+#
+# 50 and 10 are Streamlit's existing slider ranges; React allowed 100. Each
+# job is a scrape and an embedding. Each resume is LLM calls on the user's
+# key plus one `pdflatex` compile, the heaviest server CPU per unit (A10).
+RUN_LIMITS = {"max_jobs": (1, 50), "max_resumes": (1, 10)}
+
+
+class RunSizeRefused(ValueError):
+    """A run asked for more (or less) than `RUN_LIMITS` allows."""
+
+
+def run_limits() -> dict:
+    """`RUN_LIMITS` as the UIs want it: {field: {"min": a, "max": b}}."""
+    return {field: {"min": lo, "max": hi} for field, (lo, hi) in RUN_LIMITS.items()}
+
+
+def _check_run_size(**sizes) -> None:
+    for field, value in sizes.items():
+        lo, hi = RUN_LIMITS[field]
+        # `bool` is an `int` in Python; `True` is not a job count.
+        if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
+            raise RunSizeRefused(f"{field} must be a whole number from {lo} to {hi}; "
+                                 f"got {value!r}.")
+
+
 def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
               generate_pdf=True, output_dir="outputs", backend=None) -> str:
     """
@@ -403,10 +433,22 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
     """
     import threading
 
-    registry = _registry(user_id)
-    run_id = registry.create(profile_name)
+    # Before the registry row, so a refused run leaves no trace (R110).
+    _check_run_size(max_jobs=max_jobs, max_resumes=max_resumes)
+
+    # The row is recorded on a connection that closes here, and the worker
+    # opens its own. Before, this one connection was handed to the thread and
+    # closed only in the worker's `finally`, so a thread that never ran (a
+    # test that stubs it, or a failed `start()`) left it open for good. On
+    # Windows an open SQLite file cannot be deleted, so the test's temporary
+    # home failed to clean up (WinError 32), and Python 3.13 warned about
+    # the unclosed database at exit. A connection's life is now the life of
+    # whoever uses it.
+    with _registry(user_id) as registry:
+        run_id = registry.create(profile_name)
 
     def worker():
+        registry = _registry(user_id)
         try:
             orchestrator = JobScoutOrchestrator(
                 profile_name=profile_name,
@@ -446,6 +488,10 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
                 # bullets are the user's own without reopening state.json.
                 "degraded": sorted({r["degraded"] for r in results
                                     if r.get("degraded")}),
+                # Why resumes have no PDF, carried out the same way (R116),
+                # so the run screen can say so instead of counting them valid.
+                "pdf_problems": sorted({r["pdf_problem"] for r in results
+                                        if r.get("pdf_problem")}),
             }, output_dir=getattr(orchestrator, "output_path", ""))
         except Exception as exc:                      # the worker owns nothing else
             logger.exception("Background run failed")
@@ -895,6 +941,8 @@ class JobScoutOrchestrator:
             'analysis_results': [],
             # Jobs analysis could not score and why (R97); None until it runs.
             'scoring': None,
+            # Scored under the bar, stored and marked on the board (R106).
+            'below_bar': [],
             'generation_results': [],
         }
         
@@ -1285,9 +1333,15 @@ class JobScoutOrchestrator:
         
         self.state['analysis_results'] = results
         self.state['scoring'] = getattr(agent, "scoring", None)
+        below_bar = getattr(agent, "below_bar", None) or []
+        self.state['below_bar'] = [
+            {"url": b["job"].get("apply_url"), "title": b["job"].get("title"),
+             "company": b["job"].get("company"), "score": b["score"]}
+            for b in below_bar]
         logger.info(f"✅ Analyzed {len(results)} jobs passing threshold")
 
-        self._store_scores(results)
+        self._store_scores(results, below_bar,
+                           bar=(self.state['scoring'] or {}).get('bar'))
         
         # Save analysis results
         analysis_path = self.output_path / "analysis_results.json"
@@ -1322,6 +1376,20 @@ class JobScoutOrchestrator:
                 readable.append(result)
         return readable, unreadable
 
+    def _resume_cap(self) -> int:
+        """
+        How many resumes this run writes: `--max-resumes` or the run request,
+        falling back to `agent_preferences.max_jobs_to_generate` only when none
+        was given (the CLI without the flag).
+
+        `is None`, not `or`. With `or`, a request for 0 silently became the
+        profile's number: 10 by default, and settable over PATCH until R107
+        (R110). The UIs always pass one, bounded by `start_run`.
+        """
+        if self.max_resumes is not None:
+            return self.max_resumes
+        return self.profile.agent_preferences.max_jobs_to_generate
+
     def _run_generation(self):
         """Stage 4: Generate tailored resumes for the top-K best-fit jobs."""
         logger.info("\n" + "=" * 80)
@@ -1336,8 +1404,7 @@ class JobScoutOrchestrator:
         # FUNNEL: rank by overall fit score (descending) and slice to top-K.
         # Generation is the expensive stage (1-2 Gemini calls per resume), so
         # we pay for it only on the highest-scoring jobs. K is set per-run via
-        # --max-resumes, falling back to profile.agent_preferences.max_jobs_to_generate.
-        max_resumes = self.max_resumes or self.profile.agent_preferences.max_jobs_to_generate
+        max_resumes = self._resume_cap()
 
         # A resume tailored to a posting nobody could read is tailored to
         # nothing (R61). Enrichment marks a job it could not scrape, and this
@@ -1523,20 +1590,33 @@ class JobScoutOrchestrator:
     # JOB STORE
     # =====================================================================
 
-    def _store_scores(self, results) -> None:
+    def _store_scores(self, results, below_bar=(), bar=None) -> None:
         """
-        Write scores back to the durable store.
+        Write scores back to the durable store, with the bar they met or missed.
 
         Analysis is the only stage that forms an opinion about a job, and
         without this the board has nothing to rank by. Failing here must not
         cost the run — the scores are already in `state` and on disk.
+
+        Jobs under the bar are written too (R106). They used to be dropped, so
+        the board showed "Not scored" for a job analysis had scored 39.9, and
+        discovery treated it as unprocessed, re-analysing it every run in a
+        slot a new posting could have had.
+
+        `bar` is the threshold analysis applied, passed in from its result,
+        not read from the profile: the profile holds the *current* threshold,
+        and a store row records what the job was judged against.
         """
         self._update_store(
             lambda store: [
                 store.set_score(r["job"]["apply_url"], r["score"]["overall"],
-                                selection=r.get("selection_report"))
+                                selection=r.get("selection_report"), bar=bar)
                 for r in results or []
                 if r.get("job", {}).get("apply_url")
+            ] + [
+                store.set_score(b["job"]["apply_url"], b["score"], bar=bar)
+                for b in below_bar or ()
+                if b.get("job", {}).get("apply_url")
             ],
             "scores",
         )
@@ -1673,6 +1753,16 @@ class JobScoutOrchestrator:
             # A run whose model never answered still produces resumes, in the
             # user's own words. That is a good floor and a bad surprise, so
             # the summary says it happened and why (R47).
+            # Resumes whose compile was tried and failed (R116). Each is in
+            # needs_review with its .tex, and has no PDF to submit.
+            no_pdf = [r for r in gen_results if r.get("pdf_problem")]
+            if no_pdf:
+                f.write(f"> ⚠️  **No PDF for {len(no_pdf)} of {len(gen_results)} "
+                        f"resume(s).** Each is kept as .tex in needs_review.\n>\n")
+                for reason in sorted({r["pdf_problem"] for r in no_pdf}):
+                    f.write(f"> - {reason}\n")
+                f.write("\n")
+
             degraded = [r for r in gen_results if r.get("degraded")]
             if degraded:
                 f.write(f"> ⚠️  **Bullets were not rewritten** for "
@@ -1730,6 +1820,16 @@ class JobScoutOrchestrator:
                          f"({scoring.get('description', 'reason unknown')})")
         elif (scoring.get('embeddings') or {}).get('recovered'):
             lines.append(f"Embeddings: {scoring.get('description')}")
+
+        below = self.state.get('below_bar') or []
+        if below:
+            # The bar analysis applied, from its own result, not the profile's
+            # current threshold (R106).
+            bar = scoring.get('bar')
+            lines.append(
+                f"Below your bar{f' of {bar}' if bar is not None else ''}: "
+                f"{len(below)} job(s) scored under it. They are on your board, "
+                f"marked, with their scores, and no resume was written for them.")
 
         # The window guard (R99). Any clipped job is reported, with counts, so
         # 1 of 40 reads differently from 40 of 40. It is the event that says

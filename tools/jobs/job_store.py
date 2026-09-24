@@ -192,6 +192,7 @@ class JobStore:
         ("gate_reason", "TEXT"),       # R62: why the board would not show it
         ("gate_checked", "TEXT"),      # R62: the fingerprint it was judged under
         ("gate_verdict", "TEXT"),      # A4: shown / hidden / undecidable
+        ("bar", "REAL"),               # R106: the threshold the score was judged against
     )
 
     def _migrate(self) -> None:
@@ -211,7 +212,7 @@ class JobStore:
                 "UPDATE jobs SET gate_verdict = CASE WHEN gate_reason != ''"
                 " THEN 'hidden' ELSE 'shown' END WHERE gate_reason IS NOT NULL")
 
-    def set_score(self, url: str, score: float, selection=None) -> None:
+    def set_score(self, url: str, score: float, selection=None, bar=None) -> None:
         """
         Record what analysis thought of a job, and why.
 
@@ -224,16 +225,22 @@ class JobStore:
         Written here rather than through its own method because a report
         without a score is meaningless — the score is what put the job on the
         board for anyone to ask about in the first place.
+
+        `bar` is the threshold the score was judged against (R106). Every
+        score analysis computes is stored now, including those under the bar:
+        dropping them left `score NULL`, and the board then said "Not scored"
+        about a job analysis had scored and set aside. Storing the bar rather
+        than a pass/fail flag lets the board say *which* bar, and it stays true
+        if the profile's threshold changes later. `None` makes no claim.
         """
-        if selection is None:
-            self._db.execute(
-                "UPDATE jobs SET score = ?, scored_at = ? WHERE url = ?",
-                (float(score), _now(), url))
-        else:
-            self._db.execute(
-                "UPDATE jobs SET score = ?, scored_at = ?, selection = ?"
-                " WHERE url = ?",
-                (float(score), _now(), json.dumps(selection), url))
+        fields = {"score": float(score), "scored_at": _now()}
+        if selection is not None:
+            fields["selection"] = json.dumps(selection)
+        if bar is not None:
+            fields["bar"] = float(bar)
+        assignments = ", ".join(f"{name} = ?" for name in fields)
+        self._db.execute(f"UPDATE jobs SET {assignments} WHERE url = ?",
+                         (*fields.values(), url))
         self._db.commit()
 
     def refresh_gate(self, fingerprint: str, evaluate) -> int:
@@ -487,9 +494,14 @@ class JobStore:
         Returns empty when there is too little to divide, because a quartile
         over three jobs is not information.
         """
+        # Over the jobs that met their bar (and rows from before bars were
+        # stored), which is exactly the set that had scores before R106. A job
+        # set aside under its bar is labelled as that, not banded, so letting
+        # it into the quartiles would only move everyone else's labels down.
         scores = [
             row["score"] for row in self._db.execute(
-                "SELECT score FROM jobs WHERE score IS NOT NULL ORDER BY score")
+                "SELECT score FROM jobs WHERE score IS NOT NULL"
+                " AND (bar IS NULL OR score >= bar) ORDER BY score")
         ]
         if len(scores) < self.MIN_FOR_BANDS:
             return {}

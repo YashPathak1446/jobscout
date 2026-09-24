@@ -50,6 +50,8 @@ from tools.profile.derivation import (  # noqa: E402
     derive_personal_info,
     merge_conditional_triggers,
 )
+from tools.profile.profile_loader import (  # noqa: E402
+    BadProfileName, list_available_profiles, profile_file)
 from tools.resume.resume_parser import ResumeParser  # noqa: E402
 
 # Ships with the package; it is a starter, not one of the user's profiles.
@@ -190,6 +192,20 @@ def profiles_dir(user_id) -> Path:
     return _loader_dir(user_id)
 
 
+def profile_name_problem(name: str):
+    """
+    Why `name` cannot be a profile name, in words, or None if it can (R111).
+
+    For a UI to say so before reading a resume. The same check `create_profile`
+    enforces, so the screen cannot pass a name the save will refuse.
+    """
+    try:
+        profile_file(name, profiles_dir(None))
+    except BadProfileName as exc:
+        return str(exc)
+    return None
+
+
 def _profile_file(user_id, name: str, must_exist: bool = True) -> Path:
     """
     One user's profile file, with its directory made on the way.
@@ -201,8 +217,10 @@ def _profile_file(user_id, name: str, must_exist: bool = True) -> Path:
     user's home is created by their first write.
     """
     where = profiles_dir(user_id)
+    # The name is checked before anything is made: a refused name must not
+    # leave even an empty directory behind (R111).
+    path = profile_file(name, where)
     where.mkdir(parents=True, exist_ok=True)
-    path = where / f"{name}.json"
     if must_exist and not path.exists():
         raise FileNotFoundError(f"No profile named '{name}'.")
     return path
@@ -258,22 +276,25 @@ def extract_resume(user_id, file_bytes: bytes, filename: str, backend: str = Non
     resume — so nothing could contradict it (R83).
     """
     from tools.generation import llm_backends
-    from tools.resume import resume_import, tex_renderer
+    from tools.resume import resume_import
+
+    # By file type, before anything is written (R116): the extension, checked
+    # against the file's own first bytes. A PDF or Word upload is imported as
+    # one whatever its text says; only a .tex upload is kept as LaTeX.
+    kind = resume_import.classify_upload(file_bytes, filename)
 
     resumes = resume_dir(user_id)
     resumes.mkdir(parents=True, exist_ok=True)
     source = resumes / Path(filename).name
     source.write_bytes(file_bytes)
 
-    if source.suffix.lower() == ".tex":
+    if kind == "tex":
         return {"kind": "latex", "path": source, "rung": None}
 
     text = resume_import.extract_text(source)
-    if tex_renderer.looks_like_latex(text):
-        return {"kind": "latex", "path": source, "rung": None}
 
     # Resolved here rather than inside `complete_json` so the rung can be
-    # reported, and deliberately *below* the two LaTeX returns: a `.tex` upload
+    # reported, and deliberately *below* the LaTeX return: a `.tex` upload
     # needs no model, and resolving at the top would have it probing for a
     # local Ollama to answer a question nobody asked.
     #
@@ -392,6 +413,29 @@ def _id_problems(user_id, name: str, resume_path=None, parser=None) -> list:
                 f"this profile may name components that do not exist"]
 
 
+class ProfileLimit(Exception):
+    """This account already has as many profiles as it may (R109)."""
+
+
+def profile_limit(user_id):
+    """
+    How many profiles one account may hold: **one when scoped, no limit
+    unscoped.**
+
+    The board has no profile column. It is the user's (R90's partition), and
+    every stored score, gate verdict and applied/rejected mark on it was made
+    for one resume. A second profile in the same partition is ranked against
+    scores computed for the first, and Q53's labels would mix two people's
+    judgements. The CLI and local mode keep any number: one person, who knows
+    which profile they ran.
+
+    Read by `create_profile`, which enforces it, and by `/api/health`, so the
+    wizard can offer "replace" instead of a name field that would 409. One
+    function, so the two cannot disagree.
+    """
+    return None if user_id is None else 1
+
+
 def create_profile(user_id, resume_path, name: str, force: bool = False) -> dict:
     """
     Build, validate and write a profile in one call.
@@ -409,6 +453,15 @@ def create_profile(user_id, resume_path, name: str, force: bool = False) -> dict
 
     if out_path.exists() and not force:
         raise FileExistsError(f"A profile named '{name}' already exists.")
+
+    limit = profile_limit(user_id)
+    if limit is not None:
+        others = [n for n in list_available_profiles(user_id=user_id)
+                  if n != out_path.stem]
+        if len(others) >= limit:
+            raise ProfileLimit(
+                f"This account already has a profile, '{others[0]}', and holds "
+                "one. Upload your new resume to replace it instead.")
 
     # A profile is the only artefact here that is both hand-tuned and unbacked:
     # everything else is derived, in git, or reproducible. Profiles are
@@ -431,6 +484,9 @@ def create_profile(user_id, resume_path, name: str, force: bool = False) -> dict
         "backup_path": backup,
         "derived": derived_info,
         "id_problems": _id_problems(user_id, name, resume_path),
+        # Lines of the resume the parser could not read (R112). Shown at
+        # import, beside id_problems, so nothing is dropped unseen.
+        "parse_warnings": list(resume.warnings),
         "needs_you": {
             section: [f for f in fields if f not in derived_info]
             for section, fields in NEEDS_HUMAN.items()
@@ -601,7 +657,11 @@ def read_component_rules(user_id, name: str) -> dict:
     section name, so the added key reaches nobody iterating.
     """
     rules, parser = _component_rules(user_id, name)
-    return {**rules, "id_problems": _id_problems(user_id, name, parser=parser)}
+    return {**rules, "id_problems": _id_problems(user_id, name, parser=parser),
+            # Again here, not only at import: a profile imported before R112
+            # has never been told, and this is the screen a returning user
+            # opens.
+            "parse_warnings": list(parser.parsed_resume.warnings)}
 
 
 def _component_rules(user_id, name: str):

@@ -25,6 +25,10 @@ class LocationResult:
     state: Optional[str] = None         # e.g., "California", "British Columbia"
     city: Optional[str] = None          # e.g., "San Francisco"
     confidence: str = "low"             # "high", "medium", "low"
+    # Every country a remote posting names, when it names more than one
+    # ("Remote - US or Canada"). `country` is then None, because no single
+    # value is true, and the gates read this instead (Q55). Empty otherwise.
+    countries: tuple = ()
 
     def __str__(self) -> str:
         parts = []
@@ -36,6 +40,8 @@ class LocationResult:
             parts.append(self.state)
         if self.country and self.country != "United States":
             parts.append(self.country)
+        if self.countries:
+            parts.append(" or ".join(self.countries))
         return ", ".join(parts) if parts else self.raw or "Unknown"
 
 
@@ -156,8 +162,7 @@ US_STATE_BY_ABBREV = {v: k for k, v in US_STATES.items()}
 # they were credited to was doing nothing.
 _AMBIGUOUS_WITH_US_STATES = {abbrev.upper() for abbrev in US_STATE_BY_ABBREV}
 
-COUNTRY_CODES = {
-    code: name for code, name in {
+_EVERY_CODE = {
         "BR": "Brazil", "MX": "Mexico", "AR": "Argentina", "CL": "Chile",
         "CO": "Colombia", "PE": "Peru", "UY": "Uruguay",
         "GB": "United Kingdom", "UK": "United Kingdom", "IE": "Ireland",
@@ -184,8 +189,10 @@ COUNTRY_CODES = {
         # (Indonesia), DE (Germany), IT (Italy), PA (Panama), MT (Malta),
         # CA (Canada), AL (Albania), MS, SC, VA, WA, MO, OK, LA. Those
         # countries are still recognised by name through COUNTRY_INDICATORS.
-    }.items() if code not in _AMBIGUOUS_WITH_US_STATES
 }
+
+COUNTRY_CODES = {code: name for code, name in _EVERY_CODE.items()
+                 if code not in _AMBIGUOUS_WITH_US_STATES}
 
 # Every country the code map names is also recognised by its own name, so the
 # vocabulary does not have to be curated twice. This closes the same gap the
@@ -193,13 +200,22 @@ COUNTRY_CODES = {
 # and was still invisible, because `COUNTRY_INDICATORS` lists nineteen
 # countries by hand and Iceland is not one of them. An unknown country is not
 # neutral — it silently passes a filter meant to exclude it.
-for _code, _name in COUNTRY_CODES.items():
+#
+# Read from every code, not from `COUNTRY_CODES` (Q55). The guard above drops
+# AR, CO and MA because they are Arkansas, Colorado and Massachusetts, and
+# reading the filtered map dropped Argentina, Colombia and Morocco *by name*
+# along with them. The code is ambiguous; the name never was. "Argentina
+# Remote" reached a US-only board partly through this.
+for _code, _name in _EVERY_CODE.items():
     COUNTRY_INDICATORS.setdefault(_name, []).append(_name.lower())
 
 # Matched only as a whole trailing token — "..., BR" — never as a substring.
 # `BR` appears inside "Brooklyn" and `IT` inside "Detroit"; a substring match
 # would relocate half the United States.
-_TRAILING_CODE = re.compile(r"[,\s(]\s*([A-Za-z]{2})\s*\)?\s*$")
+#
+# A code that is the *whole* string counts too (Q55). Once the remote words are
+# taken off "Remote - UK", what is left is "UK", with nothing before it.
+_TRAILING_CODE = re.compile(r"(?:^|[,\s(])\s*([A-Za-z]{2})\s*\)?\s*$")
 
 
 def country_from_code(raw_location: str):
@@ -222,6 +238,29 @@ REMOTE_INDICATORS = [
     "remote-first", "remote first", "distributed", "anywhere",
     "virtual", "telecommute",
 ]
+
+# The same words as removable terms, longest first so "fully remote" goes
+# whole. Taking them off leaves the place, which the ordinary steps then read.
+_REMOTE_WORDS = re.compile(
+    r"(?<![a-z0-9])(?:"
+    + "|".join(re.escape(word) for word in
+               sorted(REMOTE_INDICATORS, key=len, reverse=True))
+    + r")(?![a-z0-9])",
+    re.IGNORECASE)
+
+# What separates one place from the next in a remote string that names
+# several: "US or Canada", "US/Canada", "USA & Canada", "US; UK".
+_PLACE_SEPARATORS = re.compile(r"\s*(?:[;/|&+]|\bor\b|\band\b)\s*",
+                               re.IGNORECASE)
+
+# The United States written as a bare token: "Remote - US", "Remote (USA)",
+# "US-CA-San Francisco". Whole tokens only — "us" is inside "Austin",
+# "Brussels", "Russia" and "Houston", and a substring match would move all four.
+_US_TOKEN = re.compile(r"(?<![a-z0-9.])(?:u\.s\.a\.?|u\.s\.?|usa|us)(?![a-z0-9])")
+
+# "America" on its own is not the United States when a region qualifies it.
+# "Remote - Latin America" was read as American by the plain substring.
+_AMERICA = re.compile(r"(?<!latin )(?<!south )(?<!central )america(?!s)")
 
 
 def _names_a_us_state(loc_lower: str, raw_location: str) -> bool:
@@ -270,8 +309,10 @@ def parse_location(raw_location: str) -> LocationResult:
     Examples:
         "San Francisco, CA"       → country=US, state=California, city=San Francisco
         "Vancouver, BC"           → country=Canada, state=British Columbia, city=Vancouver
-        "Remote"                  → is_remote=True
+        "Remote"                  → is_remote=True, country=None (unknown)
         "Remote - US Only"        → is_remote=True, country=United States
+        "Argentina Remote"        → is_remote=True, country=Argentina
+        "Remote - US or Canada"   → is_remote=True, countries=(US, Canada)
         "London, UK"              → country=United Kingdom, city=London
         "US"                      → country=United States
         "Multiple Locations"      → country=None, confidence=low
@@ -296,18 +337,68 @@ def parse_location(raw_location: str) -> LocationResult:
     is_remote = any(indicator in loc_lower for indicator in REMOTE_INDICATORS)
     result.is_remote = is_remote
 
-    # If remote with US qualifier, note country
+    # A remote posting is still somewhere (Q55). This used to return early
+    # with `country=None` for everything but a short list of US phrasings, so
+    # "Argentina Remote", "Remote - Ireland" and "Remote - US" all parsed the
+    # same, and the country whitelist was never asked. The place is whatever
+    # is left once the remote words are taken off, read by the same steps as
+    # any other location.
     if is_remote:
-        if any(x in loc_lower for x in ["us only", "usa only", "us-only",
-                                          "united states", "us based", ", us"]):
-            result.country = "United States"
-            result.confidence = "high"
-        elif any(x in loc_lower for x in ["canada", "uk", "india"]):
-            pass  # Fall through to country detection
+        return _parse_remote(raw, result)
+
+    return _parse_place(raw, result)
+
+
+def _parse_remote(raw: str, result: LocationResult) -> LocationResult:
+    """
+    The place a remote posting names: one country, several, or none.
+
+    Three outcomes, because the gates need three (Q55):
+      - one country            -> `country` set, judged on it
+      - more than one          -> `countries` set, `country` None
+      - none ("Remote")        -> both empty: unknown, not accepted
+    """
+    rest = _REMOTE_WORDS.sub(" ", raw)
+    rest = rest.strip(" -\u2013\u2014,:;/|()[]")
+    result.confidence = "medium"
+    if not rest:
+        return result
+
+    named = []
+    whole = _parse_place(rest, LocationResult(raw=rest))
+    # A posting that names a US state is in one place, and its commas are
+    # "city, state" rather than a list: "Remote - Dublin, Ohio".
+    pieces = [rest] if whole.state else [
+        piece for part in _PLACE_SEPARATORS.split(rest)
+        for piece in part.split(",")]
+    for piece in pieces:
+        piece = piece.strip(" -\u2013\u2014:()[]")
+        if not piece:
+            continue
+        found = _parse_place(piece, LocationResult(raw=piece)).country
+        if "north america" in piece.lower():
+            found_all = ["United States", "Canada"]
         else:
-            result.country = None  # Truly location-agnostic remote
-            result.confidence = "medium"
-            return result
+            found_all = [found] if found else []
+        for country in found_all:
+            if country not in named:
+                named.append(country)
+    if whole.country and whole.country not in named:
+        named.insert(0, whole.country)
+
+    if len(named) == 1:
+        result.country = named[0]
+        result.confidence = "high"
+        if whole.country == named[0]:
+            result.state, result.city = whole.state, whole.city
+    elif named:
+        result.countries = tuple(named)
+    return result
+
+
+def _parse_place(raw: str, result: LocationResult) -> LocationResult:
+    """The country, state and city a location string names, remote or not."""
+    loc_lower = raw.lower()
 
     # -----------------------------------------------------------------------
     # Step 1b: A named US state settles it before any city name is consulted
@@ -321,7 +412,7 @@ def parse_location(raw_location: str) -> LocationResult:
     # evidence than a city name shared with another country, so it is checked
     # first. This also settles "Ontario, California" — a Canadian province
     # name and a Californian city — in favour of California.
-    if _names_a_us_state(loc_lower, raw_location):
+    if _names_a_us_state(loc_lower, raw):
         result.country = "United States"
         result.confidence = "high"
         _enrich_us(result, loc_lower)
@@ -342,7 +433,7 @@ def parse_location(raw_location: str) -> LocationResult:
     # spelling the country out. Checked after the named indicators so a string
     # carrying both agrees with the name, and before the US step so a genuine
     # country code is not swept up as American by default.
-    coded = country_from_code(raw_location)
+    coded = country_from_code(raw)
     if coded:
         result.country = coded
         result.confidence = "high"
@@ -355,9 +446,9 @@ def parse_location(raw_location: str) -> LocationResult:
     # Explicit US indicators
     us_indicators = [
         "united states", "usa", ", usa", "u.s.a", "u.s.",
-        "america", "north america",
     ]
-    if any(ind in loc_lower for ind in us_indicators):
+    if (any(ind in loc_lower for ind in us_indicators)
+            or _US_TOKEN.search(loc_lower) or _AMERICA.search(loc_lower)):
         result.country = "United States"
         result.confidence = "high"
         _enrich_us(result, loc_lower)

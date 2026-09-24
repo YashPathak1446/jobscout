@@ -16,6 +16,10 @@ export type Job = {
   location: string
   source: string
   score: number | null
+  /** The threshold `score` was judged against (R106). A score under it was
+   *  set aside: no resume. `null` is a row scored before bars were stored,
+   *  which makes no claim either way. */
+  bar: number | null
   status: string
   first_seen: string | null
   last_seen: string | null
@@ -95,6 +99,8 @@ export type ProfileSummary = {
   // has to stay distinguishable from `[]` all the way to the screen — see
   // `IdProblems`.
   id_problems?: string[]
+  /** Lines of the resume the parser could not read (R112). */
+  parse_warnings?: string[]
 }
 
 /** The tuning screen's data: the components, and what is wrong with them. */
@@ -102,6 +108,7 @@ export type ComponentRules = {
   experiences: unknown[]
   projects: unknown[]
   id_problems?: string[]
+  parse_warnings?: string[]
 }
 
 export type Backend = {
@@ -132,6 +139,8 @@ export type RunStatus = {
     valid: number
     threshold: number | null
     degraded: string[]
+    /** Why some resumes have no PDF (R116). Absent on runs recorded earlier. */
+    pdf_problems?: string[]
   } | null
 }
 
@@ -250,6 +259,10 @@ export const api = {
   health: () =>
     get<{
       profiles: string[]
+      /** How many profiles this account may hold: 1 hosted, null local (R109). */
+      profile_limit: number | null
+      /** The run sizes the server accepts, inclusive (R110). */
+      run_limits: Record<'max_jobs' | 'max_resumes', { min: number; max: number }>
       backend: { backend: string; forced: boolean; description: string }
       pdflatex: boolean
       statuses: string[]

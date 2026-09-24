@@ -9,6 +9,7 @@ Location: jobscout_v3/tools/profile/profile_loader.py
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Optional
 import logging
@@ -53,6 +54,43 @@ class ProfileLoadError(Exception):
     pass
 
 
+# What a profile name may be (R111): lowercase letters, digits and underscores,
+# 1 to 40 of them. No hyphen, because the schema's `user_id` validator, which
+# the name becomes, refuses one, so a hyphenated name would be writable and
+# then never load. No dot, slash or backslash, so a name is only ever a
+# filename. The React wizard holds a copy of this, pinned equal by a test.
+PROFILE_NAME = re.compile(r"[a-z0-9_]{1,40}")
+
+
+class BadProfileName(ValueError):
+    """A profile name that is not one: it could only ever be a path."""
+
+
+def profile_file(name, directory: Path) -> Path:
+    """
+    `<directory>/<name>.json`, **for a name that is a name.**
+
+    Every read and write of a profile resolves its file here: the loader and
+    `init_profile._profile_file`. Two checks, the second behind the first,
+    the same shape as R108:
+    1. the name matches `PROFILE_NAME`;
+    2. the resolved file lies inside the resolved directory, by path
+       component. The pattern already rules out every escape; this is here so
+       that a future loosening of the pattern cannot quietly reopen one.
+
+    Until R111 the name was joined as given. `../../<id>/user_profiles/x` wrote
+    a profile into another account's partition over `POST /api/profile`.
+    """
+    if not isinstance(name, str) or not PROFILE_NAME.fullmatch(name):
+        raise BadProfileName(
+            f"{name!r} is not a usable profile name. Use 1 to 40 lowercase "
+            "letters, digits or underscores, like jane_doe.")
+    path = Path(directory) / f"{name}.json"
+    if not path.resolve().is_relative_to(Path(directory).resolve()):
+        raise BadProfileName(f"{name!r} resolves outside the profiles folder.")
+    return path
+
+
 def load_profile(profile_name: str, profiles_dir: Optional[str] = None, *,
                  user_id) -> UserProfile:
     """
@@ -86,8 +124,9 @@ def _load_from(profile_name: str, profiles_dir: Path) -> UserProfile:
             f"Could not find user_profiles/ directory. Looked in: {profiles_dir}"
         )
     
-    # Build profile path
-    profile_path = profiles_dir / f"{profile_name}.json"
+    # Build profile path: the one resolver, which refuses a name that is not
+    # one (R111).
+    profile_path = profile_file(profile_name, profiles_dir)
     
     if not profile_path.exists():
         raise ProfileLoadError(

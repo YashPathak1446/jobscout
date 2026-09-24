@@ -207,18 +207,27 @@ def stored_path(stored, *, user_id) -> Path:
     in the unscoped layout and under `users/<id>/`, so nothing is rewritten
     when a profile moves between them.
 
-    An absolute path is honoured as given **only unscoped**. Scoped, it must
-    land inside the user's own home — otherwise a profile field is a way to
-    make the pipeline read somebody else's resume, which is the partition's
-    whole purpose undone by one string.
+    Unscoped, any path is honoured: the CLI's user owns the whole disk and may
+    keep a resume anywhere. **Scoped, the resolved path must lie inside the
+    user's own home**, or a profile field is a way to make the pipeline read
+    somebody else's resume, the partition's whole purpose undone by one
+    string. Resolved means `..` collapsed and symlinks followed, and the test
+    is by path component, so `users/bobby` is not inside `users/bob`.
+
+    This checked absolute paths only, and joined a relative one unresolved:
+    `../bob/data/master_resumes/r.tex` left alice's home (Q64, R108). The
+    check now runs on whatever the stored string becomes. It refuses rather
+    than falling back, because there is no right file to fall back to.
     """
     path = Path(stored)
     if not path.is_absolute():
-        return user_home(user_id) / path
+        path = user_home(user_id) / path
     if user_id is not None:
         home = user_home(user_id).resolve()
-        if home not in path.resolve().parents:
-            raise ValueError(f"{stored!r} is outside this user's data")
+        if not path.resolve().is_relative_to(home):
+            raise ValueError(
+                f"The resume path {stored!r} points outside this account's own "
+                "files, so it was not read.")
     return path
 
 

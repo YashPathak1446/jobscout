@@ -104,6 +104,10 @@ def _degraded_reason(exc: Exception) -> str:
             f"not a Gemini outage.")
 
 
+# The readable part of a generated resume's filename, before its hash (R111).
+FILENAME_MAX_BYTES = 120
+
+
 class GenerationAgent:
     """
     Resume Generation Agent - Tailors resumes for each job.
@@ -373,6 +377,22 @@ class GenerationAgent:
                 pdf_path = pdf_result.pdf_path if pdf_result and pdf_result.success else None
                 page_count = pdf_result.pages if pdf_result else 0
 
+                # A compile that was attempted and produced no PDF (a timeout
+                # or a LaTeX error) is a resume nobody can submit, so it is
+                # never left `valid` (R116). It was: the status came from
+                # content validation alone, and the run reported a valid
+                # resume with no PDF and no reason. `skipped` (no engine on
+                # this machine) is not a problem with this resume, and is
+                # already said once for the whole run.
+                pdf_problem = self._pdf_problem(pdf_result)
+                if pdf_problem:
+                    logger.warning(f"   ⚠️  No PDF: {pdf_problem}")
+                    validation.add_error(f"No PDF was produced: {pdf_problem}.")
+                    if status == "valid":
+                        status = "needs_review"
+                        latex_path, _ = self._demote_to_review(
+                            latex_path, None, review_path)
+
                 # Page count is the one quality gate that can't be checked
                 # before rendering. A 2-page new-grad resume is a real defect,
                 # and content validation has no way to see it.
@@ -426,6 +446,9 @@ class GenerationAgent:
                     # outcome when you chose it and a thing you would want to
                     # know about when you did not (R47).
                     "degraded": tailored.get("_verbatim_reason"),
+                    # Why this resume has no PDF, when a compile was tried and
+                    # failed (R116). Absent when there is a PDF or no engine.
+                    "pdf_problem": pdf_problem,
                     # What wrote this resume's bullets, per resume, because
                     # one run can use more than one rung. `degraded` above
                     # says *why* a fallback happened and is absent when the
@@ -504,6 +527,23 @@ class GenerationAgent:
             logger.warning(f"      LaTeX said: {first_line}")
 
         return result
+
+    @staticmethod
+    def _pdf_problem(result):
+        """
+        Why a compile that was attempted produced no PDF, in words, or None.
+
+        None when there is a PDF, when no compile was attempted (PDFs off), or
+        when the machine has no engine (`skipped`): none of those is a problem
+        with this resume.
+        """
+        if result is None or result.success or result.status == "skipped":
+            return None
+        if result.status == "timeout":
+            return "the PDF compile ran too long and was stopped"
+        detail = (result.log_excerpt or "").strip().splitlines()
+        return ("LaTeX could not compile it"
+                + (f" ({detail[0].lstrip('! ').strip()})" if detail else ""))
 
     def _demote_to_review(self, latex_path: Path, pdf_path, review_path: Path):
         """
@@ -1890,6 +1930,16 @@ Source bullets:
         # Remove any non-alphanumeric except underscore
         filename = "".join(c for c in filename if c.isalnum() or c == "_")
 
+        # Capped in UTF-8 bytes, not characters (R111). `isalnum` keeps CJK
+        # and other non-ASCII letters at up to 4 bytes each, and a posting
+        # title is scraped text of any length: 200 repetitions of a two-letter
+        # Japanese word came to 1220 bytes, past ext4's 255-byte limit, and
+        # the write failed. 120 bytes plus the hash suffix and `.tex`/`.aux`
+        # leaves room on every filesystem this runs on, and keeps a path well
+        # under Windows' 260-character default.
+        filename = (filename.encode("utf-8")[:FILENAME_MAX_BYTES]
+                    .decode("utf-8", errors="ignore").rstrip("_")) or "resume"
+
         # Eight hex characters: unique across far more postings than discovery
         # can reach, and short enough to keep the readable part readable.
         if apply_url:
@@ -2117,8 +2167,13 @@ Source bullets:
         lines.append("    \\small{\\item{")
 
         for i, (label, skills, _) in enumerate(ordered):
-            escaped_label = label.replace("&", "\\&")
-            value = ", ".join(skills)
+            # Both escaped, through the one escaper (R112). This escaped `&`
+            # in the label only and wrote values as they came: plain text since
+            # the parser un-escapes, so a `C#` would have reached the file as a
+            # bare `#` and stopped the compile. It never did only because the
+            # parser dropped such a category first.
+            escaped_label = self._escape_latex(label)
+            value = ", ".join(self._escape_latex(skill) for skill in skills)
             separator = " \\\\" if i < len(ordered) - 1 else ""
             lines.append(f"     \\textbf{{{escaped_label}}}{{: {value}}}{separator}")
 

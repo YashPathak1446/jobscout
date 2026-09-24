@@ -95,6 +95,9 @@ class AnalysisAgent:
         
         results = []
         unscored = 0
+        # Scored, and under the bar (R106). Kept, not discarded: the board
+        # stores their scores and says why no resume was written for them.
+        self.below_bar = []
         # The window guard (R99): how many scored jobs the raw window clipped.
         # Mock vectors have their own fixed scale and are not counted.
         window = self._window_guard()
@@ -136,6 +139,7 @@ class AnalysisAgent:
                 # Check threshold
                 if score.overall_score < threshold:
                     logger.info(f"   ⬇️  Below threshold ({threshold}%), skipping")
+                    self.below_bar.append({"job": job, "score": score.overall_score})
                     continue
                 
                 # Select components using profile rules
@@ -189,7 +193,7 @@ class AnalysisAgent:
 
         # A job that could not be scored is dropped here, so the count and the
         # reason are the only record it existed (R97).
-        self.scoring = self.scoring_summary(unscored, window)
+        self.scoring = self.scoring_summary(unscored, window, bar=threshold)
         if unscored or self.scoring["embeddings"]["failed"]:
             logger.warning(f"⚠️  {unscored} of {len(enriched_jobs)} jobs could not be "
                            f"scored — {self.scoring['description']}")
@@ -210,13 +214,16 @@ class AnalysisAgent:
         return {"backend": backend, "model": model, "floor": floor,
                 "ceiling": ceiling, "scored": 0, "at_floor": 0, "at_ceiling": 0}
 
-    def scoring_summary(self, unscored: int, window=None) -> dict:
+    def scoring_summary(self, unscored: int, window=None, bar=None) -> dict:
         """
         What the run's embeddings cost it: jobs left unscored, and why.
 
         `{"unscored": n, "mock": bool, "embeddings": summarise_report(...),
-        "description": str, "window": {...} | None}`. `window` counts the
-        scored jobs the raw window clipped (R99); None for mock scores. The orchestrator writes it into the run's state,
+        "description": str, "window": {...} | None, "bar": float | None}`.
+        `window` counts the scored jobs the raw window clipped (R99); None for
+        mock scores. `bar` is the threshold this run actually applied (R106):
+        what the jobs were judged against, which the profile's current
+        threshold may no longer be. The orchestrator writes it into the run's state,
         final report and summary.
         """
         from tools.resume.embedding_scorer import describe_report, summarise_report
@@ -230,6 +237,7 @@ class AnalysisAgent:
             "embeddings": embeddings,
             "description": describe_report(embeddings),
             "window": window,
+            "bar": bar,
         }
 
     def _canonicalize_selected_components(self, selected: Dict[str, List[str]]) -> Dict[str, List[str]]:

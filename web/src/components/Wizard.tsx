@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { IdProblems } from '@/components/IdProblems'
+import { ParseWarnings } from '@/components/ParseWarnings'
 import { Check } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -28,6 +29,7 @@ export function Wizard({
   // behind screens they have already completed.
   const [furthest, setFurthest] = useState(0)
   const [profiles, setProfiles] = useState<string[] | null>(null)
+  const [profileLimit, setProfileLimit] = useState<number | null>(null)
   const [summary, setSummary] = useState<ProfileSummary | null>(null)
   // Never persisted, here or on the server: it is passed to the pipeline
   // for the run and forgotten.
@@ -36,7 +38,10 @@ export function Wizard({
   useEffect(() => {
     api
       .health()
-      .then((h) => setProfiles(h.profiles))
+      .then((h) => {
+        setProfiles(h.profiles)
+        setProfileLimit(h.profile_limit)
+      })
       .catch(() => setProfiles([]))
   }, [])
 
@@ -109,6 +114,7 @@ export function Wizard({
           ) : (
             <ResumeStep
               profiles={profiles}
+              profileLimit={profileLimit}
               onSkipAhead={(name) => {
                 onProfile(name)
                 setSummary(null)
@@ -207,6 +213,7 @@ function BuiltSummary({ summary }: { summary: ProfileSummary }) {
         ))}
       </div>
       <IdProblems problems={summary.id_problems} />
+      <ParseWarnings warnings={summary.parse_warnings} />
       {summary.backup_path && (
         <p className="text-sm text-muted-foreground">
           Previous profile saved as{' '}

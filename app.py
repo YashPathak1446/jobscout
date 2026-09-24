@@ -42,6 +42,7 @@ from agents.orchestrator import (
     pdflatex_available,
     previous_runs,
     refresh_board_gate,
+    run_limits,
     run_status,
     score_bands,
     start_run,
@@ -53,6 +54,7 @@ from scripts.init_profile import (
     ProfileInvalid,
     create_profile,
     extract_resume,
+    profile_name_problem,
     read_component_rules,
     read_personal,
     WORK_AUTHORIZATION_QUESTIONS,
@@ -189,6 +191,11 @@ def screen_resume():
         help="Used for the profile file and generated resume filenames.",
     )
 
+    # Said before the resume is read, not after (R111).
+    name_problem = profile_name_problem(name) if name else None
+    if name_problem:
+        st.error(name_problem)
+
     # Overwriting is never implicit. Building a profile discards every rule the
     # owner tuned by hand, and one profile was already lost that way (R30).
     clash = bool(name) and name in existing
@@ -202,7 +209,8 @@ def screen_resume():
     confirmed = st.checkbox(f"Yes, replace '{name}'") if clash else False
 
     if st.button("Read my resume", type="primary",
-                 disabled=not (uploaded and name) or (clash and not confirmed)):
+                 disabled=not (uploaded and name) or bool(name_problem)
+                 or (clash and not confirmed)):
         with st.spinner("Reading your resume..."):
             try:
                 extracted = extract_resume(None, uploaded.getvalue(), uploaded.name)
@@ -235,6 +243,7 @@ def screen_resume():
         c.metric("Match rules derived", counts["trigger_rules"])
 
         _show_id_problems(summary.get("id_problems"))
+        _show_parse_warnings(summary.get("parse_warnings"))
 
         if summary.get("backup_path"):
             st.caption(f"Previous profile saved as `{os.path.basename(str(summary['backup_path']))}`")
@@ -258,6 +267,22 @@ def _build(resume_path, name, force):
     st.session_state.profile_name = name
     st.session_state.setup_summary = summary
     return True
+
+
+def _show_parse_warnings(warnings) -> None:
+    """
+    Say which lines of the resume were not read (R112).
+
+    The parser used to drop them in silence: a skills category holding `C#`
+    vanished from every tailored resume. `None` is a caller that predates the
+    field, not a clean parse, so it says nothing either way.
+    """
+    if not warnings:
+        return
+    st.warning(
+        f"{len(warnings)} part(s) of your resume could not be read, so they "
+        "will not appear in tailored resumes until the resume is fixed:\n\n"
+        + "\n".join(f"- {w}" for w in warnings))
 
 
 def _show_id_problems(problems) -> None:
@@ -865,6 +890,7 @@ def screen_tuning():
 
     # Above the list, because every rule it names is on the list below it.
     _show_id_problems(rules.get("id_problems"))
+    _show_parse_warnings(rules.get("parse_warnings"))
 
     edits_tier, edits_triggers = {}, {}
     edits_always, edits_never = {}, {}
@@ -961,9 +987,13 @@ def screen_run():
         _render_running(running, has_latex)
         return
 
+    # The bounds `start_run` enforces (R110), read rather than restated.
+    limits = run_limits()
     left, right = st.columns(2)
-    max_jobs = left.slider("Jobs to search for", 5, 50, 20, step=5)
-    max_resumes = right.slider("Resumes to generate", 1, 10, 3)
+    max_jobs = left.slider("Jobs to search for", 5, limits["max_jobs"]["max"], 20,
+                           step=5)
+    max_resumes = right.slider("Resumes to generate", limits["max_resumes"]["min"],
+                               limits["max_resumes"]["max"], 3)
     review = st.checkbox(
         "Show me the jobs before writing resumes",
         help="Stops after scoring so you can see what was found. Generation is "
@@ -1563,7 +1593,13 @@ def _board_row(row, statuses, has_latex, bands=None):
         heading, control = st.columns([4, 1])
 
         title = f"**{_plain(row.get('company')) or '?'} — {_plain(row.get('title')) or '?'}**"
-        if row.get("score") is not None:
+        bar = row.get("bar")
+        if row.get("score") is not None and bar is not None and row["score"] < bar:
+            # Scored and set aside (R106), not unscored and not "weak": its bar
+            # decided it, so it is not banded.
+            title += (f"  ·  {row['score']:.0f}% · below your bar of {bar:g}, "
+                      "no resume written")
+        elif row.get("score") is not None:
             title += f"  ·  {_match_label(row['score'], bands)}"
         heading.markdown(title)
 
