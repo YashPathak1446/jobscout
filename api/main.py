@@ -47,10 +47,14 @@ import ipaddress
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import (Depends, FastAPI, File, Form, HTTPException, Query, Request,
+                     UploadFile)
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -84,13 +88,16 @@ from agents.orchestrator import (
     job_statuses,
     pdflatex_available,
     previous_runs,
+    redact_keys,
     redeem_invite,
+    reap_stale_runs,
     refresh_board_gate,
     score_bands,
     seniority_levels,
     session_user,
     set_job_status,
     sign_in,
+    start_error_reporting,
     start_run,
     run_limits,
     run_status,
@@ -149,7 +156,24 @@ def _warn_if_local_mode_is_listening_widely(argv=None) -> bool:
               "JOBSCOUT_SESSION_SECRET.", host)
     return True
 
-app = FastAPI(title="JobScout", version="1.0.0")
+# Before the app exists, so Sentry's FastAPI integration sees it built. Off
+# unless SENTRY_DSN is set: a checkout and the test suite send nothing (A9).
+start_error_reporting()
+
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    # The startup sweep (R120, Q49). A run a previous process left `queued` or
+    # `running` has no worker, and until it is failed it parks its owner's run
+    # screen and refuses their next run and their account deletion. At boot,
+    # not at import: importing this module (as every test does) must not
+    # write to anybody's runs.db.
+    reap_stale_runs()
+    yield
+
+
+app = FastAPI(title="JobScout", version="1.0.0", lifespan=_lifespan)
 
 # The Vite dev server runs on a different port, so the browser treats it as a
 # different origin. Both are localhost on this machine and there is nothing to
@@ -169,6 +193,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_refused(request: Request, exc: RequestValidationError):
+    """
+    FastAPI's 422, without the request echoed back (R117).
+
+    Its default puts each failing field's `input` in the response, and a
+    missing field's input is the *whole body*, so a run request without a
+    `profile` would have sent its `api_key` back in an error message. The
+    location and the reason are kept; the values are not.
+    """
+    errors = [{k: v for k, v in error.items() if k in ("type", "loc", "msg")}
+              for error in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": errors})
+
 
 # Liveness only. Deliberately says nothing about the machine — `/api/health`
 # lists profile names, which is a fact about a person, and a health check runs
@@ -637,7 +677,8 @@ def _resolve_upload(user_id, filename: str) -> Path:
 
 
 @app.post("/api/resume/extract")
-async def resume_extract(file: UploadFile = File(...), user: Optional[str] = Depends(_caller)) -> dict:
+async def resume_extract(file: UploadFile = File(...), api_key: str = Form(""),
+                         user: Optional[str] = Depends(_caller)) -> dict:
     """
     Read an upload far enough to show it, without committing to anything.
 
@@ -645,16 +686,28 @@ async def resume_extract(file: UploadFile = File(...), user: Optional[str] = Dep
     only works if extracting and writing are two calls with a person in
     between. A `.tex` skips confirmation because it is already the pipeline's
     own format — there is nothing a model guessed at.
+
+    `api_key` is the key the browser saved (R117), a form field beside the
+    file: a hosted import reads no key from the environment (R113), so this is
+    how a PDF or Word upload gets a model instead of the pattern reader. It is
+    used for this request and forgotten, and scrubbed from any error here.
     """
     try:
-        extracted = extract_resume(user, await file.read(), file.filename or "resume")
+        extracted = extract_resume(user, await file.read(), file.filename or "resume",
+                                   gemini_key=api_key or None)
     except ValueError as exc:
-        # A scanned image, or a PDF with no readable experience in it. The
-        # message says which; it is written for the person, not the log.
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # A scanned image, a PDF with no readable experience in it, or a key
+        # that cannot be sent (R101). The message says which; it is written
+        # for the person, not the log. `from None` in both: the cause is not
+        # chained, because its text may hold the key and the key is no longer
+        # in use once `extract_resume` has returned.
+        raise HTTPException(status_code=422,
+                            detail=redact_keys(str(exc), api_key)) from None
     except Exception as exc:  # surfaced, not swallowed
-        raise HTTPException(status_code=400,
-                            detail=f"Could not read that resume: {exc}") from exc
+        raise HTTPException(
+            status_code=400,
+            detail=redact_keys(f"Could not read that resume: {exc}", api_key),
+        ) from None
 
     if extracted["kind"] == "latex":
         return {"kind": "latex", "filename": Path(extracted["path"]).name}
@@ -889,6 +942,9 @@ def run_start(request: RunRequest, user: Optional[str] = Depends(_caller)) -> di
         )
     except RunSizeRefused as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RunInProgress as exc:
+        # One run per user (R120). 409: the request is fine, the moment is not.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"run_id": run_id}
 
 

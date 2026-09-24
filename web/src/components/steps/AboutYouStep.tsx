@@ -4,7 +4,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
-import { BackendPanel } from '@/components/BackendPanel'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -96,14 +95,10 @@ type Personal = {
  */
 export function AboutYouStep({
   profile,
-  apiKey,
-  onKey,
   onBack,
   onContinue,
 }: {
   profile: string
-  apiKey: string
-  onKey: (key: string) => void
   onBack: () => void
   onContinue: () => void
 }) {
@@ -219,8 +214,6 @@ export function AboutYouStep({
           <p className="text-sm text-muted-foreground">{q.help}</p>
         </div>
       ))}
-
-      <BackendPanel apiKey={apiKey} onKey={onKey} />
 
       {error && (
         <p className="text-sm text-destructive">Could not save: {error}</p>

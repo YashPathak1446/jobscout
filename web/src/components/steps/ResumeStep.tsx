@@ -33,11 +33,14 @@ const PROFILE_NAME = /^[a-z0-9_]{1,40}$/
 export function ResumeStep({
   profiles,
   profileLimit,
+  apiKey,
   onProfileReady,
   onSkipAhead,
 }: {
   profiles: string[]
   profileLimit: number | null
+  /** The saved key, sent with the upload so Gemini reads it (R117). */
+  apiKey: string
   onProfileReady: (name: string, summary: ProfileSummary | null) => void
   onSkipAhead: (name: string) => void
 }) {
@@ -72,7 +75,7 @@ export function ResumeStep({
     setBusy('reading')
     setError(null)
     try {
-      const extracted = await api.extractResume(file)
+      const extracted = await api.extractResume(file, apiKey)
       if (extracted.kind === 'latex') {
         await build(extracted.filename, null)
         return
@@ -221,6 +224,12 @@ export function ResumeStep({
                 />
                 <Label htmlFor="replace">Yes, replace “{name}”</Label>
               </div>
+              {/* Q63's interim sentence: a stored score is not recomputed
+                  when the resume behind it changes. */}
+              <p>
+                Replacing your resume does not re-score jobs already on your
+                board. Only newly found jobs are scored against the new one.
+              </p>
             </AlertDescription>
           </Alert>
         )}

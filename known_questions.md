@@ -10188,6 +10188,451 @@ they are engine-independent):
 Reverting any one of `pdf_builder`, generation, the importer or the
 orchestrator fails at least one test.
 
+## R117. The key page: a key saved in the browser, sent with the import, and kept out of everything written
+
+**Decided 2026-09-24.** Resolves Q58. React only; Streamlit is frozen (R115).
+
+### What the page says
+
+A **Key** step now comes first in the wizard, ahead of Resume. First because
+the resume import is the first thing a key is used for: a PDF or Word upload
+is read by Gemini only when the request carries a key (R113). On About you,
+where the field used to be, a new user's import had already happened
+without one. Four statements, plain:
+
+1. **How to get a free key:** a link to Google AI Studio, and the three
+   clicks.
+2. **Without a key, everything works except rewriting bullets.** Discovery,
+   scoring, component selection and PDFs all run. It also says, from Q58,
+   what a keyless resume changes between postings (which entries and bullets
+   fit, and skills order), and that an import is read by the pattern reader.
+   **It never says a key improves matching.** A request's key never reaches
+   embeddings in either mode, and a hosted instance scores on potion whatever
+   the key (R113). "A key does not change which jobs you see or how they are
+   scored" is true on both modes, which is why it is the sentence used.
+3. **Where the key goes:** saved in this browser only, sent to Google only
+   with your own requests, never stored by the server. When storage is
+   refused it says instead that the key lasts only until a reload.
+4. **On the resume step**, at "Yes, replace": replacing a resume does not
+   re-score jobs already on the board; only newly found jobs are scored
+   against the new one. This is Q63's interim sentence.
+
+### What the page does
+
+- **`localStorage`, through one guarded module** (`web/src/lib/keyStore.ts`).
+  Every read and write is in `try`/`catch`. If storage throws (a private
+  window, blocked site data, a preview), the key lives in React state for the
+  page's life, and the page says so rather than claiming a save it did not
+  make. **Forget key** clears both the state and the stored copy. A test
+  counts the storage calls and requires nothing else in `web/src` to touch
+  storage.
+- **The extract request carries the key** as a multipart field beside the
+  file, never in the URL. `extract_resume(..., gemini_key=)` resolves the
+  rung with it and hands it to `complete_json`. Without that, a hosted import
+  always used the pattern reader, as R113 noted.
+
+### A bad key: refused at import, degraded on a run
+
+R101's check (`config.gemini_key_problem`) was already in: non-ASCII,
+whitespace and quote characters, with no prefix or length rule. So nothing
+was added to it. What changed is the import's answer to it. Before, a
+request key that could not be sent was ignored, and the resume was read by
+pattern with the reason in `why`. **Now `extract_resume` raises
+`ApiKeyProblem`, a `ValueError`, and the route returns 422 with R101's
+message.** The check sits after the `.tex` return, since a LaTeX upload
+uses no key.
+
+- **Chosen:** refuse. The person is on the screen and the fix is theirs.
+  A pattern read looks like a finished import and gets confirmed as one.
+- **Rejected:** the same refusal in `start_run`. Streamlit calls `start_run`
+  without a `try`, so a new raise there breaks the frozen UI. A run with a
+  bad key still degrades with R101's "Your Gemini key was not used", and the
+  key panel shows the problem at paste time.
+- **If this is wrong:** a friend with a stored bad key cannot import until
+  they fix or forget it. The 422 names the character and its position, and
+  Forget key is one click away on the Key step.
+
+### The key is scrubbed at the sinks, not the sources
+
+The key must never reach a log line, an error message, a run record or a
+file. Exceptions become text at about 80 places here, so scrubbing each one
+would be R80's "count them" problem with a credential at stake. Instead:
+
+- `config.key_in_use(key)` holds a key for the length of a run (`start_run`'s
+  worker) or an import (`extract_resume`). `config.redact_keys(text)`
+  replaces every held key with `[your key]`. The hold is counted and
+  process-wide, because a log line is written by whichever thread raised.
+- **Logs:** a log-record factory, installed once when `config` is imported,
+  scrubs every record's message and traceback while any key is held. It is a
+  factory rather than a filter because a filter on one logger does not reach
+  its children, and uvicorn adds its own handlers later.
+- **Run records:** `run_registry` scrubs the progress message, the result and
+  the error.
+- **Files:** `_degraded_reason` scrubs the text that goes into `state.json`,
+  the summary and the run record.
+- **Messages:** the import's `why`, scrubbed *before* its 160-character
+  cut, since a key cut in half no longer matches. The extract route's 422
+  and 400 details, raised `from None` so the cause is not chained.
+- **FastAPI's own 422** used to echo a request's `input`, and a missing
+  field's input is the whole body. So `POST /api/run` without a `profile`
+  sent the key back. The handler now keeps `type`, `loc` and `msg` only. The
+  UI reads only a string `detail`, so nothing it shows changes.
+
+`redact_keys` is re-exported by the facade for the API, and sits in
+`test_ui_contract.HTTP_ONLY` (R115).
+
+**Not covered, deliberately:** a key that has been transformed before it is
+written, such as URL-encoded or split across lines. Nothing here does either
+with a key. The check is on the verbatim string.
+
+### Tests
+
+`tests/test_request_key.py`, 16:
+- The extract route, hosted, signed in: uses the key it is sent; with no
+  key, uses the pattern reader even with `GOOGLE_API_KEY` set; refuses three
+  unsendable keys with R101's exact message and hands none of them on.
+- **The model's error quotes the key on purpose**, because a key that is
+  merely never written proves nothing about the paths that write exception
+  text. The import's `why`, the response, the logs and every file under the
+  data home are checked for it, including the case where the 160-character
+  cut falls inside the key.
+- **A real mock pipeline** on Priya, hosted, with generation live and
+  Gemini's error echoing the key. The key reaches `_degraded_reason`,
+  `state.json` and the run record, and none of them holds it afterwards.
+  Also a run that fails with the key in its error and its log.
+- A malformed run request does not echo its body.
+- Source checks for the page: the extract call sends the key, every storage
+  call is guarded, the Key step precedes Resume.
+
+**Mutation-checked, one at a time.** Each of these fails at least one test:
+removing the scrub from `_degraded_reason`, from the registry, from the
+import's `why`, or from before the cut; not installing the log factory; not
+passing the key to `complete_json`; not refusing a bad key; dropping the
+validation handler.
+
+**Not in this change:** the free-tier data-use sentence from pilot-plan
+item 3. It has to be read from Google's current terms, and it was not in
+this request. The frontend has no test runner, so the page itself was
+typechecked, linted and built, not exercised in a browser.
+
+### Follow-ups (2026-09-24)
+
+- **Does the registry hold every key, or one?** Every key. `_KEYS_IN_USE`
+  is a process-wide `Counter` that each run and import adds to and releases,
+  so two users' runs in two threads are both scrubbed. Nothing changed in
+  the code. `TestTwoUsersRunningAtOnce` now proves it: two hosted users,
+  two keys, the real mock pipeline with generation live, and each model
+  error quotes its own run's key. No error is raised until both keys are
+  held. Neither key reaches either run record, the log or any file.
+  Mutation-checked: a registry that keeps only the latest key fails it.
+- **Q68's first two items, React only.** The session's mode now reaches the
+  wizard. When hosted, the subtitle drops "locally". The keyless advice
+  says only "add a Gemini key", and the run step's rung list omits Ollama.
+  Omitted, not greyed out: on a hosted instance Ollama cannot be reached
+  at all, so "not running" would send a friend off to start something they
+  cannot start. Local mode is unchanged.
+- **The free-tier data-use sentence**, from pilot-plan item 3, is on the Key
+  step under "Where your key goes", with a link to Google's Gemini API
+  terms. It is worded against the terms' "Unpaid Services" section as read
+  on 2026-09-24: content submitted on the free tier is used to improve
+  Google's products, and human reviewers may read it. That page could not
+  be fetched from this environment, so the wording was taken from its
+  quoted text in search results. Check it against the live page before
+  the invite goes out. The same section also says not to submit personal
+  information, which is Q69.
+
+## R118. The pilot's event log: who got how far, counted server-side (A8)
+
+**Decided 2026-09-24.** Pilot plan A8, minimal. Only the list the author
+gave was built. The rest of the plan's A8 is Q70.
+
+### What is recorded
+
+One table, `events`, in each user's own partition
+(`users/<id>/data/events.db`, `tools/jobs/event_log.py`). Columns: user id,
+event, reason and timestamp. Six events, each written from the facade, so
+both UIs and every route write them the same way:
+
+| event | reason | written |
+|---|---|---|
+| `account_created` | — | `redeem_invite`, **once per account** |
+| `resume_imported` | `model` / `pattern` / `tex` | `extract_resume`, on success |
+| `run_started` | — | `start_run`, with the registry row |
+| `run_finished` | `ok` / `failed:<ExceptionClass>` | the run's worker |
+| `resume_generated` | `valid` / `needs_review` | the worker, one per resume |
+| `job_marked` | `applied` / `rejected` | `set_job_status`, when it changed a row |
+
+`python scripts/admin.py events` prints, per account: the counts, the
+furthest stage reached, the last event, and whether the account met the
+success criterion. The criterion is now written in docs/pilot-plan.md A8:
+at least 3 friends complete a run and mark at least one job applied or
+rejected within the first week.
+
+### Choices, and what breaks if they are wrong
+
+- **Content cannot get in, by construction.** Every event name comes from a
+  fixed list, and so does every reason except a failed run's. A failed run's
+  reason is `failed:` plus the exception's class name, checked against a
+  pattern. The store **raises** on anything else rather than trimming it:
+  a reason that breaks the rule means content was passed, and that should
+  fail where it happened.
+  - Rejected: a free-text reason run through `redact_keys` and a length
+    cap. A redactor catches a key and not a line of a job description, and
+    a failed run's message is exactly where job text shows up (A9 says so).
+  - If this is wrong: a failed run's reason is less specific than its
+    message. The message is still in the run record.
+- **`account_created` is written at redeem, once.** An invite is not yet an
+  account. A passphrase reset is redeemed through the same function (Q45),
+  so a plain insert would record a second creation and restart that
+  friend's first week. The write is `INSERT … WHERE NOT EXISTS`. Rejected:
+  a column on `accounts.db`. That is a schema change to the one global
+  store, made to answer a question the partition already answers.
+- **An import records what read the resume, not what was asked to.** The
+  reason comes from `_extraction.read_by`, not from `rung`. A Gemini rung
+  whose call failed read the resume by pattern, and the log says pattern.
+  Mutation-checked.
+- **`run_started` is written in `start_run`**, beside the registry row,
+  not in the worker. A run whose thread never starts was still asked for,
+  and a start with no finish after it is how that shows.
+- **A `failed` resume writes no `resume_generated`.** It was not generated.
+  The run is still `ok`. So resumes generated can be fewer than resumes
+  attempted, and this log does not show the gap. The run record does.
+- **Nothing is recorded for the unscoped user** (the checkout, the CLI, local
+  mode). `admin.py events` reads accounts, and the checkout has none, so an
+  event written there would be read by nothing. That is the recurring bug.
+  `event_log.db_path(None)` raises, and `record(None, …)` does nothing.
+- **A storage failure is logged and swallowed; a bad event is not.** A
+  friend's import or run should not fail because counting it failed. A
+  disallowed event or reason still raises (above).
+- **"Unknown" is a third answer to the criterion.** An account redeemed
+  before this change has no `account_created`, so there is no week to count
+  from. `admin.py` prints `unknown`, not `no`.
+
+### Tests
+
+`tests/test_event_log.py`, 21 tests, through the routes a friend uses:
+- account created at redeem and not at invite, and once across a reset;
+- an import by model, by pattern, by a failed model (pattern), a `.tex`, and
+  a refused key (no event);
+- a run: started before the worker runs; a real mock pipeline whose events
+  match the run's own counts; a failed run records the class and not the
+  message;
+- applied and rejected each recorded once; `seen` and a URL not on the board
+  record nothing;
+- two users: the one who marked has the event and the other has none, the
+  rows name their owner, and `pilot_events` does not merge them. Nothing is
+  written for the unscoped user;
+- a model import and a failing run, both with the key on the request: the
+  file's raw bytes contain no key, no resume line and nothing from the
+  model's reply. The store refuses content as a reason;
+- the summary's criterion inside and outside the week, a failed run not
+  counting, and unknown not being no; `admin.py events` output.
+
+**Mutation-checked:** dropping `once`, recording a mark that changed no row,
+and reading the import path from `rung` each fail at least one test.
+
+## R119. Sentry on the hosted API, with the key scrubbed (A9)
+
+**Decided 2026-09-24.** Pilot plan A9, minimal. Only the list the author
+gave was built; what else turned up is Q71 and Q72.
+
+### What it does
+
+`tools/error_reporting.start_error_reporting()`, re-exported by the facade
+and called by `api/main.py` before the app is built. Backend only.
+
+- **Off unless `SENTRY_DSN` is set.** Without it nothing is imported and
+  nothing is sent, so a checkout, the CLI and the suite report nothing. Set
+  but `sentry-sdk` missing, it raises at boot: a deploy that asked for
+  reporting and silently has none is the failure A5 made loud for the mode.
+- `send_default_pii=False`, `include_local_variables=False`,
+  `max_request_body_size="never"`, and `LoggingIntegration(level=WARNING)`,
+  so logging below WARNING leaves no breadcrumb. Events from ERROR up, the
+  default.
+- **`before_send` scrubs every string in the event**, keys of dicts
+  included, through R117's `redact_keys`, and drops the request's headers
+  and cookies. Every string rather than a field list, because a list is
+  R80's "count them" with a credential at stake. If it raises, Sentry drops
+  the event rather than sending it unscrubbed (checked in the SDK source).
+- **`before_breadcrumb` runs the same scrub.** Not in the list, and added
+  because the list's own item needs it: a breadcrumb is sent with a *later*
+  event, and by then the run that held the key may have released it, so
+  `before_send` alone would not know the key. The test for it failed
+  without this.
+
+### Choices, and what breaks if they are wrong
+
+- **Chosen:** the scrub knows only keys that are held (`key_in_use`).
+  **Rejected:** a pattern for "looks like a key". R101 refuses to check a
+  key's prefix or length because Google has changed both. **If wrong:** an
+  exception that carries a key *out* of `key_in_use` reaches Sentry after
+  the key is released, unscrubbed. No route does this today; nothing
+  enforces it. That is Q71, with a reproduction.
+- **Chosen:** `sentry-sdk` in `requirements.txt` (which the image installs)
+  and as a `hosted` extra in `pyproject.toml`. **Rejected:** a core
+  dependency, since `pip install jobscout` for the CLI has no use for it.
+  **If wrong:** someone runs the API from a wheel with `SENTRY_DSN` set and
+  no extra; it refuses to boot and says why.
+- **Chosen:** no `traces_sample_rate`, so no performance data. The SDK
+  auto-enables its `google_genai`, `httpx` and `huggingface_hub`
+  integrations; with tracing off they add breadcrumbs and no spans, and the
+  breadcrumbs are scrubbed.
+- **Who it affects:** only an instance with `SENTRY_DSN` set, which is the
+  hosted one. `SENTRY_DSN` is on A12's deploy checklist, as a Fly secret.
+
+### Tests
+
+`tests/test_error_reporting.py`, 9. Events are kept by a transport in the
+test, and the options are the module's own; only the transport is swapped.
+Each assertion reads the whole serialized event.
+- With a key held: an exception whose message and a local both hold it
+  produces an event with no key and `[your key]` in its place; the same
+  through `logger.exception`, the way a failed run logs; a breadcrumb
+  written while held and sent after release.
+- Frames carry no `vars`, and a local's value is nowhere in the event.
+- An INFO line leaves no breadcrumb; a WARNING line does.
+- A real FastAPI 500 with the key in a header and the form body, and a
+  session cookie: the event has no headers, cookies, body, client address
+  or user, and none of the three values.
+- No DSN, an empty one or a blank one: `sentry_sdk.init` is not called and
+  no client is active. A DSN without the package raises. `api/main.py`
+  starts it before `FastAPI(`.
+
+**Mutation-checked, one at a time:** locals on, body `"always"`, PII on, no
+`before_send`, no `before_breadcrumb`, breadcrumbs from INFO, headers kept,
+and no DSN check each fail at least one test. Keeping cookies alone passes,
+because the SDK already omits them without PII; with PII also on, it fails.
+The first run of this check replaced the option's name in the docstring
+rather than the call, and "passed" three mutations. Re-derived, per R81.
+
+Source context lines are sent (they are code). A test that plants a value
+as a literal therefore finds it in the event through the source, not the
+data, so the tests build planted values at run time.
+
+## R120. One run per user, the stale-run reaper, and the machine size (A10)
+
+**Decided 2026-09-24.** Pilot plan A10, minimal. Only the author's list was
+built. What else turned up is Q73–Q76.
+
+### What it does
+
+- **A second start is refused while a run is going.** `start_run` calls
+  `RunRegistry.claim`, which checks for a `queued`/`running` row and
+  inserts in one `BEGIN IMMEDIATE` transaction. SQLite serialises that
+  across connections and processes, so two racing requests cannot both get
+  through (the test races eight). A refusal raises `RunInProgress`, the
+  class A6's deletion refusal already used, and `POST /api/run` answers 409
+  with a sentence naming when the other run started and on which profile.
+  React's run screen shows a 409 as its own notice ("You already have a
+  run going"), not as "That did not work", because nothing failed.
+  `send` in `api.ts` now throws an `ApiError` carrying the status.
+- **A run with no live worker is failed, with a reason.** Two new columns:
+  `owner` (which process runs it) and `heartbeat_at`, which the worker
+  touches every 30 s from a timer thread of its own. It cannot rely on
+  progress ticks, because discovery can go minutes between them (Q49). A row
+  is dead if:
+  - this process owns it and has no thread on it (`_LIVE_RUNS`). The error
+    is "interrupted — the run stopped without reporting".
+  - another process owns it (a previous server, or Streamlit) and its
+    heartbeat is over 120 s old. The error is "interrupted — the server
+    restarted".
+- **When it reaps.** At API startup (a FastAPI lifespan, so importing
+  `api.main` in a test writes nothing), whenever runs are listed
+  (`active_runs`, `recent_runs`, and so `delete_user_data` too), and just
+  before a start claims its row.
+- **The startup sweep walks every `runs.db` that exists:** the unscoped
+  one and each `users/<id>/`. It opens only files that already exist.
+  Hosted, it fails every other process's active row at once, heartbeat or
+  not: one process serves every run (`--workers 1`), so at boot nothing
+  else is running one. That is Q49's "exact case".
+- **Terminal is terminal.** `progress`, `finish`, `fail` and `heartbeat`
+  now move only an active row. Without that guard, a run that was reaped
+  while still alive would flip back to `running` on its next tick (Q49).
+  This was not on the list. It is included because the reaper is unsafe
+  without it.
+
+### Choices, and what breaks if they are wrong
+
+- **Chosen:** a heartbeat plus an owner token. **Rejected:** the plan's
+  `updated_at < now - N`, which fails a live run in a long discovery.
+  Also rejected: checking whether the owning pid is alive, because on
+  Windows `os.kill(pid, 0)` terminates the process, and pids get reused.
+  Also rejected: "every active row at startup is dead" in local mode.
+  Streamlit and the API are two processes on one unscoped `runs.db`, so an
+  API restart would kill a live Streamlit run. **If wrong:** a live
+  worker starved of the GIL for over 120 s is reaped. It then stays failed,
+  because of the terminal guard, and its resumes are still written to disk.
+- **Chosen:** one run per *user*, across profiles. **Rejected:** one per
+  profile. The load is per machine, and the author's line says per user.
+  **If wrong:** someone with two profiles waits for one run to end before
+  starting the other.
+- **Blast radius.** `runs.db` gains two columns, added in place on open. A
+  legacy row has no owner, so it is judged by `updated_at`, and a stuck one
+  from before this change is reaped on first listing. Local mode is one
+  user, so **one run at a time across both UIs on a laptop**. Streamlit
+  already disabled Run while one was active. The rare case where the API
+  has a run and Streamlit tries to start is Q76.
+- **Not built:** a hang timeout. A thread that hangs without dying keeps
+  its heartbeat going and is never reaped. That is Q74.
+
+### Machine size: keep `shared-cpu-1x` at 1 GB. 512 MB is not enough.
+
+Measured 2026-09-24 in one process, the way uvicorn holds it. Each run
+was Priya against the frozen 7-job acceptance corpus, `--backend none`,
+threshold forced to 0 so all 6 surviving jobs got a resume and a
+`pdflatex` compile (TeX Live 2023). Three waves each, RSS from
+`/proc/<pid>/status`, sampled every 20 ms:
+
+| | 1 run | 5 concurrent runs |
+|---|---|---|
+| Server idle (`api.main` imported) | 76 MB | 76 MB |
+| Python process peak | 170–176 MB | 408–455 MB |
+| `pdflatex`, each (`VmHWM`) | 38 MB | 38 MB |
+| `pdflatex` all at once | 38 MB (1) | 187 MB (5) |
+| Python after each wave | 131, 132, 132 MB | 192, 192, 192 MB |
+
+- **Worst case, 5 users:** 455 + 187 = **~640 MB** if both peaks
+  coincide. Add the OS, and what this run did not load: a 50-job run's
+  scraped pages, and the Gemini SDK on a keyed run. That is ~750 MB, which
+  fits in 1 GB with about a quarter to spare. Python alone at 5 runs is
+  most of 512 MB before any `pdflatex` starts, so a 512 MB machine gets OOM
+  kills. An OOM kill is exactly the dead-worker case this R reaps. It would
+  be recovered, but every friend on the machine would lose their run.
+- **No growth across waves** (the last row), so a long-lived server does
+  not creep.
+- **The plan's 512 MB lever** (dropping streamlit's ~290 MB) is disk in
+  the image, not resident memory. The server never imports streamlit. It
+  does not change the answer.
+- **Caveats, stated:** Hugging Face is blocked by this environment's
+  network policy, so the embedding model was a stand-in with
+  potion-base-8M's exact shape (29,528 × 256 float32, a WordPiece
+  tokenizer). Weights and vocabulary differ, but size does not. The
+  measurement machine had 4 cores. A `shared-cpu-1x` has one, which changes
+  wall time, not memory. The first wave loaded the model five times
+  (Q75), and that is in the peak.
+- **Cost:** Fly lists `shared-cpu-1x`/1 GB at roughly $5–6/month, plus
+  $0.45 for the 3 GB volume. That is under OOS5's $10. 2 GB would not be.
+  Verify at deploy, as the plan already says. `fly.toml` and the
+  Dockerfile are unchanged.
+
+### Tests
+
+`tests/test_one_run_per_user.py`:
+- a second concurrent start is refused (facade and route, 409), including
+  on another profile, while another user's run is not blocked
+- eight racing claims admit one
+- a stale running record is reaped with its reason and a new run then
+  starts
+- listings reap
+- another process's fresh row is kept
+- our own live worker is never reaped
+- a reaped row stays failed through a late tick
+- a pre-column `runs.db` migrates
+- the hosted sweep walks three partitions and creates no `runs.db`
+- the local sweep judges by heartbeat
+- the app sweeps on startup
+- React's run screen handles the 409
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -10717,7 +11162,10 @@ so it is not done inside A5.
 
 ## Q49. A run a dead process left `running` is never cleared, and it blocks more than a spinner
 
-**Status:** Open, found 2026-09-23. Belongs to pilot plan **A10**'s stale-run
+**Status:** Resolved by **R120** (2026-09-24): a startup sweep across every
+partition, `queued` included, reaping on every listing, a heartbeat instead
+of `updated_at`, and terminal writes refused. The hang timeout is Q74.
+Found 2026-09-23. Belongs to pilot plan **A10**'s stale-run
 reaper, and it makes that item heavier than the plan implies. A10 lists the
 reaper as removing "permanent spinners". A stale row does more than spin: it
 blocks the owner from running again and from deleting their account.
@@ -11236,9 +11684,9 @@ of the chain rather than add retries to a model that is not answering.
 
 ## Q58. Without a key, two resumes for two postings differ only in skills order
 
-**Status:** Open, found 2026-09-23 on the SDE II profile's Samsara and Sigma
-resumes, `none` rung. **Belongs to A7's copy.** It is correct behaviour and
-needs saying, not fixing.
+**Status:** Resolved 2026-09-24 by R117: the Key step says it. Found
+2026-09-23 on the SDE II profile's Samsara and Sigma resumes, `none` rung.
+It is correct behaviour and needed saying, not fixing.
 
 **What was seen.** The two PDFs have identical bullets. The only difference is
 the order of skills within their lines.
@@ -11960,6 +12408,256 @@ setting a secret and discovering what reads it.
   user's key bought is a question the cache key currently answers "yes"
   without having been asked (CLAUDE.md, "A cache key encodes how much
   variation lives inside a category").
+
+## Q68. The key page shows a hosted friend local-only advice, and a saved key outlives sign-out
+
+**Status:** Partly resolved 2026-09-24 (R117 follow-ups). The Ollama text,
+the Ollama rung and the "locally" subtitle are mode-aware in React.
+**Still open:** the `LLM_BACKEND` / config.py line. Also still open: on a
+hosted instance the OpenAI-compatible rung is greyed out with "needs a key",
+a key a friend cannot supply there, and "Detected on this machine" under
+the rung picker is local wording. The saved key outliving sign-out is also
+still open. Logged 2026-09-24 while building R117. Not fixed there, because
+R117 was limited to Q58's list.
+
+- **The key panel tells a hosted user to run Ollama.** `BackendPanel`'s
+  keyless text reads "add a Gemini key above, or run **Ollama** locally …
+  nothing leaves this machine". A hosted instance cannot reach an Ollama on
+  the friend's machine, and R113 makes the OpenAI-compatible rungs
+  unavailable there. So on the pilot the only true advice is the key. Its
+  `LLM_BACKEND` line ("in config.py pins this") is also meaningless to
+  someone who has no `config.py`. The fix needs the panel to know the mode;
+  `backend_status` does not report it today.
+- **The wizard's subtitle says "locally".** "Find roles at your level and
+  tailor your resume to each one, locally." It is false on a hosted instance.
+- **The saved key belongs to the browser, not the account.** It is stored
+  under one `localStorage` name, and signing out does not clear it. Two
+  accounts signing in on one browser share a key, and the second person's
+  runs spend the first person's quota. That is rare in a five-friend pilot
+  and real on a shared computer once people sign up. The options are to
+  namespace the stored key by account, to forget it on sign-out, or both.
+  Forgetting on sign-out costs a returning user a re-paste.
+
+**Carries over (R114)?** All three do: they are the hosted product's copy
+and its key handling, not pilot workarounds.
+
+## Q69. Google's free-tier terms say not to submit personal information, and a resume is personal information
+
+**Status:** Open, logged 2026-09-24 while wording R117's data-use sentence.
+Interim wording on the Key step the same day (below); the fix is not built.
+
+The Gemini API terms' "Unpaid Services" section says content is used to
+improve Google's products, and that human reviewers may read it. The page
+now says both. The same section also says, in effect, **do not submit
+sensitive, confidential or personal information to the unpaid services.**
+A resume import sends a whole resume, with name, email, phone and history,
+through a friend's free-tier key. Generation sends their bullets. So the
+recommended setup, a free key, is one the provider's terms tell the user
+not to use for this.
+
+This is not a code defect, and the page is not false. It is a product
+question for the pilot and for the paid product:
+- tell users this in the terms' own words, not only "may use";
+- or redact contact details before anything goes to the model (the import
+  needs them, and generation mostly does not);
+- or recommend a paid key, or use an operator key on a paid tier (Q67).
+
+**Carries over (R114)?** Yes. It is about what the hosted product sends to
+a third party on a user's behalf.
+
+**Interim wording, 2026-09-24 (React only, R115).** The Key step keeps
+R117's data-use sentence and adds the terms' own ask: *"Google's free-tier
+terms ask you not to send personal information, and your resume is personal
+information. Without a key, everything except bullet rewriting works and
+nothing goes to Google. A paid key isn't used this way."* The heading now
+offers two choices ("With a Gemini key, or without one") rather than an
+optional step, so the no-key path reads as a normal choice.
+
+"Nothing goes to Google" is exact on a hosted instance: the request's key is
+the only key and scoring is local (R113). A local instance also uses
+`GOOGLE_API_KEY` from the environment (`config.resolve_api_key`), so there
+the sentence carries a qualifier naming it. Locally the machine's owner set
+that variable, so the qualifier tells them something they did.
+
+**Still open.** Wording is disclosure, not a fix. The after-invite fix is
+**strip contact details before model calls**: name, email, phone and links
+removed from what generation sends, since generation does not need them.
+The import is harder, because reading contact details is part of its job;
+that half needs its own answer.
+
+## Q70. The rest of the planned A8: client-side funnel events and the feedback button
+
+**Status:** Open, logged 2026-09-24 when A8 was built minimal (R118).
+
+Pilot-plan A8 as first written asked for more than R118 built:
+- **Client-side funnel events:** `reached_key_step` / `key_saved`, and
+  "onboarding step reached" for each wizard step. Abandonment is read as an
+  arrival with nothing after it. With the server-side events alone, a
+  friend who opened the wizard and quit before importing is invisible: no
+  row is ever written for them.
+- **A feedback button** that opens a prefilled email.
+
+Each needs an endpoint the browser writes to, and a vocabulary on it as
+strict as R118's, so a client cannot put content in. Not built because A8
+was asked for minimal.
+
+Also left: `admin.py events` shows unredeemed invites as `unknown`, the
+same as accounts redeemed before R118. The invite list already tells them
+apart, but the events view does not.
+
+**Carries over (R114)?** Yes. A paid product needs its funnel measured more
+than a pilot does.
+
+## Q71. An exception that carries a key out of `key_in_use` reaches Sentry unscrubbed
+
+**Status:** Open, logged 2026-09-24 while building R119.
+
+R117's scrub knows a key only while it is held. Sentry's FastAPI integration
+captures an unhandled exception in its middleware, after the route has
+returned, so after any `with key_in_use(key):` inside the route has exited.
+Reproduced while writing R119's tests: a route that raises
+`RuntimeError(f"model refused {api_key}")` inside `key_in_use` sent the key
+in the exception's value.
+
+No real path does this today. The extract route catches every exception and
+answers a 4xx `from None`, which Sentry does not report, and the run worker
+logs its failure while it holds the key. But nothing enforces either, and a
+new route that lets a model error escape would leak the key it was given.
+
+Possible fixes: `key_in_use` scrubs an exception's `args` on the way out;
+the API holds the request's key for the whole request (a dependency), so it
+is still held when the middleware captures; or a test that walks the routes
+for a key-taking one without a catch-all.
+
+**Carries over (R114)?** Yes. It is about what a hosted error report sends.
+
+## Q72. What Sentry still receives: resume and job text in exception values, and a DSN in `.env`
+
+**Status:** Open, logged 2026-09-24 while building R119.
+
+- **Exception values are not truncated.** Pilot-plan A9 asked for it:
+  `run_registry.fail` puts `f"{type(exc).__name__}: {exc}"` into an error,
+  and exceptions here quote scrape URLs, JD fragments and bullets (R81's
+  validation error quoted one). A resume bullet is personal information,
+  and Q69's reasoning applies to Sentry too. Not built because it was not in
+  the list for A9.
+- **A `SENTRY_DSN` in `.env` reports from a checkout and from the suite.**
+  `config` calls `load_dotenv()`. The suite has no shared setup where a guard
+  could clear it: `discover -s tests` names modules `test_x`, so
+  `tests/__init__.py` never runs, and twenty modules import the API. A12's
+  checklist says to set it as a Fly secret, never in `.env`. A guard in code
+  would be, for example, starting Sentry only in hosted mode.
+- **Source context lines are sent.** They are code, not data, and this repo
+  is public, so nothing is exposed that is not already. Noted so nobody
+  reads a planted literal found through them as a leak.
+
+**Carries over (R114)?** Yes. The paid product sends error reports too.
+
+## Q73. The rest of pilot plan A10: auto-stop guard, upload cap, dependency split
+
+**Status:** Open, logged 2026-09-24 while building R120. The plan's A10 section
+lists three more items that were not in the list R120 built:
+
+- **A test that fails on `auto_stop_machines != "off"` or
+  `min_machines_running < 1`** in `fly.toml`. Nothing checks it today, and
+  enabling auto-stop kills in-flight runs silently. R120 would reap them
+  afterwards, but a reap is not a run.
+- **An upload size cap.** `POST /api/resume/extract` still does
+  `await file.read()` with no limit (R107's table).
+- **The `requirements.txt` split for the container.** R120's measurement
+  shows it saves image disk, not resident memory, so it no longer bears on
+  machine size. It still bears on image size and build time.
+
+**Carries over (R114)?** Yes, all three.
+
+## Q74. A worker that hangs without dying is never reaped
+
+**Status:** Open, logged 2026-09-24 with R120. R120's heartbeat comes from
+a timer thread, so it reports on the worker's process, not its progress. A
+pipeline that hangs mid-run (a scrape with no timeout, a lock never
+released) keeps beating and stays `running` forever. Q49 asked for a timeout
+as the fallback for this. Sizing one still needs what Q49 named: the longest
+real gap between progress ticks, or ticks per ATS board so the gap is small.
+Until then, the operator's `admin.py delete-user --ignore-active-runs` is the
+only way out, and a restart clears it.
+
+**Carries over (R114)?** Yes.
+
+## Q75. N first runs at once load the embedding model N times
+
+**Status:** Open, measured 2026-09-24 in R120's sizing. `local_embeddings.load`
+checks a module global with no lock. Five runs starting together all see
+`None` and each loads the model (the log line appeared 5 times in the first
+wave, and once per run after). Potion is ~30 MB, so this is a transient
+~120 MB, and it is inside R120's measured peak. A lock around the load fixes
+it. It was not in A10's list.
+
+**Carries over (R114)?** Yes: the hosted product embeds locally too.
+
+## Q76. What R120's refusal and reaper do not reach
+
+**Status:** Open, logged 2026-09-24.
+
+- **Streamlit does not catch `RunInProgress`.** In local mode Streamlit and
+  the API share the unscoped user. If a React run is going and Streamlit's
+  Run is pressed, `start_run` raises and Streamlit shows a traceback.
+  Streamlit's own Run is disabled while *it* sees a run, so this needs both
+  UIs open at once. Streamlit is frozen (R115): fix it if it breaks for
+  someone. Does not carry over.
+- **`run_status` does not reap.** A run screen polling one run by id keeps
+  showing `running` for another process's dead run until something lists
+  runs, for example a reload. Hosted, the startup sweep has already failed it
+  before any poll, so this is local mode only (a Streamlit process that died).
+  Carries over only if the product ever runs more than one process.
+
+## Q77. Three more stores leave their connection open when setting up fails
+
+**Status:** Open, found 2026-09-24 while fixing the run registry's copy of
+this. The author scoped that fix to the registry and the sweep.
+
+`RunRegistry.__init__` opened its SQLite connection and then ran the schema.
+On a corrupt file the schema step raised inside the constructor, where no
+caller's `with` or `finally` can reach, so the connection stayed open. On
+Windows the file could then not be deleted (WinError 32). The registry now
+closes it on that path. The same shape is in three other stores, found by
+listing every `sqlite3.connect` under `tools/`:
+- `tools/jobs/job_store.py`, `JobStore.__init__`: connect, then
+  `executescript`, `_migrate`, `commit`;
+- `tools/jobs/event_log.py`, `EventLog.__init__`: connect, then
+  `executescript`;
+- `tools/accounts.py`, `_connect()`: connect, then `PRAGMA`, the schema and
+  a column migration, before the connection is returned.
+
+**The fix is the registry's:** close on any exception between the connect
+and the return. Worth one helper, since four copies of a
+close-on-failure block would be the two-paths bug times four, and a test
+that corrupts each store's file and checks, by tracking `sqlite3.connect`,
+that nothing is left open.
+
+**Who meets it:** a corrupt store on the volume, which should not happen,
+and Windows tests that corrupt one on purpose. `accounts.db` matters most,
+because every request opens it.
+
+## Q78. Two comments in `fly.toml` describe code that has moved
+
+**Status:** Open, found 2026-09-24 checking `fly.toml` for A12. The
+configuration itself is right; only comments are stale, and the A12 brief
+was "fix only what's listed".
+
+- **The `GOOGLE_API_KEY` paragraph predates R113.** It says a key "is
+  deliberately not set", and that if one is ever set its name is
+  `GOOGLE_API_KEY`. Both read as if setting one would work. Since R113 a
+  hosted instance ignores every model key in its environment, and Q67 makes
+  setting one a decision about paid plans, not a secret to add. The
+  paragraph should say that and point at R113 and Q67, and name A12's "no
+  LLM keys as Fly secrets" check.
+- **`orchestrator.py:701` is a line reference** in the `[[mounts]]`
+  comment, for where `master_resume_path` is joined to the data home. That
+  join moved to `paths.stored_path` (R86, R108), and line 701 is no longer
+  it. Name the function, not the line.
+
+A comment in the deploy config is read at the moment somebody is deciding
+what to set. That is why a stale one here costs more than one in code.
 
 ---
 

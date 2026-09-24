@@ -218,13 +218,23 @@ async function send<T>(method: string, path: string, body: unknown): Promise<T> 
     // list FastAPI sends for a malformed request is not, and neither is a
     // body that is not JSON; those keep the status.
     const payload = await response.json().catch(() => ({}))
-    throw new Error(
+    throw new ApiError(
       typeof payload.detail === 'string'
         ? payload.detail
         : `${path} returned ${response.status}`,
+      response.status,
     )
   }
   return response.json() as Promise<T>
+}
+
+/** A refused request, carrying its status so a screen can tell a 409 from a 500. */
+export class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
 }
 
 /**
@@ -292,9 +302,12 @@ export const api = {
     post<{ url: string; status: string }>('/job/status', { url, status }),
   fileUrl: (path: string) => `/api/file?path=${encodeURIComponent(path)}`,
 
-  extractResume: async (file: File): Promise<Extraction> => {
+  extractResume: async (file: File, key: string): Promise<Extraction> => {
     const form = new FormData()
     form.append('file', file)
+    // In the body, never the URL, for the reason `backend` gives. Without it
+    // a hosted import reads no key at all and uses the pattern reader (R113).
+    if (key) form.append('api_key', key)
     const response = await fetch('/api/resume/extract', { method: 'POST', body: form })
     noticeSignedOut(response)
     if (!response.ok) {

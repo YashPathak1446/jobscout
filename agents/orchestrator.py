@@ -20,6 +20,8 @@ import os
 import sys
 import json
 import logging
+import threading
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
@@ -35,6 +37,10 @@ except ImportError:
 # Add project root to path (parent of agents/)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# `redact_keys` is re-exported for the API's error responses (R117).
+from config import key_in_use, redact_keys  # noqa: F401
+# The API's error reporting, off unless SENTRY_DSN is set (A9, R119).
+from tools.error_reporting import start_error_reporting  # noqa: F401
 from tools.paths import outputs_root, stored_path
 from tools.profile import load_profile
 # Re-exported for both views: the largest `years_experience` the schema takes,
@@ -379,6 +385,58 @@ def _registry(user_id):
     return RunRegistry(db_path(user_id))
 
 
+# Which runs this process has a live worker for (R120). An id goes in before
+# its thread starts and comes out in the worker's `finally`, so "in the set"
+# is "a thread of ours is on it". `_RUNS_LOCK` makes claim-then-add one step
+# as far as the reaper can see: without it, a listing between the row landing
+# and the id going in would reap a run that is about to start.
+_PROCESS = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+_LIVE_RUNS: set = set()
+_RUNS_LOCK = threading.Lock()
+
+# A live worker touches `heartbeat_at` every HEARTBEAT seconds, from a timer
+# of its own, because a progress tick can be minutes apart (discovery ticks
+# at its start and end only, Q49). Another process's run is presumed dead
+# after STALE of silence: four missed beats, so a busy machine is not enough.
+RUN_HEARTBEAT_SECONDS = 30
+RUN_STALE_SECONDS = 120
+
+
+def _reap(registry, every_foreign: bool = False) -> list:
+    """Fail this registry's runs that no worker is on. See `RunRegistry.reap`."""
+    with _RUNS_LOCK:
+        return registry.reap(_PROCESS, set(_LIVE_RUNS), RUN_STALE_SECONDS,
+                             every_foreign=every_foreign)
+
+
+def reap_stale_runs() -> int:
+    """
+    The startup sweep: every partition's dead runs marked failed (R120, Q49).
+
+    Called once when the API boots. Walks every `runs.db` that exists, the
+    unscoped one and each user's, because a sweep of one registry clears
+    nobody else's run. Hosted, one process serves every run, so at boot every
+    active row is dead and fails at once. Local, Streamlit may be a second
+    process with a run going in the same `runs.db`, so its rows are judged by
+    heartbeat instead. Returns how many runs it failed.
+    """
+    from tools.jobs.run_registry import RunRegistry, every_db_path
+
+    hosted = hosting_mode() == "hosted"
+    reaped = 0
+    for path in every_db_path():
+        # One unreadable registry must not keep the instance from booting for
+        # everybody else. Logged at ERROR, so Sentry sees it (R119).
+        try:
+            with RunRegistry(path) as registry:
+                reaped += len(_reap(registry, every_foreign=hosted))
+        except Exception:
+            logger.exception("Could not sweep %s for interrupted runs", path)
+    if reaped:
+        logger.warning("Marked %d interrupted run(s) failed at startup", reaped)
+    return reaped
+
+
 # How large a run a UI may ask for (R110), inclusive. `start_run` refuses
 # anything outside, so every UI gets the same bound whatever its widget
 # allows. `/api/health` hands this to the React run screen and Streamlit's
@@ -430,9 +488,10 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
     `ContextVar`: context variables do not follow a `threading.Thread`, so the
     worker would resolve to whoever the default was and write a resume into a
     stranger's outputs with no error anywhere (pilot plan A3).
-    """
-    import threading
 
+    One run per user (R120): a second start while one is going raises
+    `RunInProgress`, and the API turns that into a 409.
+    """
     # Before the registry row, so a refused run leaves no trace (R110).
     _check_run_size(max_jobs=max_jobs, max_resumes=max_resumes)
 
@@ -444,11 +503,55 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
     # home failed to clean up (WinError 32), and Python 3.13 warned about
     # the unclosed database at exit. A connection's life is now the life of
     # whoever uses it.
+    from tools.jobs import event_log
+
+    # One run per user (R120). A dead run in the way is reaped first, so a
+    # restart never leaves somebody refused by a run nothing is doing.
+    from tools.jobs.run_registry import RunAlreadyActive
+
     with _registry(user_id) as registry:
-        run_id = registry.create(profile_name)
+        _reap(registry)
+        with _RUNS_LOCK:
+            try:
+                run_id = registry.claim(profile_name, _PROCESS)
+            except RunAlreadyActive as exc:
+                raise RunInProgress(
+                    "You already have a run in progress"
+                    f" (started {exc.run['started_at'][:16].replace('T', ' ')} UTC,"
+                    f" profile {exc.run['profile']}). Wait for it to finish,"
+                    " then start another.") from exc
+            _LIVE_RUNS.add(run_id)
+    # With the registry row, not in the worker: a run the thread never starts
+    # was still asked for, and "started, never finished" is what says so (A8).
+    event_log.record(user_id, "run_started")
 
     def worker():
+        # The key is scrubbed from every log line and run record for as long
+        # as the run holds it (R117).
+        try:
+            with key_in_use(api_key):
+                _run_worker()
+        finally:
+            with _RUNS_LOCK:
+                _LIVE_RUNS.discard(run_id)
+
+    def _run_worker():
         registry = _registry(user_id)
+        stop = threading.Event()
+
+        def beat():
+            while not stop.wait(RUN_HEARTBEAT_SECONDS):
+                registry.heartbeat(run_id)
+
+        beating = threading.Thread(target=beat, name=f"jobscout-beat-{run_id}",
+                                   daemon=True)
+        # Outside the `try` below, whose `finally` joins this thread; so a
+        # failed start closes the registry here instead.
+        try:
+            beating.start()
+        except BaseException:
+            registry.close()
+            raise
         try:
             orchestrator = JobScoutOrchestrator(
                 profile_name=profile_name,
@@ -493,16 +596,33 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
                 "pdf_problems": sorted({r["pdf_problem"] for r in results
                                         if r.get("pdf_problem")}),
             }, output_dir=getattr(orchestrator, "output_path", ""))
+            # One per resume, then the run (R118). A `failed` resume was not
+            # generated, so it has no event; the run is still `ok`.
+            for result in results:
+                if result.get("status") in ("valid", "needs_review"):
+                    event_log.record(user_id, "resume_generated", result["status"])
+            event_log.record(user_id, "run_finished", "ok")
         except Exception as exc:                      # the worker owns nothing else
             logger.exception("Background run failed")
             registry.fail(run_id, f"{type(exc).__name__}: {exc}")
+            # The class name only: the message can hold a URL, a line of a job
+            # description, or (scrubbed, but still) where a key was.
+            event_log.record(user_id, "run_finished",
+                             f"failed:{type(exc).__name__}")
         finally:
+            stop.set()
+            beating.join()
             registry.close()
 
     # Daemon, so a stuck run cannot keep the interpreter alive after the
     # server is told to stop.
-    threading.Thread(target=worker, name=f"jobscout-run-{run_id}",
-                     daemon=True).start()
+    try:
+        threading.Thread(target=worker, name=f"jobscout-run-{run_id}",
+                         daemon=True).start()
+    except BaseException:
+        with _RUNS_LOCK:
+            _LIVE_RUNS.discard(run_id)
+        raise
     return run_id
 
 
@@ -529,6 +649,7 @@ def active_runs(user_id) -> list:
     """
     registry = _registry(user_id)
     try:
+        _reap(registry)            # a listing never shows a dead run (R120)
         return registry.active()
     finally:
         registry.close()
@@ -538,6 +659,7 @@ def recent_runs(user_id, limit: int = 10) -> list:
     """The last few runs, newest first, whatever became of them."""
     registry = _registry(user_id)
     try:
+        _reap(registry)
         return registry.recent(limit)
     finally:
         registry.close()
@@ -581,11 +703,18 @@ def set_job_status(user_id, url: str, status: str) -> bool:
     False when the job is not on this user's board, and nothing is written —
     the route turns that into the same 404 `/api/job` gives (A5).
     """
+    from tools.jobs import event_log
+
     store = _board(user_id)
     try:
-        return store.set_status(url, status)
+        changed = store.set_status(url, status)
     finally:
         store.close()
+    # Only a mark that landed, and only the two A8 counts (R118). A job that
+    # is not on this board changed nothing, so it is not an event either.
+    if changed and status in ("applied", "rejected"):
+        event_log.record(user_id, "job_marked", status)
+    return changed
 
 
 def seniority_levels() -> list:
@@ -719,7 +848,13 @@ def redeem_invite(code: str, email: str, passphrase: str) -> str:
     `ValueError`, as is a malformed email), each with a message for the person.
     """
     from tools.accounts import issue_session, redeem
-    return issue_session(redeem(code, email, passphrase))
+    from tools.jobs import event_log
+
+    user_id = redeem(code, email, passphrase)
+    # Once per account: a reset is redeemed here too, and re-opens an account
+    # rather than creating one (A8).
+    event_log.record(user_id, "account_created", once=True)
+    return issue_session(user_id)
 
 
 def account_email(user_id) -> Optional[str]:
@@ -746,6 +881,24 @@ def list_accounts() -> list:
     return listing()
 
 
+def pilot_events() -> list:
+    """
+    Every account's A8 event counts, for `scripts/admin.py events` (R118).
+
+    One entry per account, redeemed or not, with its email, its counts by
+    event (and reason), and whether it met the pilot's success criterion in
+    its first week: `True`, `False`, or `None` when there is no creation
+    event to count from. Each partition is read on its own; nothing here
+    merges one user's rows into another's.
+    """
+    from tools.accounts import list_accounts as listing
+    from tools.jobs import event_log
+
+    return [{"user_id": account["user_id"], "email": account["email"],
+             **event_log.summarise(event_log.read(account["user_id"]))}
+            for account in listing()]
+
+
 def reset_passphrase(user_id: str) -> str:
     """
     A one-time code that re-invites this account, ending every session it has
@@ -757,7 +910,10 @@ def reset_passphrase(user_id: str) -> str:
 
 
 class RunInProgress(RuntimeError):
-    """A deletion was refused because the user has a run the registry calls live."""
+    """
+    Refused because the user has a run the registry calls live: a deletion
+    (A6), or a second run while one is going (R120).
+    """
 
 
 def delete_user_data(user_id: str, *, ignore_active_runs: bool = False) -> dict:
@@ -784,8 +940,8 @@ def delete_user_data(user_id: str, *, ignore_active_runs: bool = False) -> dict:
 
     Order: the row first, so no new request is served as this user, then the
     tree. If the tree fails half-way the error propagates and a second call
-    finishes it — both steps are idempotent. The A8 event log will live under
-    `users/<id>/`, so the tree is where its rows go too.
+    finishes it — both steps are idempotent. The A8 event log lives under
+    `users/<id>/data/events.db` (R118), so the tree is where its rows go too.
 
     Not covered, and stated so "deleted" never means more than it does: Fly
     volume snapshots and anything outside the data home (logs, Sentry).

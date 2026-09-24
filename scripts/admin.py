@@ -10,6 +10,7 @@ same way both UIs do, so there is one path into the store rather than two.
     python scripts/admin.py list-users                # id, email, created
     python scripts/admin.py reset-passphrase <who>    # prints a re-invite code
     python scripts/admin.py delete-user <who> --yes   # everything, for good
+    python scripts/admin.py events                    # who got how far (A8)
 
 `<who>` is a user id or the email the account signs in with.
 
@@ -130,6 +131,56 @@ def delete_user(args) -> int:
     return 0
 
 
+# The funnel, furthest last. A user's stage is the last one with any event.
+STAGES = (
+    ("account", ("account_created",)),
+    ("imported", ("resume_imported:model", "resume_imported:pattern",
+                  "resume_imported:tex")),
+    ("ran", ("run_started",)),
+    ("run ok", ("run_finished:ok",)),
+    ("resume", ("resume_generated:valid", "resume_generated:needs_review")),
+    ("marked", ("job_marked:applied", "job_marked:rejected")),
+)
+
+COLUMNS = (
+    ("import model", "resume_imported:model"),
+    ("import pattern", "resume_imported:pattern"),
+    ("import tex", "resume_imported:tex"),
+    ("runs", "run_started"),
+    ("ok", "run_finished:ok"),
+    ("failed", "run_finished:failed"),
+    ("valid", "resume_generated:valid"),
+    ("review", "resume_generated:needs_review"),
+    ("applied", "job_marked:applied"),
+    ("rejected", "job_marked:rejected"),
+)
+
+
+def events(args) -> int:
+    from agents.orchestrator import pilot_events
+
+    users = pilot_events()
+    for user in users:
+        counts = user["counts"]
+        stage = "none"
+        for name, keys in STAGES:
+            if any(counts.get(k) for k in keys):
+                stage = name
+        # None is "no creation event to count a week from": an account
+        # redeemed before A8. Printed as such, never as "no".
+        met = {True: "yes", False: "no", None: "unknown"}[user["met_in_first_week"]]
+        figures = "  ".join(f"{label} {counts.get(key, 0)}" for label, key in COLUMNS)
+        _say(f"{user['user_id']}  {user['email'] or '(awaiting redeem)'}")
+        _say(f"    furthest: {stage}   first-week criterion: {met}   "
+             f"last event: {user['last_event'] or '-'}")
+        _say(f"    {figures}")
+    met = sum(1 for u in users if u["met_in_first_week"] is True)
+    unknown = sum(1 for u in users if u["met_in_first_week"] is None)
+    print(f"{len(users)} account(s); {met} met the first-week criterion"
+          f" ({unknown} with no creation event to count from)")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -146,10 +197,11 @@ def main(argv=None) -> int:
                         help="do not ask (for `fly ssh console -C`)")
     delete.add_argument("--ignore-active-runs", action="store_true",
                         help="delete even if the registry says a run is live")
+    commands.add_parser("events", help="per-user event counts: who got how far")
     args = parser.parse_args(argv)
     return {"invite": invite, "list-users": list_users,
             "reset-passphrase": reset_passphrase,
-            "delete-user": delete_user}[args.command](args)
+            "delete-user": delete_user, "events": events}[args.command](args)
 
 
 if __name__ == "__main__":

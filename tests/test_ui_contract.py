@@ -51,11 +51,23 @@ PROJECT_PACKAGES = {"agents", "tools", "scripts", "config"}
 #   RunSizeRefused  The route turns it into a 400 (R110). Streamlit reads the
 #                same bounds (`run_limits`) into its sliders, which cannot
 #                produce a value outside them, so it has nothing to catch.
+#
+#   redact_keys  Streamlit is frozen (R115). The API scrubs a request's key
+#                from its error responses (R117); the rule itself lives in
+#                `config`, and the facade applies it to runs and imports, so
+#                Streamlit's are scrubbed without it being edited.
+#
+#   start_error_reporting  Streamlit is frozen (R115). Sentry is for the
+#                hosted backend, which is the API; off without SENTRY_DSN (A9).
 HTTP_ONLY = {"board_job", "user_outputs_root"} | {
     "SESSION_COOKIE", "SESSION_TTL_SECONDS", "EmailTaken", "InviteRefused",
     "PassphraseRefused", "account_email", "check_hosting", "hosting_mode",
     "redeem_invite", "session_user", "sign_in",
-    "RunInProgress", "delete_user_data"} | {"RunSizeRefused"}
+    "RunInProgress", "delete_user_data"} | {"RunSizeRefused"} | {"redact_keys"} | {
+    "start_error_reporting"} | {
+    # The API's startup sweep (R120). Streamlit is frozen (R115); its runs
+    # are still reaped whenever it lists them, through `active_runs`.
+    "reap_stale_runs"}
 
 
 def _facade_imports(tree):

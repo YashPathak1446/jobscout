@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, type Backend, type RunStatus } from '@/lib/api'
+import { api, ApiError, type Backend, type RunStatus, type Session } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const STAGES = ['discovery', 'enrichment', 'analysis', 'generation'] as const
@@ -55,11 +55,13 @@ const RUNGS = [
 ] as const
 
 export function RunStep({
+  mode,
   profile,
   apiKey,
   onBack,
   onOpenBoard,
 }: {
+  mode: Session['mode']
   profile: string
   apiKey: string
   onBack: () => void
@@ -80,6 +82,9 @@ export function RunStep({
   const [runId, setRunId] = useState<string | null>(null)
   const [status, setStatus] = useState<RunStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The server's one-run-per-user refusal (R120). Not an error: nothing
+  // failed, the user's other run is still going.
+  const [busy, setBusy] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const poll = useRef<number | undefined>(undefined)
 
@@ -123,6 +128,7 @@ export function RunStep({
   async function start() {
     setStarting(true)
     setError(null)
+    setBusy(null)
     setStatus(null)
     try {
       const { run_id } = await api.startRun({
@@ -135,7 +141,8 @@ export function RunStep({
       })
       setRunId(run_id)
     } catch (e) {
-      setError((e as Error).message)
+      if (e instanceof ApiError && e.status === 409) setBusy(e.message)
+      else setError((e as Error).message)
     } finally {
       setStarting(false)
     }
@@ -189,7 +196,12 @@ export function RunStep({
               Unavailable rungs stay listed and disabled with the reason, not
               hidden. Hiding them is what kept Ollama a secret; showing it
               greyed out with "not running" is how somebody finds out it
-              exists. */}
+              exists.
+
+              Except Ollama on a hosted instance, which is hidden: there it is
+              not "not running" but unreachable, since it would have to run on
+              the server, and greying it out tells a friend to go and start
+              something they cannot start (Q68). */}
           <div className="space-y-1.5">
             <Label htmlFor="rung">Rewrite bullets with</Label>
             <Select
@@ -200,7 +212,9 @@ export function RunStep({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {RUNGS.map(({ value, label, needs }) => {
+                {RUNGS.filter(
+                  ({ value }) => !(mode === 'hosted' && value === 'ollama'),
+                ).map(({ value, label, needs }) => {
                   const ready = backend.available?.[value] ?? value === 'none'
                   return (
                     <SelectItem key={value} value={value} disabled={!ready}>
@@ -253,6 +267,14 @@ export function RunStep({
           disabled={running}
         />
       </div>
+
+      {busy && (
+        <Alert>
+          <Loader2 className="size-4" />
+          <AlertTitle>You already have a run going</AlertTitle>
+          <AlertDescription>{busy}</AlertDescription>
+        </Alert>
+      )}
 
       {error && (
         <Alert variant="destructive">

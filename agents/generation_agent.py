@@ -40,6 +40,7 @@ from config import (
     classify_api_error,
     gemini_client,
     llm_cache_dir,
+    redact_keys,
     resolve_api_key,
 )
 
@@ -83,7 +84,14 @@ def _degraded_reason(exc: Exception) -> str:
     outage. The user was told to wait for Google, when the fix was theirs or
     ours. Three answers now, because they send the reader to three different
     places.
+
+    Scrubbed of the key in use (R117): this text is written to `state.json`
+    and the run's record, and an exception's message is not ours to vouch for.
     """
+    return redact_keys(_degraded_text(exc))
+
+
+def _degraded_text(exc: Exception) -> str:
     if isinstance(exc, ApiKeyProblem):
         return f"Your Gemini key was not used. {exc}"
 
