@@ -12583,6 +12583,17 @@ only way out, and a restart clears it.
 
 **Carries over (R114)?** Yes.
 
+## Q75. N first runs at once load the embedding model N times
+
+**Status:** Open, measured 2026-09-24 in R120's sizing. `local_embeddings.load`
+checks a module global with no lock. Five runs starting together all see
+`None` and each loads the model (the log line appeared 5 times in the first
+wave, and once per run after). Potion is ~30 MB, so this is a transient
+~120 MB, and it is inside R120's measured peak. A lock around the load fixes
+it. It was not in A10's list.
+
+**Carries over (R114)?** Yes: the hosted product embeds locally too.
+
 ---
 
 # Out of scope
