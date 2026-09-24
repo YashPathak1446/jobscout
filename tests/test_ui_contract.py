@@ -64,7 +64,10 @@ HTTP_ONLY = {"board_job", "user_outputs_root"} | {
     "PassphraseRefused", "account_email", "check_hosting", "hosting_mode",
     "redeem_invite", "session_user", "sign_in",
     "RunInProgress", "delete_user_data"} | {"RunSizeRefused"} | {"redact_keys"} | {
-    "start_error_reporting"}
+    "start_error_reporting"} | {
+    # The API's startup sweep (R120). Streamlit is frozen (R115); its runs
+    # are still reaped whenever it lists them, through `active_runs`.
+    "reap_stale_runs"}
 
 
 def _facade_imports(tree):

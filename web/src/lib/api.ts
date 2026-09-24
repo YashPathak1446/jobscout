@@ -218,13 +218,23 @@ async function send<T>(method: string, path: string, body: unknown): Promise<T> 
     // list FastAPI sends for a malformed request is not, and neither is a
     // body that is not JSON; those keep the status.
     const payload = await response.json().catch(() => ({}))
-    throw new Error(
+    throw new ApiError(
       typeof payload.detail === 'string'
         ? payload.detail
         : `${path} returned ${response.status}`,
+      response.status,
     )
   }
   return response.json() as Promise<T>
+}
+
+/** A refused request, carrying its status so a screen can tell a 409 from a 500. */
+export class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
 }
 
 /**

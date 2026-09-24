@@ -47,6 +47,7 @@ import ipaddress
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -89,6 +90,7 @@ from agents.orchestrator import (
     previous_runs,
     redact_keys,
     redeem_invite,
+    reap_stale_runs,
     refresh_board_gate,
     score_bands,
     seniority_levels,
@@ -158,7 +160,20 @@ def _warn_if_local_mode_is_listening_widely(argv=None) -> bool:
 # unless SENTRY_DSN is set: a checkout and the test suite send nothing (A9).
 start_error_reporting()
 
-app = FastAPI(title="JobScout", version="1.0.0")
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    # The startup sweep (R120, Q49). A run a previous process left `queued` or
+    # `running` has no worker, and until it is failed it parks its owner's run
+    # screen and refuses their next run and their account deletion. At boot,
+    # not at import: importing this module (as every test does) must not
+    # write to anybody's runs.db.
+    reap_stale_runs()
+    yield
+
+
+app = FastAPI(title="JobScout", version="1.0.0", lifespan=_lifespan)
 
 # The Vite dev server runs on a different port, so the browser treats it as a
 # different origin. Both are localhost on this machine and there is nothing to
@@ -927,6 +942,9 @@ def run_start(request: RunRequest, user: Optional[str] = Depends(_caller)) -> di
         )
     except RunSizeRefused as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RunInProgress as exc:
+        # One run per user (R120). 409: the request is fine, the moment is not.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"run_id": run_id}
 
 

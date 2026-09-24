@@ -10509,6 +10509,130 @@ Source context lines are sent (they are code). A test that plants a value
 as a literal therefore finds it in the event through the source, not the
 data, so the tests build planted values at run time.
 
+## R120. One run per user, the stale-run reaper, and the machine size (A10)
+
+**Decided 2026-09-24.** Pilot plan A10, minimal. Only the author's list was
+built. What else turned up is Q73–Q76.
+
+### What it does
+
+- **A second start is refused while a run is going.** `start_run` calls
+  `RunRegistry.claim`, which checks for a `queued`/`running` row and
+  inserts in one `BEGIN IMMEDIATE` transaction. SQLite serialises that
+  across connections and processes, so two racing requests cannot both get
+  through (the test races eight). A refusal raises `RunInProgress`, the
+  class A6's deletion refusal already used, and `POST /api/run` answers 409
+  with a sentence naming when the other run started and on which profile.
+  React's run screen shows a 409 as its own notice ("You already have a
+  run going"), not as "That did not work", because nothing failed.
+  `send` in `api.ts` now throws an `ApiError` carrying the status.
+- **A run with no live worker is failed, with a reason.** Two new columns:
+  `owner` (which process runs it) and `heartbeat_at`, which the worker
+  touches every 30 s from a timer thread of its own. It cannot rely on
+  progress ticks, because discovery can go minutes between them (Q49). A row
+  is dead if:
+  - this process owns it and has no thread on it (`_LIVE_RUNS`). The error
+    is "interrupted — the run stopped without reporting".
+  - another process owns it (a previous server, or Streamlit) and its
+    heartbeat is over 120 s old. The error is "interrupted — the server
+    restarted".
+- **When it reaps.** At API startup (a FastAPI lifespan, so importing
+  `api.main` in a test writes nothing), whenever runs are listed
+  (`active_runs`, `recent_runs`, and so `delete_user_data` too), and just
+  before a start claims its row.
+- **The startup sweep walks every `runs.db` that exists:** the unscoped
+  one and each `users/<id>/`. It opens only files that already exist.
+  Hosted, it fails every other process's active row at once, heartbeat or
+  not: one process serves every run (`--workers 1`), so at boot nothing
+  else is running one. That is Q49's "exact case".
+- **Terminal is terminal.** `progress`, `finish`, `fail` and `heartbeat`
+  now move only an active row. Without that guard, a run that was reaped
+  while still alive would flip back to `running` on its next tick (Q49).
+  This was not on the list. It is included because the reaper is unsafe
+  without it.
+
+### Choices, and what breaks if they are wrong
+
+- **Chosen:** a heartbeat plus an owner token. **Rejected:** the plan's
+  `updated_at < now - N`, which fails a live run in a long discovery.
+  Also rejected: checking whether the owning pid is alive, because on
+  Windows `os.kill(pid, 0)` terminates the process, and pids get reused.
+  Also rejected: "every active row at startup is dead" in local mode.
+  Streamlit and the API are two processes on one unscoped `runs.db`, so an
+  API restart would kill a live Streamlit run. **If wrong:** a live
+  worker starved of the GIL for over 120 s is reaped. It then stays failed,
+  because of the terminal guard, and its resumes are still written to disk.
+- **Chosen:** one run per *user*, across profiles. **Rejected:** one per
+  profile. The load is per machine, and the author's line says per user.
+  **If wrong:** someone with two profiles waits for one run to end before
+  starting the other.
+- **Blast radius.** `runs.db` gains two columns, added in place on open. A
+  legacy row has no owner, so it is judged by `updated_at`, and a stuck one
+  from before this change is reaped on first listing. Local mode is one
+  user, so **one run at a time across both UIs on a laptop**. Streamlit
+  already disabled Run while one was active. The rare case where the API
+  has a run and Streamlit tries to start is Q76.
+- **Not built:** a hang timeout. A thread that hangs without dying keeps
+  its heartbeat going and is never reaped. That is Q74.
+
+### Machine size: keep `shared-cpu-1x` at 1 GB. 512 MB is not enough.
+
+Measured 2026-09-24 in one process, the way uvicorn holds it. Each run
+was Priya against the frozen 7-job acceptance corpus, `--backend none`,
+threshold forced to 0 so all 6 surviving jobs got a resume and a
+`pdflatex` compile (TeX Live 2023). Three waves each, RSS from
+`/proc/<pid>/status`, sampled every 20 ms:
+
+| | 1 run | 5 concurrent runs |
+|---|---|---|
+| Server idle (`api.main` imported) | 76 MB | 76 MB |
+| Python process peak | 170–176 MB | 408–455 MB |
+| `pdflatex`, each (`VmHWM`) | 38 MB | 38 MB |
+| `pdflatex` all at once | 38 MB (1) | 187 MB (5) |
+| Python after each wave | 131, 132, 132 MB | 192, 192, 192 MB |
+
+- **Worst case, 5 users:** 455 + 187 = **~640 MB** if both peaks
+  coincide. Add the OS, and what this run did not load: a 50-job run's
+  scraped pages, and the Gemini SDK on a keyed run. That is ~750 MB, which
+  fits in 1 GB with about a quarter to spare. Python alone at 5 runs is
+  most of 512 MB before any `pdflatex` starts, so a 512 MB machine gets OOM
+  kills. An OOM kill is exactly the dead-worker case this R reaps. It would
+  be recovered, but every friend on the machine would lose their run.
+- **No growth across waves** (the last row), so a long-lived server does
+  not creep.
+- **The plan's 512 MB lever** (dropping streamlit's ~290 MB) is disk in
+  the image, not resident memory. The server never imports streamlit. It
+  does not change the answer.
+- **Caveats, stated:** Hugging Face is blocked by this environment's
+  network policy, so the embedding model was a stand-in with
+  potion-base-8M's exact shape (29,528 × 256 float32, a WordPiece
+  tokenizer). Weights and vocabulary differ, but size does not. The
+  measurement machine had 4 cores. A `shared-cpu-1x` has one, which changes
+  wall time, not memory. The first wave loaded the model five times
+  (Q75), and that is in the peak.
+- **Cost:** Fly lists `shared-cpu-1x`/1 GB at roughly $5–6/month, plus
+  $0.45 for the 3 GB volume. That is under OOS5's $10. 2 GB would not be.
+  Verify at deploy, as the plan already says. `fly.toml` and the
+  Dockerfile are unchanged.
+
+### Tests
+
+`tests/test_one_run_per_user.py`:
+- a second concurrent start is refused (facade and route, 409), including
+  on another profile, while another user's run is not blocked
+- eight racing claims admit one
+- a stale running record is reaped with its reason and a new run then
+  starts
+- listings reap
+- another process's fresh row is kept
+- our own live worker is never reaped
+- a reaped row stays failed through a late tick
+- a pre-column `runs.db` migrates
+- the hosted sweep walks three partitions and creates no `runs.db`
+- the local sweep judges by heartbeat
+- the app sweeps on startup
+- React's run screen handles the 409
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -11038,7 +11162,10 @@ so it is not done inside A5.
 
 ## Q49. A run a dead process left `running` is never cleared, and it blocks more than a spinner
 
-**Status:** Open, found 2026-09-23. Belongs to pilot plan **A10**'s stale-run
+**Status:** Resolved by **R120** (2026-09-24): a startup sweep across every
+partition, `queued` included, reaping on every listing, a heartbeat instead
+of `updated_at`, and terminal writes refused. The hang timeout is Q74.
+Found 2026-09-23. Belongs to pilot plan **A10**'s stale-run
 reaper, and it makes that item heavier than the plan implies. A10 lists the
 reaper as removing "permanent spinners". A stale row does more than spin: it
 blocks the owner from running again and from deleting their account.

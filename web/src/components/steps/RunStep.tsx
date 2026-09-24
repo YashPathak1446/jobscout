@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, type Backend, type RunStatus, type Session } from '@/lib/api'
+import { api, ApiError, type Backend, type RunStatus, type Session } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 const STAGES = ['discovery', 'enrichment', 'analysis', 'generation'] as const
@@ -82,6 +82,9 @@ export function RunStep({
   const [runId, setRunId] = useState<string | null>(null)
   const [status, setStatus] = useState<RunStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // The server's one-run-per-user refusal (R120). Not an error: nothing
+  // failed, the user's other run is still going.
+  const [busy, setBusy] = useState<string | null>(null)
   const [starting, setStarting] = useState(false)
   const poll = useRef<number | undefined>(undefined)
 
@@ -125,6 +128,7 @@ export function RunStep({
   async function start() {
     setStarting(true)
     setError(null)
+    setBusy(null)
     setStatus(null)
     try {
       const { run_id } = await api.startRun({
@@ -137,7 +141,8 @@ export function RunStep({
       })
       setRunId(run_id)
     } catch (e) {
-      setError((e as Error).message)
+      if (e instanceof ApiError && e.status === 409) setBusy(e.message)
+      else setError((e as Error).message)
     } finally {
       setStarting(false)
     }
@@ -262,6 +267,14 @@ export function RunStep({
           disabled={running}
         />
       </div>
+
+      {busy && (
+        <Alert>
+          <Loader2 className="size-4" />
+          <AlertTitle>You already have a run going</AlertTitle>
+          <AlertDescription>{busy}</AlertDescription>
+        </Alert>
+      )}
 
       {error && (
         <Alert variant="destructive">

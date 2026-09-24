@@ -20,6 +20,8 @@ import os
 import sys
 import json
 import logging
+import threading
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from datetime import datetime
@@ -383,6 +385,58 @@ def _registry(user_id):
     return RunRegistry(db_path(user_id))
 
 
+# Which runs this process has a live worker for (R120). An id goes in before
+# its thread starts and comes out in the worker's `finally`, so "in the set"
+# is "a thread of ours is on it". `_RUNS_LOCK` makes claim-then-add one step
+# as far as the reaper can see: without it, a listing between the row landing
+# and the id going in would reap a run that is about to start.
+_PROCESS = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
+_LIVE_RUNS: set = set()
+_RUNS_LOCK = threading.Lock()
+
+# A live worker touches `heartbeat_at` every HEARTBEAT seconds, from a timer
+# of its own, because a progress tick can be minutes apart (discovery ticks
+# at its start and end only, Q49). Another process's run is presumed dead
+# after STALE of silence: four missed beats, so a busy machine is not enough.
+RUN_HEARTBEAT_SECONDS = 30
+RUN_STALE_SECONDS = 120
+
+
+def _reap(registry, every_foreign: bool = False) -> list:
+    """Fail this registry's runs that no worker is on. See `RunRegistry.reap`."""
+    with _RUNS_LOCK:
+        return registry.reap(_PROCESS, set(_LIVE_RUNS), RUN_STALE_SECONDS,
+                             every_foreign=every_foreign)
+
+
+def reap_stale_runs() -> int:
+    """
+    The startup sweep: every partition's dead runs marked failed (R120, Q49).
+
+    Called once when the API boots. Walks every `runs.db` that exists, the
+    unscoped one and each user's, because a sweep of one registry clears
+    nobody else's run. Hosted, one process serves every run, so at boot every
+    active row is dead and fails at once. Local, Streamlit may be a second
+    process with a run going in the same `runs.db`, so its rows are judged by
+    heartbeat instead. Returns how many runs it failed.
+    """
+    from tools.jobs.run_registry import RunRegistry, every_db_path
+
+    hosted = hosting_mode() == "hosted"
+    reaped = 0
+    for path in every_db_path():
+        # One unreadable registry must not keep the instance from booting for
+        # everybody else. Logged at ERROR, so Sentry sees it (R119).
+        try:
+            with RunRegistry(path) as registry:
+                reaped += len(_reap(registry, every_foreign=hosted))
+        except Exception:
+            logger.exception("Could not sweep %s for interrupted runs", path)
+    if reaped:
+        logger.warning("Marked %d interrupted run(s) failed at startup", reaped)
+    return reaped
+
+
 # How large a run a UI may ask for (R110), inclusive. `start_run` refuses
 # anything outside, so every UI gets the same bound whatever its widget
 # allows. `/api/health` hands this to the React run screen and Streamlit's
@@ -434,9 +488,10 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
     `ContextVar`: context variables do not follow a `threading.Thread`, so the
     worker would resolve to whoever the default was and write a resume into a
     stranger's outputs with no error anywhere (pilot plan A3).
-    """
-    import threading
 
+    One run per user (R120): a second start while one is going raises
+    `RunInProgress`, and the API turns that into a 409.
+    """
     # Before the registry row, so a refused run leaves no trace (R110).
     _check_run_size(max_jobs=max_jobs, max_resumes=max_resumes)
 
@@ -450,8 +505,22 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
     # whoever uses it.
     from tools.jobs import event_log
 
+    # One run per user (R120). A dead run in the way is reaped first, so a
+    # restart never leaves somebody refused by a run nothing is doing.
+    from tools.jobs.run_registry import RunAlreadyActive
+
     with _registry(user_id) as registry:
-        run_id = registry.create(profile_name)
+        _reap(registry)
+        with _RUNS_LOCK:
+            try:
+                run_id = registry.claim(profile_name, _PROCESS)
+            except RunAlreadyActive as exc:
+                raise RunInProgress(
+                    "You already have a run in progress"
+                    f" (started {exc.run['started_at'][:16].replace('T', ' ')} UTC,"
+                    f" profile {exc.run['profile']}). Wait for it to finish,"
+                    " then start another.") from exc
+            _LIVE_RUNS.add(run_id)
     # With the registry row, not in the worker: a run the thread never starts
     # was still asked for, and "started, never finished" is what says so (A8).
     event_log.record(user_id, "run_started")
@@ -459,11 +528,24 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
     def worker():
         # The key is scrubbed from every log line and run record for as long
         # as the run holds it (R117).
-        with key_in_use(api_key):
-            _run_worker()
+        try:
+            with key_in_use(api_key):
+                _run_worker()
+        finally:
+            with _RUNS_LOCK:
+                _LIVE_RUNS.discard(run_id)
 
     def _run_worker():
         registry = _registry(user_id)
+        stop = threading.Event()
+
+        def beat():
+            while not stop.wait(RUN_HEARTBEAT_SECONDS):
+                registry.heartbeat(run_id)
+
+        beating = threading.Thread(target=beat, name=f"jobscout-beat-{run_id}",
+                                   daemon=True)
+        beating.start()
         try:
             orchestrator = JobScoutOrchestrator(
                 profile_name=profile_name,
@@ -522,12 +604,19 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
             event_log.record(user_id, "run_finished",
                              f"failed:{type(exc).__name__}")
         finally:
+            stop.set()
+            beating.join()
             registry.close()
 
     # Daemon, so a stuck run cannot keep the interpreter alive after the
     # server is told to stop.
-    threading.Thread(target=worker, name=f"jobscout-run-{run_id}",
-                     daemon=True).start()
+    try:
+        threading.Thread(target=worker, name=f"jobscout-run-{run_id}",
+                         daemon=True).start()
+    except BaseException:
+        with _RUNS_LOCK:
+            _LIVE_RUNS.discard(run_id)
+        raise
     return run_id
 
 
@@ -554,6 +643,7 @@ def active_runs(user_id) -> list:
     """
     registry = _registry(user_id)
     try:
+        _reap(registry)            # a listing never shows a dead run (R120)
         return registry.active()
     finally:
         registry.close()
@@ -563,6 +653,7 @@ def recent_runs(user_id, limit: int = 10) -> list:
     """The last few runs, newest first, whatever became of them."""
     registry = _registry(user_id)
     try:
+        _reap(registry)
         return registry.recent(limit)
     finally:
         registry.close()
@@ -813,7 +904,10 @@ def reset_passphrase(user_id: str) -> str:
 
 
 class RunInProgress(RuntimeError):
-    """A deletion was refused because the user has a run the registry calls live."""
+    """
+    Refused because the user has a run the registry calls live: a deletion
+    (A6), or a second run while one is going (R120).
+    """
 
 
 def delete_user_data(user_id: str, *, ignore_active_runs: bool = False) -> dict:

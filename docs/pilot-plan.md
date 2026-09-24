@@ -182,8 +182,10 @@ board, and a capture of real remote strings.
    events` and the success criterion below. The client-side funnel events
    (`reached_key_step` / `key_saved`) and the feedback button are Q70.
 5. **A9:** Sentry, with the key scrubbed.
-6. **A10:** concurrency, the stale-run reaper (Q49: a startup sweep across
-   every partition, `queued` too) and machine size.
+6. ~~**A10:**~~ done minimal (R120): one run per user (409), the
+   stale-run reaper (startup sweep across every partition, and on every
+   listing), and machine size (keep 1 GB, measured). The rest of the
+   section is Q73.
 7. **A12:** deploy, acceptance (gated on the `none` row), invite.
 
 **The invite depends on Q58, A8, A9, A10 and A12.** A11 and A11b moved
@@ -1058,6 +1060,11 @@ every board returns `[]`. Today those two runs are byte-identical by the time
 they reach either front end.
 
 ### A10. Concurrency, reaper, machine size (½ day)
+
+**Built minimal, 2026-09-24 (R120).** One active run per user, the reaper
+and the size (keep `shared-cpu-1x`/1 GB: five concurrent runs peaked at
+~640 MB). The auto-stop guard, the upload cap and the dependency split were
+not in the list that was built, and are Q73.
 
 - **One active run per user**, enforced server-side. Five simultaneous runs in
   one process under `--workers 1` is five threads scraping and embedding on one

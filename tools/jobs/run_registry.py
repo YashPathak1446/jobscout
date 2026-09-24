@@ -66,7 +66,9 @@ CREATE TABLE IF NOT EXISTS runs (
     result      TEXT,
     started_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
-    finished_at TEXT
+    finished_at TEXT,
+    owner       TEXT,
+    heartbeat_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state, started_at);
 """
@@ -74,6 +76,45 @@ CREATE INDEX IF NOT EXISTS idx_runs_state ON runs(state, started_at);
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# The two columns A10 added (R120), for a `runs.db` written before them.
+# `owner` names the process whose thread runs the row; `heartbeat_at` is that
+# thread saying it is still alive, on a timer rather than on a progress tick,
+# because discovery can go minutes between ticks (Q49).
+_ADDED_COLUMNS = {"owner": "TEXT", "heartbeat_at": "TEXT"}
+
+# Why a reaped run failed, in the words both UIs' failed screens show.
+REAPED_RESTART = "interrupted — the server restarted"
+REAPED_WORKER = "interrupted — the run stopped without reporting"
+
+
+class RunAlreadyActive(RuntimeError):
+    """`claim` refused: this registry already has a queued or running run."""
+
+    def __init__(self, run: dict):
+        super().__init__(f"run {run['id']} is still {run['state']}")
+        self.run = run
+
+
+def every_db_path() -> list:
+    """
+    Every `runs.db` that exists: the unscoped one, then each user's (R120).
+
+    Only files that exist, because opening a registry creates one, and a
+    sweep that created a database for every directory it walked would be
+    writing where it came to read. A directory under `users/` that is not a
+    valid user id is skipped rather than trusted as a path.
+    """
+    found = [db_path(None)]
+    users = paths.user_home(None) / paths.USERS_DIR
+    if users.is_dir():
+        for home in sorted(users.iterdir()):
+            try:
+                found.append(db_path(home.name))
+            except ValueError:
+                continue
+    return [path for path in found if path.is_file()]
 
 
 class RunRegistry:
@@ -89,6 +130,10 @@ class RunRegistry:
         self._db = sqlite3.connect(str(self.path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.executescript(SCHEMA)
+        have = {row["name"] for row in self._db.execute("PRAGMA table_info(runs)")}
+        for column, kind in _ADDED_COLUMNS.items():
+            if column not in have:
+                self._db.execute(f"ALTER TABLE runs ADD COLUMN {column} {kind}")
         self._db.commit()
         self._lock = threading.Lock()
 
@@ -99,7 +144,13 @@ class RunRegistry:
     # ours to vouch for, and this table is read back to the browser.
 
     def create(self, profile: str) -> str:
-        """Register a run before it starts. Returns its id."""
+        """
+        Register a run before it starts, unchecked. Returns its id.
+
+        Not what `start_run` calls: that is `claim`, which refuses a second
+        active run. This stays as the plain insert tests build rows with, and
+        its rows have no owner, so the reaper judges them by `updated_at`.
+        """
         run_id = uuid.uuid4().hex[:12]
         stamp = _now()
         with self._lock:
@@ -109,12 +160,57 @@ class RunRegistry:
             self._db.commit()
         return run_id
 
+    def claim(self, profile: str, owner: str) -> str:
+        """
+        Register a run unless one is already going here (R120). Returns its id.
+
+        One registry is one user, so this is "one run per user". The check and
+        the insert are one `BEGIN IMMEDIATE` transaction, which SQLite
+        serialises across connections and processes: two requests racing for
+        the same user cannot both see "none active" and both insert. Raises
+        `RunAlreadyActive` carrying the run that is in the way.
+        """
+        run_id = uuid.uuid4().hex[:12]
+        stamp = _now()
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                row = self._db.execute(
+                    "SELECT id FROM runs WHERE state IN ('queued','running')"
+                    " ORDER BY started_at LIMIT 1").fetchone()
+                if row is None:
+                    self._db.execute(
+                        "INSERT INTO runs (id, profile, state, started_at,"
+                        " updated_at, owner, heartbeat_at)"
+                        " VALUES (?,?,'queued',?,?,?,?)",
+                        (run_id, profile, stamp, stamp, owner, stamp))
+                self._db.commit()
+            except BaseException:
+                self._db.rollback()
+                raise
+        if row is not None:
+            raise RunAlreadyActive(self.get(row["id"]))
+        return run_id
+
+    def heartbeat(self, run_id) -> None:
+        """The worker is alive. Moves nothing but `heartbeat_at`."""
+        with self._lock:
+            self._db.execute(
+                "UPDATE runs SET heartbeat_at=? WHERE id=?"
+                " AND state IN ('queued','running')", (_now(), run_id))
+            self._db.commit()
+
+    # `progress`, `finish` and `fail` only move a row that is still active.
+    # Without that, a run reaped while alive flips back to `running` on its
+    # next tick, and the user watches "failed" become "running" (Q49).
+
     def progress(self, run_id, stage, done=0, total=0, message="") -> None:
         """One tick. Cheap enough to call per job."""
         with self._lock:
             self._db.execute(
                 "UPDATE runs SET state='running', stage=?, done=?, total=?,"
-                " message=?, updated_at=? WHERE id=?",
+                " message=?, updated_at=? WHERE id=?"
+                " AND state IN ('queued','running')",
                 (stage, int(done), int(total), redact_keys(message), _now(),
                  run_id))
             self._db.commit()
@@ -131,7 +227,8 @@ class RunRegistry:
         with self._lock:
             self._db.execute(
                 "UPDATE runs SET state='finished', result=?, output_dir=?,"
-                " updated_at=?, finished_at=? WHERE id=?",
+                " updated_at=?, finished_at=? WHERE id=?"
+                " AND state IN ('queued','running')",
                 (redact_keys(json.dumps(result or {})), str(output_dir or ""),
                  stamp, stamp, run_id))
             self._db.commit()
@@ -141,9 +238,48 @@ class RunRegistry:
         with self._lock:
             self._db.execute(
                 "UPDATE runs SET state='failed', error=?, updated_at=?,"
-                " finished_at=? WHERE id=?", (redact_keys(str(error))[:2000], stamp,
-                                              stamp, run_id))
+                " finished_at=? WHERE id=? AND state IN ('queued','running')",
+                (redact_keys(str(error))[:2000], stamp, stamp, run_id))
             self._db.commit()
+
+    def reap(self, owner: str, live: set, stale_after: float,
+             every_foreign: bool = False) -> list:
+        """
+        Fail every active run with no live worker, and return their ids (R120).
+
+        Which worker is live is known exactly for this process and only
+        inferred for any other, so the rule has two halves:
+
+        - **Owned by `owner` (this process):** live iff its id is in `live`,
+          the set of runs whose thread has not exited.
+        - **Owned by anyone else,** including a row from before these columns
+          existed: live iff its heartbeat (else its last update) is under
+          `stale_after` seconds old. Local mode needs this: Streamlit and the
+          API are two processes sharing one unscoped `runs.db`, and neither
+          may reap the other's live run.
+
+        `every_foreign` drops the heartbeat test and treats every other
+        process's run as dead. That is the hosted startup sweep: one process
+        serves every run (`--workers 1`), so at boot nothing else can be
+        running one.
+        """
+        now = datetime.now(timezone.utc)
+        dead = []
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, owner, heartbeat_at, updated_at FROM runs"
+                " WHERE state IN ('queued','running')").fetchall()
+        for row in rows:
+            if row["owner"] == owner:
+                if row["id"] not in live:
+                    dead.append((row["id"], REAPED_WORKER))
+                continue
+            seen = datetime.fromisoformat(row["heartbeat_at"] or row["updated_at"])
+            if every_foreign or (now - seen).total_seconds() > stale_after:
+                dead.append((row["id"], REAPED_RESTART))
+        for run_id, reason in dead:
+            self.fail(run_id, reason)
+        return [run_id for run_id, _ in dead]
 
     # -- reading --------------------------------------------------------------
 
