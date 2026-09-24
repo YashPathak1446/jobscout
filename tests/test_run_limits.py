@@ -70,12 +70,71 @@ class TestStartRun(_Home):
         self.assertEqual(self.runs_recorded(), [])
 
     def test_the_bounds_themselves_are_accepted(self):
+        """
+        Accepted, and each run **finishes before the test ends.** The thread
+        runs for real around a stub pipeline, and the test waits for it.
+
+        This stubbed `threading.Thread` and returned. The run's connection was
+        handed to a worker that never ran, so it stayed open, and on Windows
+        the temporary home could not be deleted (WinError 32). `start_run` now
+        closes its own connection, and the worker opens and closes its own.
+        """
+        class StubPipeline:
+            profile = None
+
+            def __init__(self, **kwargs):
+                pass
+
+            def run(self, **kwargs):
+                return {}
+
         for field, (lo, hi) in orchestrator.RUN_LIMITS.items():
             for value in (lo, hi):
                 with self.subTest(field=field, value=value):
-                    with mock.patch("threading.Thread"):
-                        self.assertTrue(orchestrator.start_run(None, PROFILE,
-                                                               **{field: value}))
+                    with mock.patch.object(orchestrator, "JobScoutOrchestrator",
+                                           StubPipeline):
+                        run_id = orchestrator.start_run(None, PROFILE, **{field: value})
+                        self.assertEqual(self._wait(run_id)["state"], "finished")
+
+    def test_start_run_leaves_no_connection_open_if_the_thread_never_runs(self):
+        """
+        The leak itself. With the thread stubbed out, nothing but `start_run`
+        touched the database, so any connection still open is `start_run`'s.
+        """
+        import sqlite3
+        from tools.jobs import run_registry
+
+        opened = []
+        real_connect = sqlite3.connect
+
+        def tracking_connect(*args, **kwargs):
+            connection = real_connect(*args, **kwargs)
+            opened.append(connection)
+            return connection
+
+        with mock.patch.object(run_registry.sqlite3, "connect", tracking_connect), \
+                mock.patch("threading.Thread"):
+            orchestrator.start_run(None, PROFILE)
+        self.assertTrue(opened, "start_run opened no connection; test is blind")
+        for connection in opened:
+            with self.assertRaises(sqlite3.ProgrammingError,
+                                   msg="a run-store connection was left open"):
+                connection.execute("SELECT 1")
+
+    def _wait(self, run_id, seconds=20):
+        import time
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            run = orchestrator.run_status(None, run_id)
+            if run and not run["active"]:
+                # The worker closes its connection in `finally`, after the
+                # row says finished; give that a moment to happen.
+                for thread in __import__("threading").enumerate():
+                    if thread.name == f"jobscout-run-{run_id}":
+                        thread.join(seconds)
+                return run
+            time.sleep(0.02)
+        self.fail(f"run {run_id} did not finish in {seconds}s")
 
 
 @unittest.skipIf(TestClient is None, "fastapi not installed")

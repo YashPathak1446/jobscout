@@ -436,10 +436,19 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
     # Before the registry row, so a refused run leaves no trace (R110).
     _check_run_size(max_jobs=max_jobs, max_resumes=max_resumes)
 
-    registry = _registry(user_id)
-    run_id = registry.create(profile_name)
+    # The row is recorded on a connection that closes here, and the worker
+    # opens its own. Before, this one connection was handed to the thread and
+    # closed only in the worker's `finally`, so a thread that never ran (a
+    # test that stubs it, or a failed `start()`) left it open for good. On
+    # Windows an open SQLite file cannot be deleted, so the test's temporary
+    # home failed to clean up (WinError 32), and Python 3.13 warned about
+    # the unclosed database at exit. A connection's life is now the life of
+    # whoever uses it.
+    with _registry(user_id) as registry:
+        run_id = registry.create(profile_name)
 
     def worker():
+        registry = _registry(user_id)
         try:
             orchestrator = JobScoutOrchestrator(
                 profile_name=profile_name,
