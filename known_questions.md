@@ -10633,6 +10633,46 @@ threshold forced to 0 so all 6 surviving jobs got a resume and a
 - the app sweeps on startup
 - React's run screen handles the 409
 
+## R121. A scored job on a small board said "Not scored"
+
+**Decided 2026-09-24**, from the first live deploy.
+
+**What was seen.** A new, keyed account's first run scored 4 jobs and wrote
+a valid resume for one (Twilio). The React board said "Not scored" for every
+job. A keyless account on the same deploy showed scores.
+
+**The cause: board size, not the key.** Traced through analysis, the
+store, the payload and the badge:
+- The scores were stored, with their bar.
+- `JobStore.score_bands` returns nothing until `MIN_FOR_BANDS` (8) jobs are
+  scored, because quartiles over fewer are noise. The keyed account was new
+  and had 4; the keyless one had more than 8.
+- `MatchBadge` asked `band(score, bands)` for strong / typical / weak, got
+  none, and fell through to "Not scored": the label for a job analysis
+  never looked at.
+
+"Too few to compare yet" was rendered as "never scored", which is CLAUDE.md's
+unknown-is-never-a-value rule again. Streamlit's label already showed the
+number alone in this case; only React fell through.
+
+**The fix, React only.** A job with a score and no band shows a neutral
+"Scored 78" badge, whose tooltip says the bands appear once more jobs are
+scored. "Not scored" is now reached only when there is no score. Below-bar
+rows are unchanged (R106).
+
+**Tests** (`test_small_board_scores.py`):
+- through the hosted API, a four-job board carries all four scores and
+  empty bands;
+- in the badge's source, a known score is handled before "Not scored" is
+  considered. That test fails on the old badge.
+
+**Seen in a browser.** The built React, served in hosted mode with that
+four-job account and driven in Chromium through sign-in, showed "Scored 78
+/ 71 / 66 / 52" and no "Not scored".
+
+Q63's "display state computed once in the facade" would have prevented this
+class of bug. This is the minimal fix, not that one.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
