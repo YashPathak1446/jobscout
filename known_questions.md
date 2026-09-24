@@ -9794,6 +9794,55 @@ and absolute; and an in-home `..`, which still resolves.
 - The old absolute check already compared by component, so it was right for
   `bobby`. The relative branch never reached any check.
 
+## R109. A hosted account holds one profile
+
+**Decided 2026-09-24**, proposed after Q63 and confirmed by the author.
+
+**Why.** The board has no profile column. It belongs to the user (R90's
+partition), so every stored score, gate verdict and applied/rejected mark on
+it was made against one resume. A second profile under a new name was ranked
+against the first one's scores, with no warning (Q63). It would also have
+mixed two resumes' judgements into the labels Q53 needs.
+
+**What.**
+- `init_profile.profile_limit(user_id)` returns **1 when scoped, `None`
+  unscoped**. It is the one source for the rule.
+- `create_profile` refuses a new name when the account already holds a
+  different profile, raising `ProfileLimit`, which the route returns as a
+  409 naming the profile it has. Replacing that profile (`force`) is
+  unchanged. R30's backup beside it is not counted: the listing already
+  skips `.bak`.
+- `/api/health` carries `profile_limit`. With the account full, the wizard's
+  resume step fixes the name to the existing profile, disables the field,
+  says "a new resume replaces this one", and shows the replace checkbox.
+  The screen does not offer what the server would refuse. The 409 is the
+  backstop if health failed to load.
+- The CLI, Streamlit and local-mode React are unscoped: any number, as
+  before.
+
+**Chosen:** the check in `create_profile`, the importer both UIs call.
+**Rejected:** the check in the route alone, since a second hosted entry
+point would miss it ("two paths, one walked"); and an account column, more
+than the rule needs. **If wrong:** a hosted path that reaches
+`create_profile` with `user_id=None` has no limit. `_caller` returns `None`
+only in local mode, and A5's `test_hosted_mode_has_no_unscoped_call_site`
+holds that.
+
+**Tests** (`test_one_profile.py`): the limit's two values; a second scoped
+name is refused and writes nothing; a replace still works and lists one
+profile; the limit is per account; unscoped keeps two; hosted through the
+route (health says 1, a second name is a 409 naming the first, `force` on the
+same name is 200); local health says `null`; a source check on the wizard.
+Making `profile_limit` return `None` fails 4 of them.
+
+**Fly without hosted mode set** was already handled (R95, A5). `check_boot`
+runs when `api.main` is imported and raises `HostingMisconfigured` if
+`JOBSCOUT_MODE` is unset or `local` while a platform marker (`FLY_APP_NAME`,
+`FLY_MACHINE_ID`, and those of Cloud Run, Heroku, Render and Railway) is
+present. `fly.toml` sets `JOBSCOUT_MODE = "hosted"`, and
+`test_hosted_boundary` fails if it stops. Re-checked 2026-09-24 by importing
+with `FLY_APP_NAME=x` and the mode unset, then `local`: both refuse to start.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

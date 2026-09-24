@@ -28,6 +28,7 @@ export function Wizard({
   // behind screens they have already completed.
   const [furthest, setFurthest] = useState(0)
   const [profiles, setProfiles] = useState<string[] | null>(null)
+  const [profileLimit, setProfileLimit] = useState<number | null>(null)
   const [summary, setSummary] = useState<ProfileSummary | null>(null)
   // Never persisted, here or on the server: it is passed to the pipeline
   // for the run and forgotten.
@@ -36,7 +37,10 @@ export function Wizard({
   useEffect(() => {
     api
       .health()
-      .then((h) => setProfiles(h.profiles))
+      .then((h) => {
+        setProfiles(h.profiles)
+        setProfileLimit(h.profile_limit)
+      })
       .catch(() => setProfiles([]))
   }, [])
 
@@ -109,6 +113,7 @@ export function Wizard({
           ) : (
             <ResumeStep
               profiles={profiles}
+              profileLimit={profileLimit}
               onSkipAhead={(name) => {
                 onProfile(name)
                 setSummary(null)

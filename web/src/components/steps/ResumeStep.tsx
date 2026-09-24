@@ -30,15 +30,17 @@ import { api, type Extraction, type ProfileSummary, type ResumeSchema } from '@/
  */
 export function ResumeStep({
   profiles,
+  profileLimit,
   onProfileReady,
   onSkipAhead,
 }: {
   profiles: string[]
+  profileLimit: number | null
   onProfileReady: (name: string, summary: ProfileSummary | null) => void
   onSkipAhead: (name: string) => void
 }) {
   const [file, setFile] = useState<File | null>(null)
-  const [name, setName] = useState('')
+  const [typedName, setTypedName] = useState('')
   const [existing, setExisting] = useState<string>('')
   const [replace, setReplace] = useState(false)
   const [busy, setBusy] = useState<'reading' | 'building' | null>(null)
@@ -49,6 +51,14 @@ export function ResumeStep({
   // Derived, not stored: an effect that copies props into state renders
   // twice and leaves a stale value if the list arrives later.
   const selected = existing || profiles[0] || ''
+
+  // A hosted account holds one profile (R109): the board has no profile
+  // column, so a second resume would be ranked against the first one's
+  // scores. With the account full, the name is the profile it has, and the
+  // only way forward is replacing it. The server refuses a second name with a
+  // 409 either way. This keeps the screen from offering what it would refuse.
+  const full = profileLimit !== null && profiles.length >= profileLimit
+  const name = full ? profiles[0] : typedName
 
   const clash = Boolean(name) && profiles.includes(name)
 
@@ -141,7 +151,9 @@ export function ResumeStep({
             </Button>
           </div>
           <p className="text-sm text-muted-foreground">
-            Or upload a resume below to start fresh.
+            {full
+              ? 'Or upload a new resume below to replace it.'
+              : 'Or upload a resume below to start fresh.'}
           </p>
         </div>
       )}
@@ -167,12 +179,15 @@ export function ResumeStep({
           <Input
             id="profile-name"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => setTypedName(e.target.value)}
             placeholder="e.g. jane_doe"
             className="max-w-sm"
+            disabled={full}
           />
           <p className="text-sm text-muted-foreground">
-            Used for the profile file and generated resume filenames.
+            {full
+              ? 'Your account holds one profile, so a new resume replaces this one.'
+              : 'Used for the profile file and generated resume filenames.'}
           </p>
         </div>
 

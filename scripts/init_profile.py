@@ -50,6 +50,7 @@ from tools.profile.derivation import (  # noqa: E402
     derive_personal_info,
     merge_conditional_triggers,
 )
+from tools.profile.profile_loader import list_available_profiles  # noqa: E402
 from tools.resume.resume_parser import ResumeParser  # noqa: E402
 
 # Ships with the package; it is a starter, not one of the user's profiles.
@@ -392,6 +393,29 @@ def _id_problems(user_id, name: str, resume_path=None, parser=None) -> list:
                 f"this profile may name components that do not exist"]
 
 
+class ProfileLimit(Exception):
+    """This account already has as many profiles as it may (R109)."""
+
+
+def profile_limit(user_id):
+    """
+    How many profiles one account may hold: **one when scoped, no limit
+    unscoped.**
+
+    The board has no profile column. It is the user's (R90's partition), and
+    every stored score, gate verdict and applied/rejected mark on it was made
+    for one resume. A second profile in the same partition is ranked against
+    scores computed for the first, and Q53's labels would mix two people's
+    judgements. The CLI and local mode keep any number: one person, who knows
+    which profile they ran.
+
+    Read by `create_profile`, which enforces it, and by `/api/health`, so the
+    wizard can offer "replace" instead of a name field that would 409. One
+    function, so the two cannot disagree.
+    """
+    return None if user_id is None else 1
+
+
 def create_profile(user_id, resume_path, name: str, force: bool = False) -> dict:
     """
     Build, validate and write a profile in one call.
@@ -409,6 +433,15 @@ def create_profile(user_id, resume_path, name: str, force: bool = False) -> dict
 
     if out_path.exists() and not force:
         raise FileExistsError(f"A profile named '{name}' already exists.")
+
+    limit = profile_limit(user_id)
+    if limit is not None:
+        others = [n for n in list_available_profiles(user_id=user_id)
+                  if n != out_path.stem]
+        if len(others) >= limit:
+            raise ProfileLimit(
+                f"This account already has a profile, '{others[0]}', and holds "
+                "one. Upload your new resume to replace it instead.")
 
     # A profile is the only artefact here that is both hand-tuned and unbacked:
     # everything else is derived, in git, or reproducible. Profiles are

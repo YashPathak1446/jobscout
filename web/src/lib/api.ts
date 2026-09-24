@@ -254,6 +254,8 @@ export const api = {
   health: () =>
     get<{
       profiles: string[]
+      /** How many profiles this account may hold: 1 hosted, null local (R109). */
+      profile_limit: number | null
       backend: { backend: string; forced: boolean; description: string }
       pdflatex: boolean
       statuses: string[]

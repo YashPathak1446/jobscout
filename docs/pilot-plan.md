@@ -166,11 +166,10 @@ board, and a capture of real remote strings.
    - The free-tier data-use sentence, from Google's current terms, read at
      build time.
    - The key in `localStorage`, sent only in POST bodies, with "forget key".
-   - **Q63's interim sentence**, at `ResumeStep`'s "Yes, replace" checkbox and
-     wherever a user who already has a profile imports another: jobs already
-     on your board keep the scores from your previous resume, and only newly
-     found jobs are scored against this one. The board is per user, not per
-     profile, so both paths reach it.
+   - **Q63's interim sentence**, at `ResumeStep`'s "Yes, replace" checkbox:
+     jobs already on your board keep the scores from your previous resume,
+     and only newly found jobs are scored against this one. Replacing is the
+     only path since R109 (one profile per hosted account).
 4. **A8:** the per-user event log (including `reached_key_step` / `key_saved`)
    and the success criterion.
 5. **A9:** Sentry, with the key scrubbed.

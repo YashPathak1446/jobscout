@@ -97,8 +97,10 @@ from agents.orchestrator import (
 )
 from scripts.init_profile import (
     ProfileInvalid,
+    ProfileLimit,
     create_profile,
     extract_resume,
+    profile_limit,
     read_component_rules,
     read_personal,
     read_preferences,
@@ -386,6 +388,9 @@ def health(user: Optional[str] = Depends(_caller)) -> dict:
     """What this machine can do, which the UI has to say out loud (R43)."""
     return {
         "profiles": available_profiles(user),
+        # How many this account may hold: 1 hosted, None local (R109). The
+        # wizard offers "replace" rather than a name field that would 409.
+        "profile_limit": profile_limit(user),
         "backend": backend_status(),
         "pdflatex": pdflatex_available(),
         "statuses": list(job_statuses()),
@@ -681,7 +686,7 @@ def profile_create(request: ProfileRequest, user: Optional[str] = Depends(_calle
                    if request.schema_ else source)
     try:
         return create_profile(user, resume_path, request.name, force=request.force)
-    except FileExistsError as exc:
+    except (FileExistsError, ProfileLimit) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except Exception as exc:  # surfaced, not swallowed
         raise HTTPException(
