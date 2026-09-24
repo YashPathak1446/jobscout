@@ -292,9 +292,12 @@ export const api = {
     post<{ url: string; status: string }>('/job/status', { url, status }),
   fileUrl: (path: string) => `/api/file?path=${encodeURIComponent(path)}`,
 
-  extractResume: async (file: File): Promise<Extraction> => {
+  extractResume: async (file: File, key: string): Promise<Extraction> => {
     const form = new FormData()
     form.append('file', file)
+    // In the body, never the URL, for the reason `backend` gives. Without it
+    // a hosted import reads no key at all and uses the pattern reader (R113).
+    if (key) form.append('api_key', key)
     const response = await fetch('/api/resume/extract', { method: 'POST', body: form })
     noticeSignedOut(response)
     if (!response.ok) {

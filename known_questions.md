@@ -10188,6 +10188,133 @@ they are engine-independent):
 Reverting any one of `pdf_builder`, generation, the importer or the
 orchestrator fails at least one test.
 
+## R117. The key page: a key saved in the browser, sent with the import, and kept out of everything written
+
+**Decided 2026-09-24.** Resolves Q58. React only; Streamlit is frozen (R115).
+
+### What the page says
+
+A **Key** step now comes first in the wizard, ahead of Resume. First because
+the resume import is the first thing a key is used for: a PDF or Word upload
+is read by Gemini only when the request carries a key (R113). On About you,
+where the field used to be, a new user's import had already happened
+without one. Four statements, plain:
+
+1. **How to get a free key:** a link to Google AI Studio, and the three
+   clicks.
+2. **Without a key, everything works except rewriting bullets.** Discovery,
+   scoring, component selection and PDFs all run. It also says, from Q58,
+   what a keyless resume changes between postings (which entries and bullets
+   fit, and skills order), and that an import is read by the pattern reader.
+   **It never says a key improves matching.** A request's key never reaches
+   embeddings in either mode, and a hosted instance scores on potion whatever
+   the key (R113). "A key does not change which jobs you see or how they are
+   scored" is true on both modes, which is why it is the sentence used.
+3. **Where the key goes:** saved in this browser only, sent to Google only
+   with your own requests, never stored by the server. When storage is
+   refused it says instead that the key lasts only until a reload.
+4. **On the resume step**, at "Yes, replace": replacing a resume does not
+   re-score jobs already on the board; only newly found jobs are scored
+   against the new one. This is Q63's interim sentence.
+
+### What the page does
+
+- **`localStorage`, through one guarded module** (`web/src/lib/keyStore.ts`).
+  Every read and write is in `try`/`catch`. If storage throws (a private
+  window, blocked site data, a preview), the key lives in React state for the
+  page's life, and the page says so rather than claiming a save it did not
+  make. **Forget key** clears both the state and the stored copy. A test
+  counts the storage calls and requires nothing else in `web/src` to touch
+  storage.
+- **The extract request carries the key** as a multipart field beside the
+  file, never in the URL. `extract_resume(..., gemini_key=)` resolves the
+  rung with it and hands it to `complete_json`. Without that, a hosted import
+  always used the pattern reader, as R113 noted.
+
+### A bad key: refused at import, degraded on a run
+
+R101's check (`config.gemini_key_problem`) was already in: non-ASCII,
+whitespace and quote characters, with no prefix or length rule. So nothing
+was added to it. What changed is the import's answer to it. Before, a
+request key that could not be sent was ignored, and the resume was read by
+pattern with the reason in `why`. **Now `extract_resume` raises
+`ApiKeyProblem`, a `ValueError`, and the route returns 422 with R101's
+message.** The check sits after the `.tex` return, since a LaTeX upload
+uses no key.
+
+- **Chosen:** refuse. The person is on the screen and the fix is theirs.
+  A pattern read looks like a finished import and gets confirmed as one.
+- **Rejected:** the same refusal in `start_run`. Streamlit calls `start_run`
+  without a `try`, so a new raise there breaks the frozen UI. A run with a
+  bad key still degrades with R101's "Your Gemini key was not used", and the
+  key panel shows the problem at paste time.
+- **If this is wrong:** a friend with a stored bad key cannot import until
+  they fix or forget it. The 422 names the character and its position, and
+  Forget key is one click away on the Key step.
+
+### The key is scrubbed at the sinks, not the sources
+
+The key must never reach a log line, an error message, a run record or a
+file. Exceptions become text at about 80 places here, so scrubbing each one
+would be R80's "count them" problem with a credential at stake. Instead:
+
+- `config.key_in_use(key)` holds a key for the length of a run (`start_run`'s
+  worker) or an import (`extract_resume`). `config.redact_keys(text)`
+  replaces every held key with `[your key]`. The hold is counted and
+  process-wide, because a log line is written by whichever thread raised.
+- **Logs:** a log-record factory, installed once when `config` is imported,
+  scrubs every record's message and traceback while any key is held. It is a
+  factory rather than a filter because a filter on one logger does not reach
+  its children, and uvicorn adds its own handlers later.
+- **Run records:** `run_registry` scrubs the progress message, the result and
+  the error.
+- **Files:** `_degraded_reason` scrubs the text that goes into `state.json`,
+  the summary and the run record.
+- **Messages:** the import's `why`, scrubbed *before* its 160-character
+  cut, since a key cut in half no longer matches. The extract route's 422
+  and 400 details, raised `from None` so the cause is not chained.
+- **FastAPI's own 422** used to echo a request's `input`, and a missing
+  field's input is the whole body. So `POST /api/run` without a `profile`
+  sent the key back. The handler now keeps `type`, `loc` and `msg` only. The
+  UI reads only a string `detail`, so nothing it shows changes.
+
+`redact_keys` is re-exported by the facade for the API, and sits in
+`test_ui_contract.HTTP_ONLY` (R115).
+
+**Not covered, deliberately:** a key that has been transformed before it is
+written, such as URL-encoded or split across lines. Nothing here does either
+with a key. The check is on the verbatim string.
+
+### Tests
+
+`tests/test_request_key.py`, 16:
+- The extract route, hosted, signed in: uses the key it is sent; with no
+  key, uses the pattern reader even with `GOOGLE_API_KEY` set; refuses three
+  unsendable keys with R101's exact message and hands none of them on.
+- **The model's error quotes the key on purpose**, because a key that is
+  merely never written proves nothing about the paths that write exception
+  text. The import's `why`, the response, the logs and every file under the
+  data home are checked for it, including the case where the 160-character
+  cut falls inside the key.
+- **A real mock pipeline** on Priya, hosted, with generation live and
+  Gemini's error echoing the key. The key reaches `_degraded_reason`,
+  `state.json` and the run record, and none of them holds it afterwards.
+  Also a run that fails with the key in its error and its log.
+- A malformed run request does not echo its body.
+- Source checks for the page: the extract call sends the key, every storage
+  call is guarded, the Key step precedes Resume.
+
+**Mutation-checked, one at a time.** Each of these fails at least one test:
+removing the scrub from `_degraded_reason`, from the registry, from the
+import's `why`, or from before the cut; not installing the log factory; not
+passing the key to `complete_json`; not refusing a bad key; dropping the
+validation handler.
+
+**Not in this change:** the free-tier data-use sentence from pilot-plan
+item 3. It has to be read from Google's current terms, and it was not in
+this request. The frontend has no test runner, so the page itself was
+typechecked, linted and built, not exercised in a browser.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -11236,9 +11363,9 @@ of the chain rather than add retries to a model that is not answering.
 
 ## Q58. Without a key, two resumes for two postings differ only in skills order
 
-**Status:** Open, found 2026-09-23 on the SDE II profile's Samsara and Sigma
-resumes, `none` rung. **Belongs to A7's copy.** It is correct behaviour and
-needs saying, not fixing.
+**Status:** Resolved 2026-09-24 by R117: the Key step says it. Found
+2026-09-23 on the SDE II profile's Samsara and Sigma resumes, `none` rung.
+It is correct behaviour and needed saying, not fixing.
 
 **What was seen.** The two PDFs have identical bullets. The only difference is
 the order of skills within their lines.

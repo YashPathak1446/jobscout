@@ -25,6 +25,9 @@ Only the live probe tells the truth.
 # entry point at once. `load_dotenv` is idempotent, and it never overrides a
 # variable already set in the real environment.
 import os as _os
+import threading as _threading
+from collections import Counter as _Counter
+from contextlib import contextmanager as _contextmanager
 
 try:
     from dotenv import load_dotenv
@@ -280,6 +283,92 @@ def gemini_key_problem(key: str):
                     f"position {position}. A Gemini key has none; in `.env`, put "
                     f"the quotes around the value, not inside it. Paste just the key.")
     return None
+
+
+# --- a request's key, kept out of everything written (R117) ----------------
+
+# A hosted user's key arrives in a request body and is used for that request
+# or run. It must never reach a log line, an error message, a run record or a
+# file. Scrubbing at each of the ~80 places an exception becomes text would be
+# the "count them" problem (R80) with a credential at stake, so the key is
+# scrubbed at the sinks instead: log records (`_scrubbing_record_factory`),
+# run records (`run_registry`), a failed resume's reason (`_degraded_reason`),
+# an import's `why`, and the API's error responses. Each asks `redact_keys`,
+# which knows every key currently in use in this process.
+#
+# Process-wide rather than per thread: a log line is written by whichever
+# thread raised, and scrubbing one user's key out of another user's log line
+# costs nothing.
+
+_KEYS_IN_USE = _Counter()
+_KEYS_LOCK = _threading.Lock()
+REDACTED_KEY = "[your key]"
+
+
+@_contextmanager
+def key_in_use(key: str):
+    """Scrub `key` from every log record and `redact_keys` call while inside."""
+    if not key:
+        yield
+        return
+    with _KEYS_LOCK:
+        _KEYS_IN_USE[key] += 1
+    try:
+        yield
+    finally:
+        with _KEYS_LOCK:
+            _KEYS_IN_USE[key] -= 1
+            if _KEYS_IN_USE[key] <= 0:
+                del _KEYS_IN_USE[key]
+
+
+def redact_keys(text, *keys):
+    """`text` with every in-use key, and every key named here, replaced."""
+    if not isinstance(text, str) or not text:
+        return text
+    with _KEYS_LOCK:
+        secrets = set(_KEYS_IN_USE)
+    secrets.update(k for k in keys if k)
+    # Longest first, so a key that contains another is replaced whole.
+    for secret in sorted(secrets, key=len, reverse=True):
+        text = text.replace(secret, REDACTED_KEY)
+    return text
+
+
+def _install_log_scrubber():
+    """
+    Every log record, from any logger, is scrubbed while a key is in use.
+
+    A record factory rather than a filter or a handler: a filter on one logger
+    does not reach its children, and a handler can be added after this runs
+    (uvicorn configures its own). The factory sees every record at creation.
+    The message and any traceback are rendered here and scrubbed, and the
+    rendered traceback is cached on the record, which `Formatter` uses as is.
+    """
+    import logging
+
+    previous = logging.getLogRecordFactory()
+    if getattr(previous, "_jobscout_scrubs", False):
+        return
+
+    def factory(*args, **kwargs):
+        record = previous(*args, **kwargs)
+        if not _KEYS_IN_USE:
+            return record
+        message = record.getMessage()
+        clean = redact_keys(message)
+        if clean != message:
+            record.msg, record.args = clean, None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = redact_keys(
+                logging.Formatter().formatException(record.exc_info))
+        return record
+
+    factory._jobscout_scrubs = True
+    logging.setLogRecordFactory(factory)
+
+
+_install_log_scrubber()
 
 
 def gemini_client(explicit: str = None):

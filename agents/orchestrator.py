@@ -35,6 +35,8 @@ except ImportError:
 # Add project root to path (parent of agents/)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# `redact_keys` is re-exported for the API's error responses (R117).
+from config import key_in_use, redact_keys  # noqa: F401
 from tools.paths import outputs_root, stored_path
 from tools.profile import load_profile
 # Re-exported for both views: the largest `years_experience` the schema takes,
@@ -448,6 +450,12 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
         run_id = registry.create(profile_name)
 
     def worker():
+        # The key is scrubbed from every log line and run record for as long
+        # as the run holds it (R117).
+        with key_in_use(api_key):
+            _run_worker()
+
+    def _run_worker():
         registry = _registry(user_id)
         try:
             orchestrator = JobScoutOrchestrator(

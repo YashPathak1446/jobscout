@@ -6,14 +6,26 @@ import { Check } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { AboutYouStep } from '@/components/steps/AboutYouStep'
+import { KeyStep } from '@/components/steps/KeyStep'
 import { PreferencesStep } from '@/components/steps/PreferencesStep'
 import { ResumeStep } from '@/components/steps/ResumeStep'
 import { RunStep } from '@/components/steps/RunStep'
 import { TuningStep } from '@/components/steps/TuningStep'
 import { api, type ProfileSummary } from '@/lib/api'
+import { forgetKey, loadKey, saveKey } from '@/lib/keyStore'
 import { cn } from '@/lib/utils'
 
-export const STEPS = ['Resume', 'About you', 'Preferences', 'Tuning', 'Run'] as const
+// The key comes first because the resume step is the first thing it is used
+// for: an import reads a PDF or Word file with Gemini only when the request
+// carries a key (R117).
+export const STEPS = [
+  'Key',
+  'Resume',
+  'About you',
+  'Preferences',
+  'Tuning',
+  'Run',
+] as const
 
 export function Wizard({
   profile,
@@ -31,9 +43,23 @@ export function Wizard({
   const [profiles, setProfiles] = useState<string[] | null>(null)
   const [profileLimit, setProfileLimit] = useState<number | null>(null)
   const [summary, setSummary] = useState<ProfileSummary | null>(null)
-  // Never persisted, here or on the server: it is passed to the pipeline
-  // for the run and forgotten.
-  const [apiKey, setApiKey] = useState('')
+  // Kept in this browser only (R117): the server uses it for one request or
+  // run and forgets it. Read once, at mount, through the guarded store.
+  const [stored] = useState(loadKey)
+  const [apiKey, setApiKey] = useState(stored.key)
+  // False when storage threw: the key then lasts for this page only, and the
+  // key page says so instead of claiming a save it did not make.
+  const [persisted, setPersisted] = useState(stored.persisted)
+
+  function changeKey(key: string) {
+    setApiKey(key)
+    setPersisted(saveKey(key))
+  }
+
+  function forget() {
+    setApiKey('')
+    setPersisted(forgetKey())
+  }
 
   useEffect(() => {
     api
@@ -101,6 +127,16 @@ export function Wizard({
       </nav>
 
       {step === 0 && (
+        <KeyStep
+          apiKey={apiKey}
+          persisted={persisted}
+          onKey={changeKey}
+          onForget={forget}
+          onContinue={() => go(1)}
+        />
+      )}
+
+      {step === 1 && (
         <>
           {/* profiles === null is "still asking", not "you have none". The
               two look identical on screen and mean opposite things, which is
@@ -115,16 +151,17 @@ export function Wizard({
             <ResumeStep
               profiles={profiles}
               profileLimit={profileLimit}
+              apiKey={apiKey}
               onSkipAhead={(name) => {
                 onProfile(name)
                 setSummary(null)
-                go(4)
+                go(5)
               }}
               onProfileReady={(name, built) => {
                 onProfile(name)
                 setSummary(built)
                 setProfiles((p) => (p?.includes(name) ? p : [...(p ?? []), name]))
-                go(1)
+                go(2)
               }}
             />
           )}
@@ -132,35 +169,25 @@ export function Wizard({
         </>
       )}
 
-      {step === 1 && profile && (
-        <AboutYouStep
-          profile={profile}
-          apiKey={apiKey}
-          onKey={setApiKey}
-          onBack={() => setStep(0)}
-          onContinue={() => go(2)}
-        />
-      )}
-
-      {step === 1 && !profile && (
-        <Alert>
-          <AlertTitle>No profile yet</AlertTitle>
-          <AlertDescription>
-            Go back to step one and pick or build one.
-          </AlertDescription>
-        </Alert>
-      )}
-
       {step === 2 && profile && (
-        <PreferencesStep
+        <AboutYouStep
           profile={profile}
           onBack={() => setStep(1)}
           onContinue={() => go(3)}
         />
       )}
 
+      {step === 2 && !profile && (
+        <Alert>
+          <AlertTitle>No profile yet</AlertTitle>
+          <AlertDescription>
+            Go back to the Resume step and pick or build one.
+          </AlertDescription>
+        </Alert>
+      )}
+
       {step === 3 && profile && (
-        <TuningStep
+        <PreferencesStep
           profile={profile}
           onBack={() => setStep(2)}
           onContinue={() => go(4)}
@@ -168,15 +195,23 @@ export function Wizard({
       )}
 
       {step === 4 && profile && (
+        <TuningStep
+          profile={profile}
+          onBack={() => setStep(3)}
+          onContinue={() => go(5)}
+        />
+      )}
+
+      {step === 5 && profile && (
         <RunStep
           profile={profile}
           apiKey={apiKey}
-          onBack={() => setStep(3)}
+          onBack={() => setStep(4)}
           onOpenBoard={onOpenBoard}
         />
       )}
 
-      {step > 2 && !profile && (
+      {step > 3 && !profile && (
         <div className="space-y-4">
           <Alert>
             <AlertTitle>{STEPS[step]} is not built yet</AlertTitle>

@@ -333,13 +333,15 @@ def to_schema(text: str, agent=None) -> dict:
             logger.warning(f"Resume extraction failed — {exc}. "
                            "Reading the resume by pattern instead, which will "
                            "find less. Fixing the cause is worth it.")
-            from config import ApiKeyProblem
+            from config import ApiKeyProblem, redact_keys
             if isinstance(exc, ApiKeyProblem):
                 why = f"{exc} The resume was read by pattern instead."
             else:
+                # Scrubbed before it is cut (R117): a key cut in half by the
+                # slice would no longer match, and half a key is still a leak.
                 why = (f"The model could not be reached ({type(exc).__name__}: "
-                       f"{str(exc)[:160]}), so the resume was read by pattern "
-                       "instead.")
+                       f"{redact_keys(str(exc))[:160]}), so the resume was read "
+                       "by pattern instead.")
 
         # Judged outside the `try`: a reply that arrived and was unusable is
         # not a model that could not be reached, and must not be reported as

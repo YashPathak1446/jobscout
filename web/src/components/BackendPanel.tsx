@@ -62,11 +62,8 @@ export function BackendPanel({
           onChange={(e) => onKey(e.target.value)}
           className="max-w-md"
         />
-        <p className="text-sm text-muted-foreground">
-          Stays on this machine and is passed straight to the pipeline. Free at
-          aistudio.google.com/app/apikey. Without one, JobScout still finds and
-          scores jobs and builds a resume per posting.
-        </p>
+        {/* Where the key is kept, and what it does and does not change, is
+            said once, by the key page around this panel (R117). */}
       </div>
 
       {/* There is a key and it cannot be sent (R101). Said before the rung,

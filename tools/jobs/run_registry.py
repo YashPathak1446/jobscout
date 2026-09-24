@@ -30,6 +30,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from config import redact_keys
 from tools import paths
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,10 @@ class RunRegistry:
 
     # -- writing --------------------------------------------------------------
 
+    # Every text column is scrubbed of any key in use (R117): a progress
+    # message, a result and an error all carry exception text, which is not
+    # ours to vouch for, and this table is read back to the browser.
+
     def create(self, profile: str) -> str:
         """Register a run before it starts. Returns its id."""
         run_id = uuid.uuid4().hex[:12]
@@ -110,7 +115,8 @@ class RunRegistry:
             self._db.execute(
                 "UPDATE runs SET state='running', stage=?, done=?, total=?,"
                 " message=?, updated_at=? WHERE id=?",
-                (stage, int(done), int(total), message, _now(), run_id))
+                (stage, int(done), int(total), redact_keys(message), _now(),
+                 run_id))
             self._db.commit()
 
     def finish(self, run_id, result=None, output_dir=None) -> None:
@@ -126,8 +132,8 @@ class RunRegistry:
             self._db.execute(
                 "UPDATE runs SET state='finished', result=?, output_dir=?,"
                 " updated_at=?, finished_at=? WHERE id=?",
-                (json.dumps(result or {}), str(output_dir or ""), stamp,
-                 stamp, run_id))
+                (redact_keys(json.dumps(result or {})), str(output_dir or ""),
+                 stamp, stamp, run_id))
             self._db.commit()
 
     def fail(self, run_id, error: str) -> None:
@@ -135,7 +141,7 @@ class RunRegistry:
         with self._lock:
             self._db.execute(
                 "UPDATE runs SET state='failed', error=?, updated_at=?,"
-                " finished_at=? WHERE id=?", (str(error)[:2000], stamp,
+                " finished_at=? WHERE id=?", (redact_keys(str(error))[:2000], stamp,
                                               stamp, run_id))
             self._db.commit()
 

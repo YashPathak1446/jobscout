@@ -248,7 +248,8 @@ def save_resume(user_id, file_bytes: bytes, filename: str, backend: str = None) 
     return save_extracted(extracted["schema"], extracted["source"])
 
 
-def extract_resume(user_id, file_bytes: bytes, filename: str, backend: str = None) -> dict:
+def extract_resume(user_id, file_bytes: bytes, filename: str, backend: str = None,
+                   gemini_key: str = None) -> dict:
     """
     Read an upload far enough to show it, without committing to anything.
 
@@ -274,7 +275,22 @@ def extract_resume(user_id, file_bytes: bytes, filename: str, backend: str = Non
     the pipeline and not the import, so the row labelled `none` imported
     through Gemini, and nothing anywhere recorded which rung had read the
     resume — so nothing could contradict it (R83).
+
+    `gemini_key` is the key the request carries (R117). A hosted import reads
+    no key from the environment (R113), so without it every PDF or Word
+    upload is read by pattern. A key that cannot be sent is **refused**
+    (`ApiKeyProblem`, a `ValueError`, with R101's message) rather than
+    quietly read by pattern: the person is here, and the fix is theirs. The
+    key is scrubbed from every log line and message while it is in use.
     """
+    from config import key_in_use
+
+    with key_in_use(gemini_key):
+        return _extract_resume(user_id, file_bytes, filename, backend, gemini_key)
+
+
+def _extract_resume(user_id, file_bytes, filename, backend, gemini_key) -> dict:
+    from config import ApiKeyProblem, gemini_key_problem, redact_keys
     from tools.generation import llm_backends
     from tools.resume import resume_import
 
@@ -291,6 +307,11 @@ def extract_resume(user_id, file_bytes: bytes, filename: str, backend: str = Non
     if kind == "tex":
         return {"kind": "latex", "path": source, "rung": None}
 
+    # After the LaTeX return, which needs no key, and before any text is read.
+    problem = gemini_key_problem(gemini_key)
+    if problem:
+        raise ApiKeyProblem(problem)
+
     text = resume_import.extract_text(source)
 
     # Resolved here rather than inside `complete_json` so the rung can be
@@ -302,9 +323,13 @@ def extract_resume(user_id, file_bytes: bytes, filename: str, backend: str = Non
     # with one positional argument, and three test modules pass one-argument
     # callables. Binding the rung to the callable keeps that contract exactly
     # as it was instead of asking every caller to be updated in step.
-    chosen = llm_backends.effective_backend(backend)
+    chosen = llm_backends.effective_backend(backend, gemini_key=gemini_key)
     schema = resume_import.to_schema(
-        text, agent=partial(llm_backends.complete_json, backend=chosen))
+        text, agent=partial(llm_backends.complete_json, backend=chosen,
+                            gemini_key=gemini_key))
+    extraction = schema.get("_extraction") or {}
+    if extraction.get("why"):
+        extraction["why"] = redact_keys(extraction["why"])
 
     # Three outcomes, not two.
     #
