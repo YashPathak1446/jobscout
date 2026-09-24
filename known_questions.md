@@ -13201,6 +13201,43 @@ as it is. The image installs from `requirements.txt`; a `pip install
 These change what is ranked or excluded, so they are scoring changes to
 measure, not UI fixes.
 
+## Q85. A run executes in the web server's own process, so a heavy step freezes the site for everyone
+
+**Status:** Open, logged 2026-09-24 at the author's request after the live
+freeze (R130). **Plan it together with the shared job index; do not build it
+now.** The shared job index is not yet written down in this log or the plan;
+this entry is to be planned alongside it when it is.
+
+**What R130 showed.** `start_run` runs the pipeline in a thread of the
+uvicorn process (a deliberate choice: callers see only a run id, so swapping
+it later changes nothing above). Python threads share one interpreter lock:
+- a step that holds it (a regex, some C extensions) or that hogs the CPU
+  (parsing, embedding a board, `pdflatex` output handling) starves every
+  request thread;
+- signal handling runs only in the main thread, so the process cannot even
+  shut down cleanly while that step runs.
+
+One user's run froze the site for every user. R130 fixed the one regex; the
+class remains.
+
+**The fix: run the pipeline in a separate process.** What has to be decided:
+- **Process or worker.** One subprocess per run, started by `start_run`, or
+  a long-lived worker process with a queue. The run registry (`runs.db`,
+  per user) already carries progress on disk, so the web process only reads
+  it. That part survives either way.
+- **Cancellation and the reaper.** A child process can be killed, which a
+  thread cannot. R120's heartbeat and startup sweep move from "thread
+  alive" to "process alive".
+- **Keys.** R113's request-carried key currently lives in memory for the
+  run (`key_in_use`). Handing it to a child without writing it to disk or
+  putting it on a command line is a design point on its own.
+- **Memory on a 1 GB machine.** A second Python process with the embedding
+  model loaded costs memory. Q75 already found five first runs loading it
+  five times. The worker model loads it once.
+- **The shared job index.** If discovery moves to a shared index across
+  users, the worker is where it is refreshed. That is why the two are
+  planned together.
+
 ---
 
 # Out of scope
