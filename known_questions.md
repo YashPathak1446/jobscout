@@ -10885,6 +10885,54 @@ with a fake DSN and a capturing transport; nothing is sent. The scenarios:
 Reverting either change alone fails two tests, each time the `/api/run`
 scenario and the one that change covers.
 
+## R127. One posting found under two letter cases was two jobs and got two resumes
+
+**Decided 2026-09-24**, from a pilot board.
+
+**What was seen.** SmartRecruiters served one Experian posting as both
+`jobs.smartrecruiters.com/experian/...` and `jobs.smartrecruiters.com/Experian/...`.
+Discovery deduplicated on the raw apply URL, and the store keys on it
+(`url TEXT PRIMARY KEY`), so both reached the board and both got a resume.
+
+**The fix: compare by `job_store.url_key`, store as found.**
+- `url_key` lowercases scheme, host and path. The query and fragment keep
+  their case, because an `?id=` or `?gh_jid=` value is an identifier.
+- Discovery's in-run dedup (`_deduplicate_and_add`) keys on it, so one run
+  keeps the first case it met.
+- `JobStore.record` finds an existing row by it (`_find`), so a later run in
+  the other case updates that row rather than adding one.
+- Discovery then gives each job the URL the board stores it under
+  (`stored_url`). Every later write — score, resume, status — is keyed by
+  that URL; without this the job would be processed under a URL with no row,
+  and its score would land nowhere.
+- The stored and displayed URL is the one first found. Nothing is rewritten.
+
+**Existing boards.** Nothing is deleted. A board that already holds both
+copies keeps both; each still answers to its own URL, and a third case
+updates the first-seen copy instead of adding a row. What is left on those
+boards is Q82.
+
+**Rejected.**
+- *A migration that merges existing pairs.* It would have to choose whose
+  status, score and resume survive, and a status belongs to the user.
+- *Lowercasing the whole URL.* Folds query identifiers.
+- *Lowercasing the stored URL.* Changes what the user clicks, and makes every
+  existing row a stranger to its own key.
+
+**If the rule is wrong**, two genuinely different postings whose paths differ
+only in case would be merged, and the second would never reach the board.
+No ATS we query is known to do that: Greenhouse and Lever ids are numeric or
+lowercase UUIDs, and Ashby's are lowercase UUIDs.
+
+**Cost.** One indexed lookup per discovered job (`idx_jobs_url_lower`, an
+expression index SQLite builds on first open). `lower()` narrows, `url_key`
+decides, because SQLite's `lower()` also folds the query.
+
+**Tests** (`test_url_case_dedup.py`), on the Experian pair: the key, the store
+in both orders and in one batch, a query differing in case staying two jobs,
+a pre-R127 board with both copies gaining no third, and a discovery run end
+to end on Priya's profile. Without the fix the module does not import.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

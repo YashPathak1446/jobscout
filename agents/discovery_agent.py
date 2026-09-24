@@ -146,6 +146,12 @@ class DiscoveryAgent:
         logger.info(f"   Job store: {recorded['added']} new, "
                     f"{recorded['updated']} already known")
 
+        # A posting found under a different letter case than the board holds
+        # it is the board's job (R127). Every later write — score, resume,
+        # status — is keyed by the stored URL, so the job carries that one.
+        for job in filtered_jobs:
+            job.apply_url = store.stored_url(job.apply_url) or job.apply_url
+
         # The pipeline still only *works* on jobs it has not scored, so a
         # second run does not pay to analyse and generate the same postings.
         # The difference from before is that skipping is no longer forgetting:
@@ -312,8 +318,11 @@ class DiscoveryAgent:
         """
         added = 0
         for job in jobs:
-            if job.apply_url not in self.seen_urls:
-                self.seen_urls.add(job.apply_url)
+            # By `url_key`, not the raw URL: SmartRecruiters serves one
+            # posting under two cases of the company slug (R127).
+            key = _job_store.url_key(job.apply_url)
+            if key not in self.seen_urls:
+                self.seen_urls.add(key)
                 self.all_jobs.append(job)
                 added += 1
         return added
