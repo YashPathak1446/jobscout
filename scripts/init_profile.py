@@ -276,22 +276,25 @@ def extract_resume(user_id, file_bytes: bytes, filename: str, backend: str = Non
     resume — so nothing could contradict it (R83).
     """
     from tools.generation import llm_backends
-    from tools.resume import resume_import, tex_renderer
+    from tools.resume import resume_import
+
+    # By file type, before anything is written (R116): the extension, checked
+    # against the file's own first bytes. A PDF or Word upload is imported as
+    # one whatever its text says; only a .tex upload is kept as LaTeX.
+    kind = resume_import.classify_upload(file_bytes, filename)
 
     resumes = resume_dir(user_id)
     resumes.mkdir(parents=True, exist_ok=True)
     source = resumes / Path(filename).name
     source.write_bytes(file_bytes)
 
-    if source.suffix.lower() == ".tex":
+    if kind == "tex":
         return {"kind": "latex", "path": source, "rung": None}
 
     text = resume_import.extract_text(source)
-    if tex_renderer.looks_like_latex(text):
-        return {"kind": "latex", "path": source, "rung": None}
 
     # Resolved here rather than inside `complete_json` so the rung can be
-    # reported, and deliberately *below* the two LaTeX returns: a `.tex` upload
+    # reported, and deliberately *below* the LaTeX return: a `.tex` upload
     # needs no model, and resolving at the top would have it probing for a
     # local Ollama to answer a question nobody asked.
     #

@@ -14,9 +14,11 @@ Design notes:
   pass one emits a PDF with no outline and the log says "Rerun to get outlines
   right". We do what latexmk does: parse the log, run again only if asked.
   Typical cost is one extra ~0.7s pass.
-- **cwd = the .tex directory.** Simpler than -output-directory, and it makes
-  \\input{glyphtounicode} resolve the same way it does when you compile by
-  hand.
+- **Each compile runs in a fresh temporary directory** holding only that
+  job's .tex, with the engine's file and shell settings set in code (R116).
+  The PDF is copied back beside the .tex; byproducts only with `keep_aux`.
+  `\\input{glyphtounicode}` still resolves, because it comes from the TeX
+  tree, not the working directory.
 - **MiKTeX gets --enable-installer.** A basic MiKTeX install lacks titlesec
   and marvosym, which this template needs. Without the flag MiKTeX pops a GUI
   prompt and the subprocess hangs until the timeout. With it, the first
@@ -26,9 +28,11 @@ Location: jobscout_v3/tools/generation/pdf_builder.py
 """
 
 import logging
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -39,6 +43,28 @@ logger = logging.getLogger(__name__)
 # A cold MiKTeX install downloads missing packages on the first compile, which
 # can genuinely take a minute. Steady-state compiles are ~1s.
 COMPILE_TIMEOUT_SECONDS = 180
+
+# The engine's file and shell settings for every compile, in code rather than
+# in the image's configuration (R116). TeX Live reads these from the
+# environment (kpathsea): `p` is "paranoid", which keeps reads and writes to
+# the working directory and the TeX tree, and `f` turns shell escape off.
+# MiKTeX does not read them; for it the command-line flag below does the work.
+SANDBOX_ENV = {"openin_any": "p", "openout_any": "p", "shell_escape": "f"}
+
+# Shell escape off, in each engine's spelling. Passed whatever the
+# environment says, because MiKTeX ignores the environment.
+NO_SHELL_ESCAPE = {"texlive": "-no-shell-escape", "miktex": "--disable-write18"}
+
+
+def sandbox_env() -> dict:
+    """A copy of this process's environment with the sandbox settings applied."""
+    env = dict(os.environ)
+    env.update(SANDBOX_ENV)
+    # TEXMFOUTPUT widens where a paranoid engine may read and write; a
+    # compile must not inherit one from whoever started the server.
+    env.pop("TEXMFOUTPUT", None)
+    return env
+
 
 # Byproducts pdflatex leaves next to the .pdf. Removed after a compile so the
 # outputs directory holds only files worth looking at.
@@ -192,35 +218,85 @@ def compile_pdf(
     if flavor == 'miktex':
         cmd.append("--enable-installer")
 
+    # TeX Live's spelling for an unknown engine: it is the pdfTeX default.
+    cmd.append(NO_SHELL_ESCAPE.get(flavor, NO_SHELL_ESCAPE["texlive"]))
+
     cmd.append(tex_path.name)
 
-    log_path = tex_path.with_suffix('.log')
+    # A PDF left beside the .tex by an earlier compile would otherwise
+    # survive a failed one and sit next to a .tex it was not built from.
+    tex_path.with_suffix('.pdf').unlink(missing_ok=True)
+
+    # Each compile runs in a fresh directory holding only this job's .tex
+    # (R116), so nothing else in the run's folder is in reach of the engine.
+    with tempfile.TemporaryDirectory(prefix="jobscout-tex-") as scratch:
+        work = Path(scratch) / tex_path.name
+        shutil.copy2(tex_path, work)
+        result, proc_output = _compile_in(work, cmd, timeout)
+        if result is not None:
+            _bring_back(work, tex_path, keep_aux, pdf=False)
+            return result
+
+        log_path = work.with_suffix('.log')
+        built = work.with_suffix('.pdf')
+        log_excerpt = _read_log_excerpt(log_path)
+        pages = _read_page_count(log_path, built)
+        passes, returncode, fallback = proc_output
+
+        # Trust the artifact over the exit code: MiKTeX sometimes returns
+        # nonzero for warnings it recovered from, and a PDF means it did.
+        if built.exists():
+            if returncode != 0:
+                logger.warning(
+                    f"pdflatex exited {returncode} but produced a PDF: {tex_path.name}")
+            pdf_path = _bring_back(work, tex_path, keep_aux, pdf=True)
+            return PdfResult(status='ok', pdf_path=pdf_path, log_excerpt=log_excerpt,
+                             passes=passes, pages=pages)
+
+        _bring_back(work, tex_path, keep_aux, pdf=False)
+        return PdfResult(
+            status='failed',
+            error=f"pdflatex exited {returncode} with no PDF",
+            log_excerpt=log_excerpt or fallback or None,
+            passes=passes,
+        )
+
+
+def _compile_in(work: Path, cmd: List[str], timeout: int):
+    """
+    Run the passes in `work`'s directory, with the sandbox environment.
+
+    Returns (PdfResult, None) when the compile ended early (timeout, no
+    engine), else (None, (passes, returncode, output tail)).
+    """
+    log_path = work.with_suffix('.log')
     passes = 0
+    proc = None
 
     while passes < MAX_PASSES:
         passes += 1
         try:
             proc = subprocess.run(
                 cmd,
-                cwd=str(tex_path.parent),
+                cwd=str(work.parent),
+                env=sandbox_env(),
                 capture_output=True,
                 text=True,
                 errors='replace',         # LaTeX logs aren't reliably UTF-8
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired:
-            _cleanup_aux(tex_path, keep_aux)
             return PdfResult(
                 status='timeout',
                 error=f"pdflatex exceeded {timeout}s on pass {passes} and was killed",
                 passes=passes,
-            )
+            ), None
         except OSError as exc:
             return PdfResult(
                 status='failed',
                 error=f"Could not run pdflatex: {exc}",
                 passes=passes,
-            )
+            ), None
 
         # A failed pass won't be fixed by running it again.
         if proc.returncode != 0:
@@ -229,37 +305,28 @@ def compile_pdf(
         if not _needs_rerun(log_path):
             break
 
-        logger.debug(f"{tex_path.name}: log requested a rerun (pass {passes})")
-
-    pdf_path = tex_path.with_suffix('.pdf')
-    log_excerpt = _read_log_excerpt(log_path)
-    pages = _read_page_count(log_path, pdf_path)
-
-    # Trust the artifact over the exit code: MiKTeX sometimes returns nonzero
-    # for warnings it recovered from, and a PDF on disk means it recovered.
-    if pdf_path.exists():
-        if proc.returncode != 0:
-            logger.warning(
-                f"pdflatex exited {proc.returncode} but produced a PDF: {pdf_path.name}"
-            )
-        _cleanup_aux(tex_path, keep_aux)
-        return PdfResult(
-            status='ok',
-            pdf_path=pdf_path,
-            log_excerpt=log_excerpt,
-            passes=passes,
-            pages=pages,
-        )
+        logger.debug(f"{work.name}: log requested a rerun (pass {passes})")
 
     fallback = (proc.stdout or proc.stderr or "").strip()[-500:]
-    _cleanup_aux(tex_path, keep_aux)
+    return None, (passes, proc.returncode, fallback)
 
-    return PdfResult(
-        status='failed',
-        error=f"pdflatex exited {proc.returncode} with no PDF",
-        log_excerpt=log_excerpt or fallback or None,
-        passes=passes,
-    )
+
+def _bring_back(work: Path, tex_path: Path, keep_aux: bool, pdf: bool):
+    """
+    Copy what the caller keeps out of the scratch directory, next to the .tex:
+    the PDF when there is one, and the byproducts only when asked to keep
+    them. Returns the PDF's new path, or None.
+    """
+    if keep_aux:
+        for suffix in AUX_SUFFIXES:
+            produced = work.with_suffix(suffix)
+            if produced.exists():
+                shutil.copy2(produced, tex_path.with_suffix(suffix))
+    if not pdf:
+        return None
+    target = tex_path.with_suffix('.pdf')
+    shutil.copy2(work.with_suffix('.pdf'), target)
+    return target
 
 
 def _read_page_count(log_path: Path, pdf_path: Optional[Path] = None) -> int:
@@ -361,15 +428,3 @@ def _read_log_excerpt(log_path: Path, max_lines: int = 12) -> Optional[str]:
             return "\n".join(lines[i:i + max_lines]).strip()
 
     return None
-
-
-def _cleanup_aux(tex_path: Path, keep_aux: bool) -> None:
-    """Delete pdflatex byproducts sitting next to the .tex."""
-    if keep_aux:
-        return
-
-    for suffix in AUX_SUFFIXES:
-        try:
-            tex_path.with_suffix(suffix).unlink(missing_ok=True)
-        except OSError as exc:
-            logger.debug(f"Could not remove {tex_path.stem}{suffix}: {exc}")

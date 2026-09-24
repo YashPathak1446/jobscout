@@ -428,6 +428,14 @@ function Progress({ status }: { status: RunStatus }) {
           {/* Named, not hidden. A resume built from the owner's own bullets
               is a real outcome, and someone who is not told reads unchanged
               bullets as the tool having done nothing. */}
+          {/* A resume with no PDF cannot be submitted; it is in
+              needs_review, and the reason is named (R116). */}
+          {(status.result.pdf_problems?.length ?? 0) > 0 && (
+            <p className="text-destructive">
+              Some resumes have no PDF and were kept for review:{' '}
+              {status.result.pdf_problems?.join(', ')}.
+            </p>
+          )}
           {status.result.degraded?.length > 0 && (
             <p className="text-muted-foreground">
               Some resumes used your own bullets unchanged:{' '}

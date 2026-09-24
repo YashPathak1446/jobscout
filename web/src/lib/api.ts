@@ -139,6 +139,8 @@ export type RunStatus = {
     valid: number
     threshold: number | null
     degraded: string[]
+    /** Why some resumes have no PDF (R116). Absent on runs recorded earlier. */
+    pdf_problems?: string[]
   } | null
 }
 

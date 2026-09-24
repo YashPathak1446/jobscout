@@ -488,6 +488,10 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
                 # bullets are the user's own without reopening state.json.
                 "degraded": sorted({r["degraded"] for r in results
                                     if r.get("degraded")}),
+                # Why resumes have no PDF, carried out the same way (R116),
+                # so the run screen can say so instead of counting them valid.
+                "pdf_problems": sorted({r["pdf_problem"] for r in results
+                                        if r.get("pdf_problem")}),
             }, output_dir=getattr(orchestrator, "output_path", ""))
         except Exception as exc:                      # the worker owns nothing else
             logger.exception("Background run failed")
@@ -1749,6 +1753,16 @@ class JobScoutOrchestrator:
             # A run whose model never answered still produces resumes, in the
             # user's own words. That is a good floor and a bad surprise, so
             # the summary says it happened and why (R47).
+            # Resumes whose compile was tried and failed (R116). Each is in
+            # needs_review with its .tex, and has no PDF to submit.
+            no_pdf = [r for r in gen_results if r.get("pdf_problem")]
+            if no_pdf:
+                f.write(f"> ⚠️  **No PDF for {len(no_pdf)} of {len(gen_results)} "
+                        f"resume(s).** Each is kept as .tex in needs_review.\n>\n")
+                for reason in sorted({r["pdf_problem"] for r in no_pdf}):
+                    f.write(f"> - {reason}\n")
+                f.write("\n")
+
             degraded = [r for r in gen_results if r.get("degraded")]
             if degraded:
                 f.write(f"> ⚠️  **Bullets were not rewritten** for "

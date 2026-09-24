@@ -10114,6 +10114,80 @@ getting new screens. Correctness does not diverge, because the rules are in
 the facade; only features do. The local CLI stays the developer surface,
 per CLAUDE.md.
 
+## R116. Every compile runs with fixed engine settings in a fresh directory, and a resume with no PDF is never valid
+
+**Decided 2026-09-24.** Closes Q66's open finding (the compile step).
+
+**`pdf_builder.compile_pdf`:**
+- **An explicit environment.** A copy of `os.environ` with `openin_any=p`,
+  `openout_any=p` and `shell_escape=f` (`SANDBOX_ENV`), and `TEXMFOUTPUT`
+  removed so an inherited one cannot widen the paranoid settings. Set in
+  code, not in the image's configuration, so the Dockerfile's TeX package
+  cannot change them.
+- **Shell escape off by flag, in each engine's spelling**
+  (`NO_SHELL_ESCAPE`), beside the existing `--enable-installer` rule:
+  - TeX Live gets `-no-shell-escape`;
+  - MiKTeX gets `--disable-write18`;
+  - an unknown engine gets TeX Live's spelling, which is pdfTeX's own.
+
+  MiKTeX does not read the kpathsea variables, so on MiKTeX the flag is the
+  setting. **Not yet checked against MiKTeX 25.12**, because there is no
+  MiKTeX here. The author confirms it locally.
+- **A fresh temporary directory per compile,** holding only that job's
+  `.tex`. The PDF is copied back beside the `.tex`; byproducts only with
+  `keep_aux`. The directory is removed however the compile ends. A PDF
+  already beside the `.tex` is deleted first, so a failed compile cannot
+  leave an older PDF next to a new `.tex`.
+
+**A resume with no PDF is never `valid`.** `compile_pdf` already returned
+`timeout` or `failed`. Generation used the status from content validation
+alone, so such a resume was reported valid, with no PDF and no reason.
+- `GenerationAgent._pdf_problem` words the reason, and a resume whose
+  attempted compile produced nothing moves to `needs_review`.
+- `skipped` (no engine on the machine) is not a problem with a resume and
+  is already stated once for the run.
+- The reason flows the way `degraded` does: `pdf_problem` on each result,
+  `pdf_problems` in the run registry's result, a "No PDF for N of M"
+  section in `summary.md`, and a line on React's run screen. Streamlit is
+  unchanged (R115).
+
+**Uploads are classified by file type** (`resume_import.classify_upload`).
+The extension decides the kind, and the file's own bytes must agree: `%PDF-`
+in a PDF's first kilobyte, a zip header for `.docx`, and neither for `.tex`
+or `.txt`. A mismatch or an unknown extension is refused with a reason.
+`extract_resume` no longer asks whether a PDF's or Word file's *text* looks
+like LaTeX. Before, such an upload was kept and later compiled as LaTeX,
+which was Q66's last unverified item.
+
+**Timeout.** It stays 180 s, the value chosen for MiKTeX's first-run
+package download. It still ends only the direct child process. A
+process-group or job-object kill was raised earlier and is not in this
+change. With shell escape off, the TeX Live engine starts no children;
+MiKTeX's on-demand package installer might, and a Windows run should
+check for that.
+
+**Tests** (`test_compile_sandbox.py`, 11; the subprocess is mocked, so
+they are engine-independent):
+- the environment carries the three settings and drops `TEXMFOUTPUT`;
+- each engine gets its own flag, and only MiKTeX gets `--enable-installer`;
+- two compiles get two fresh directories, each holding only the job's
+  `.tex`, and both are removed afterwards;
+- the PDF comes back beside the `.tex`, and the run folder's other files
+  are untouched;
+- a timeout is reported and leaves no stale PDF;
+- generation words each outcome;
+- a mock-mode pipeline on Rohan whose compiles time out produces no
+  `valid` resume, and its summary names the reason;
+- the reason reaches the run record and the run screen;
+- uploads are classified by type, and a PDF whose text looks like LaTeX is
+  imported as a PDF;
+- **Priya and Rohan still compile**, each to one page, wherever an engine
+  is installed. They were run here with TeX Live 2023 and the Dockerfile's
+  packages; the test skips, saying why, where no engine exists.
+
+Reverting any one of `pdf_builder`, generation, the importer or the
+orchestrator fails at least one test.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -11760,8 +11834,8 @@ needs a Docker build to verify, and this container has no daemon.
 
 ## Q66. Where a user's or a posting's string becomes a path or LaTeX: the audit
 
-**Status:** Open for one finding (2 below, the TeX sandbox, which the author
-is handling separately). Audited 2026-09-24. **Verified** means reproduced
+**Status:** All four findings fixed: R111, R112, R113, and R116 for the
+compile step (2 below). The MiKTeX flag is still to be confirmed locally. Audited 2026-09-24. **Verified** means reproduced
 here; **reasoned** means read from the code.
 
 ### Findings, most serious first
