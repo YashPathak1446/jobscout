@@ -13238,6 +13238,22 @@ class remains.
   users, the worker is where it is refreshed. That is why the two are
   planned together.
 
+## Q86. The speedyapply new-grad list moved to HTML tables, so it now yields no jobs
+
+**Status:** Open, found 2026-09-24 while diagnosing R130.
+
+`github_search` reads two README sources. speedyapply's `NEW_GRAD_USA.md`
+now writes its rows as HTML (`<a href="..."><strong>Adobe</strong></a> |
+... | <a href="...">` apply image), not markdown links. The parser expects
+`[Title](url)`, so all 499 rows are skipped. Since R130 that is quick;
+before, it was the freeze. The source contributes nothing, silently: the run
+log says nothing about a source that parsed to zero.
+
+To decide: parse the HTML shape (company in `<strong>`, the apply link in
+the posting cell's `href`), or drop the source. Either way, **a source that
+returns zero rows from a non-empty page should say so in the run log**. A
+format change is exactly what that line would have caught.
+
 ---
 
 # Out of scope
