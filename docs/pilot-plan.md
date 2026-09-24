@@ -1220,6 +1220,9 @@ instance `none` is what it runs anyway). Seed the volume with Priya's fixture at
 `/data/data/master_resumes/priya_raghunathan.{tex,pdf}` — the doubled `data/` is
 real. Then invite.
 
+**The runbook is [`docs/deploy-runbook.md`](deploy-runbook.md):** the commands in
+order, the acceptance steps, rollback, and every environment variable.
+
 **Deploy checklist, before the invite:**
 - **No LLM keys as Fly secrets during the pilot.** `fly secrets list` shows
   none of `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`,
