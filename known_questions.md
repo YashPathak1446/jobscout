@@ -12884,6 +12884,32 @@ Streamlit does. Per R115 it does nothing: it stays as it is.
 **Constraint from R114:** it is the paid product's layout, so it is built
 once and for React, after the pilot shows what friends actually open.
 
+## Q80. The ATS module promises that API-sourced jobs skip scraping; enrichment scrapes them all
+
+**Status:** Open, found 2026-09-24 while diagnosing R124. A scoring change,
+so it needs measuring before it is built.
+
+`tools/search/ats_search.py`'s docstring says "The JD comes with the job.
+Greenhouse honours `?content=true` and Ashby returns `descriptionPlain`, so
+discovery and enrichment collapse into one call ... ATS-sourced jobs skip it
+entirely." Enrichment has never done that: it scrapes every job's page, and
+since R124 uses the API text only when the scrape fails.
+
+**Doing what the docstring says** would:
+- remove the slowest, most breakable stage for every Greenhouse and Ashby
+  job;
+- remove a request per job from the instance's egress;
+- stop depending on page formats that change.
+
+**It would also change the text every such job is scored on** (API plain
+text instead of cleaned page HTML), and so every score. By R67's practice
+that is measured by replaying the same corpus both ways and reading the top
+10, before and after.
+
+**Until then, the docstring is a claim the code does not keep:** correct it,
+or build it. Lever, Workable and SmartRecruiters need checking separately.
+SmartRecruiters' listing call carries no description at all.
+
 ---
 
 # Out of scope
