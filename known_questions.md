@@ -13305,6 +13305,67 @@ the posting cell's `href`), or drop the source. Either way, **a source that
 returns zero rows from a non-empty page should say so in the run log**. A
 format change is exactly what that line would have caught.
 
+## Q87. Every GitHub-sourced job links to jobright.ai; matching them to the ATS copy would reach 4.5% of them
+
+**Status:** Open, diagnosed 2026-09-24 alongside R131. Nothing built, and no
+jobright.ai page was fetched.
+
+**Measured** (today's lists, through the real `search_github_newgrad`):
+- **646 of 646** GitHub listings (100%) link to `jobright.ai`. speedyapply
+  gives zero (Q86), so the jobright list is now the whole source.
+- Discovery asks for 200 (`_search_github`, `max_results=200`), and **all
+  200** are jobright links.
+- They name **350 distinct companies**. Only **29 rows (4.5%), from 4
+  companies**, are companies in the shipped ATS list
+  (`tools/assets/ats_companies.json`): Palantir 25, Nuro 2, Stripe 1,
+  Ramp 1. That is a company-name match (lowercased, punctuation stripped,
+  a trailing Inc/Technologies/AI dropped).
+- A user's learned slugs cannot add to that, because `harvest_slugs` learns
+  from apply URLs on an ATS host. A jobright link never names one.
+
+**Not measured: whether the same *title* is in that run's ATS listings.**
+This container's network policy refuses Greenhouse, Ashby and Lever. The
+29 is a ceiling: no row outside those four companies can match whatever the
+titles say. To measure it on the live instance, keep `search_ats`'s
+role-filtered listings from before the cap. Then count the jobright rows
+whose company, title and location key appears there exactly once.
+
+**The proposal: match on company plus normalized title, plus location.**
+Company and title alone are not a key:
+- Within the jobright list, **45 company+title pairs occur more than once
+  (117 rows)**. Palantir lists "Software Engineer, New Grad - Defense" in
+  Palo Alto, Washington and New York.
+- On company+title alone, one ATS posting would be attached to several
+  jobright rows, or the wrong city's requisition to each.
+
+The false-match risks that remain with location added:
+- **Loose normalization.** Stripping "(2026)", "- New Grad" or a team suffix
+  to make titles meet also makes "Software Engineer" at a large company match
+  several requisitions. Normalize case, punctuation and whitespace only, and
+  require exactly one ATS candidate. Zero or two or more candidates means no
+  match.
+- **A different requisition, same title and city.** Rare, but the result is
+  a resume tailored to the wrong posting's text, which the user cannot see.
+- **The ATS copy is gone.** jobright can list a stale posting. No match is
+  then the right answer, and the row stays unreadable (R131 sorts it last).
+
+**Where it would have to run.** `search_ats` role-filters, caps at 200 and
+discards the rest. The match needs the role-filtered set before the cap, so
+it belongs inside `search_ats` (or needs that set returned). It cannot
+match against the board afterwards.
+
+**What it would actually buy.** Those four companies are already queried
+as ATS boards, so a matched ATS copy is most likely already on the board as
+its own readable row. For them the match is **deduplication**, not rescue.
+The other 95.5% (617 rows, 346 companies) have no ATS board to match against.
+
+**Levers worth weighing against it:**
+1. Stop unreadable postings taking a run's candidate slots. Rank readable
+   ones first in discovery's cut, as R131 does on the board.
+2. Grow the ATS list with the companies jobright names. Probing a board slug
+   from a company name is a guess, with its own false-match risk. It is a
+   list edit, not a matcher.
+
 ---
 
 # Out of scope
