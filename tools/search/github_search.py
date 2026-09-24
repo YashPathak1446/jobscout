@@ -42,6 +42,33 @@ def _is_continuation(cell: str) -> bool:
     return cell.strip().strip('*').strip().lower() in _CONTINUATION_MARKERS
 
 
+def _table_rows(pattern, content: str):
+    """
+    Each table line that `pattern` matches, matched **one line at a time**
+    (R130).
+
+    The pattern's negated classes (`[^\\]|]+`, `[^)]*`, `[^|]*`) also match
+    newlines. Run with `finditer` over the whole document, a row that did not
+    match did not fail at its own line end: it ran on through the rest of the
+    document before backtracking, from every line start. speedyapply's list
+    moved to HTML tables (`<a href=...>`), so none of its 499 rows matches,
+    and the parse did not finish in 90 seconds on 157 KB. It runs in a run's
+    worker thread, and `re` holds the interpreter lock while it matches, so
+    the whole web server froze with it and could not handle SIGINT/SIGTERM.
+    That was the live freeze blamed on R127. A match is confined to its line
+    here, which is all a table row ever was.
+    """
+    for line in content.splitlines():
+        # The row's title cell must be a markdown link, so a line without
+        # "](" cannot match. Skipped before the regex runs, because even
+        # within one line the pattern backtracks: 2.4 ms per HTML row, over a
+        # second for speedyapply's list, with the interpreter lock held.
+        if line.startswith("|") and "](" in line:
+            match = pattern.match(line)
+            if match:
+                yield match
+
+
 def search_github_newgrad(max_results: int = 50) -> list[JobListing]:
     """
     Scrape curated new grad job lists from GitHub repos.
@@ -103,7 +130,7 @@ def search_github_newgrad(max_results: int = 50) -> list[JobListing]:
             # employer for the rows that follow it.
             last_company = None
 
-            for match in table_row.finditer(content):
+            for match in _table_rows(table_row, content):
                 company = match.group(1).strip().strip('*').strip()
                 title = match.group(3).strip().strip('*').strip()
                 apply_url = match.group(4).strip()

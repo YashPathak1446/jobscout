@@ -10887,6 +10887,10 @@ scenario and the one that change covers.
 
 ## R127. One posting found under two letter cases was two jobs and got two resumes
 
+**Not the cause of the live freeze first attributed to it (R130, 2026-09-24):**
+its paths are milliseconds at 2,500 listings; the freeze was the GitHub
+parser. Kept, not reverted.
+
 **Decided 2026-09-24**, from a pilot board.
 
 **What was seen.** SmartRecruiters served one Experian posting as both
@@ -10991,6 +10995,67 @@ setup", on a copy of Priya's profile:
 - "San Francisco" and "New York" (Enter), and "North Carolina" as a priority
   state, each saved as a single entry;
 - "Austin", typed without Enter before Save, was saved too.
+
+## R130. The live freeze was the GitHub parser backtracking across a whole README, not R127
+
+**Decided 2026-09-24.** The freeze was attributed to R127 because it
+appeared on R127's release after a full run had worked on v4. This finds
+the cause elsewhere, fixes it, and keeps R127.
+
+**What was seen.** On the live instance, after ATS returned 2,259 listings,
+the run froze at "🐙 Searching GitHub new grad repos...". The whole server
+stopped responding, ignored SIGINT and SIGTERM, and had to be killed.
+
+**R127 measured, not the cause.** At about 2,500 listings over a board of
+2,500:
+- dedup by `url_key`: 26 ms for 5,000;
+- `store.record`: 24-43 ms;
+- 2,500 `stored_url` lookups: 17-63 ms.
+
+The store paths also run *after* the GitHub search in `discover_jobs`, so
+they had not started when the freeze began. Only the dedup key had run, and
+it is linear.
+
+**The cause: `github_search`'s table regex over the whole document.**
+- `search_github_newgrad` ran one `re.MULTILINE` pattern with `finditer`
+  over each README. Its negated classes (`[^\]|]+`, `[^)]*`, `[^|]*`) also
+  match newlines, so a row that did not match did not fail at its own line
+  end. It ran on through the rest of the document before backtracking, from
+  every line start.
+- speedyapply's `NEW_GRAD_USA.md` has moved to HTML tables (`<a href=...>`,
+  499 rows, 157 KB), so none of its rows matches and every attempt takes the
+  slow path. Fetched from here, the parse **did not finish in 90 seconds**.
+  A traceback dump caught it in `finditer`, at `github_search.py` line 106.
+- `re` holds the interpreter lock while it matches. It ran in the run's
+  worker thread, so the main thread never got to run its signal handlers,
+  and every request stalled with it.
+- The parser has not changed since R67. The list's format changed between
+  the v4 run and the R127 run, not the code.
+
+**The fix.** `_table_rows` matches the same pattern one line at a time. It
+first skips any line without `](`, since a row's title cell must be a
+markdown link.
+- Today's two READMEs parse in 8 ms, down from never; the HTML list yields
+  no rows, as before.
+- On the jobright list the parser the old code could handle, **every
+  listing the old parser returned is still returned**. There is one more:
+  the first data row, which the whole-document match had swallowed into a
+  match that started on the header line (645 then, 646 now).
+
+**Tests** (`test_discovery_timing.py`):
+- dedup of 2,500 listings plus 2,500 case variants in under a second, the
+  timing test asked for;
+- R127's store record and lookups for 2,500 in under a second;
+- a synthetic HTML-table README of 500 rows in speedyapply's shape parses in
+  under a second, in a subprocess with a 30-second timeout, and a markdown
+  table's first row after the header is read.
+
+Against the old parser the last test hits its 30-second timeout. That is the
+freeze, reproduced in the suite.
+
+**What this does not fix: a run shares the web server's process** (Q85).
+Any step that holds the interpreter lock, or eats the CPU, freezes the site
+for everyone. The speedyapply list now yields nothing at all (Q86).
 
 ## Q31. The caches are cwd-relative and miss the volume
 
