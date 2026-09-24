@@ -12088,6 +12088,32 @@ setting a secret and discovering what reads it.
   without having been asked (CLAUDE.md, "A cache key encodes how much
   variation lives inside a category").
 
+## Q68. The key page shows a hosted friend local-only advice, and a saved key outlives sign-out
+
+**Status:** Open, logged 2026-09-24 while building R117. Not fixed there,
+because R117 was limited to Q58's list.
+
+- **The key panel tells a hosted user to run Ollama.** `BackendPanel`'s
+  keyless text reads "add a Gemini key above, or run **Ollama** locally …
+  nothing leaves this machine". A hosted instance cannot reach an Ollama on
+  the friend's machine, and R113 makes the OpenAI-compatible rungs
+  unavailable there. So on the pilot the only true advice is the key. Its
+  `LLM_BACKEND` line ("in config.py pins this") is also meaningless to
+  someone who has no `config.py`. The fix needs the panel to know the mode;
+  `backend_status` does not report it today.
+- **The wizard's subtitle says "locally".** "Find roles at your level and
+  tailor your resume to each one, locally." It is false on a hosted instance.
+- **The saved key belongs to the browser, not the account.** It is stored
+  under one `localStorage` name, and signing out does not clear it. Two
+  accounts signing in on one browser share a key, and the second person's
+  runs spend the first person's quota. That is rare in a five-friend pilot
+  and real on a shared computer once people sign up. The options are to
+  namespace the stored key by account, to forget it on sign-out, or both.
+  Forgetting on sign-out costs a returning user a re-paste.
+
+**Carries over (R114)?** All three do: they are the hosted product's copy
+and its key handling, not pilot workarounds.
+
 ---
 
 # Out of scope
