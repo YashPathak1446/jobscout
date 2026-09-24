@@ -13401,6 +13401,35 @@ hide more jobs. Read the 9 reasons in that run's log first.
 the web server's process (Q85), so a longer run holds it longer. One run
 per user (R120) keeps it to one per user, not one overall.
 
+## Q89. The local embedding model is downloaded from Hugging Face on every restart
+
+**Status:** Open, reported 2026-09-24. Nothing built.
+
+**Why.** `local_embeddings.load` calls
+`StaticModel.from_pretrained(config.LOCAL_EMBEDDING_MODEL)`
+(`minishlab/potion-base-8M`). That downloads into the Hugging Face cache,
+`~/.cache/huggingface`. The Dockerfile sets no `HF_HOME`, and the Fly volume
+mounts only `/data`. So the cache sits on the machine's ephemeral disk and is
+lost on every restart and deploy. The first run after each restart waits on
+the download. If Hugging Face is slow or down, local scoring fails.
+
+**Proposal: bake it into the image.**
+- In the `runtime` stage, set `HF_HOME` to a path inside the image. Then run
+  one `from_pretrained` at build time.
+- At run time, set `HF_HUB_OFFLINE=1`, so a missing model fails loudly
+  instead of silently downloading again.
+- The build step should read the model name from `config.py` (`python -c
+  "import config; ..."`), not repeat it in the Dockerfile. A second copy of
+  the ID is the two-paths shape: changing `LOCAL_EMBEDDING_MODEL` would ship
+  an image with the old model baked in and the new one downloaded anyway.
+
+**Rejected: caching it on the `/data` volume.** It survives restarts but
+not a new volume, and it puts code-shipped assets in user-data space, which
+`tools/paths.py` keeps apart on purpose.
+
+**Related.** Q75 (N first runs load the model N times) is about memory
+within one process. This one is about the network, across restarts.
+
 ---
 
 # Out of scope
