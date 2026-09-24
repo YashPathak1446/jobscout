@@ -200,9 +200,18 @@ class TestReactDrawsIt(unittest.TestCase):
         board = self._source("Board.tsx")
         self.assertIn("result.unconfirmed", board)
         self.assertIn("setUnconfirmed(", board)
-        # Rendered, not just stored: the JSX tests and prints it.
-        self.assertRegex(board, r"\{unconfirmed !== null && unconfirmed > 0 &&")
-        self.assertRegex(board, r"\$\{unconfirmed\}")
+        # Rendered, not just stored: the JSX tests and prints it. Less the
+        # unreadable postings, which have a line of their own (R131).
+        self.assertRegex(board, r"\{unconfirmed !== null &&\s+unreadable !== null &&"
+                                r"\s+unconfirmed - unreadable > 0 &&")
+        self.assertRegex(board, r"\$\{unconfirmed - unreadable\}")
+
+    def test_the_board_reads_the_unreadable_count_and_renders_it(self):
+        """R131: the default sort moves them down, so the screen says how many."""
+        board = self._source("Board.tsx")
+        self.assertIn("setUnreadable(result.unreadable)", board)
+        self.assertRegex(board, r"\{unreadable !== null && unreadable > 0 &&")
+        self.assertRegex(board, r"\$\{unreadable\}")
 
     def test_the_count_starts_unknown_not_zero(self):
         self.assertIn("useState<number | null>(null)", self._source("Board.tsx"))

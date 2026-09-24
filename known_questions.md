@@ -11057,6 +11057,57 @@ freeze, reproduced in the suite.
 Any step that holds the interpreter lock, or eats the CPU, freezes the site
 for everyone. The speedyapply list now yields nothing at all (Q86).
 
+## R131. Postings we could not read sort below readable ones, and the board counts them
+
+**Decided 2026-09-24.** Every job from the GitHub new-grad source links to a
+jobright.ai page (Q87 measured 646 of 646), and the scraper cannot read those
+pages. On the live board they carried the "Unconfirmed: its description could
+not be read" badge. They had no resume, because `_split_unreadable` skips them
+at generation. They sat among the top rows anyway, scored on a one-line snippet.
+
+**What changed.**
+- `JobStore.SORTS["best"]`, the default ordering, now sorts one key first:
+  whether the posting is unreadable. Unreadable postings go below every
+  readable job, scored or not. Below that key the order is unchanged.
+- "newest", "recent" and "company" keep their meaning. Someone who picks
+  "newest" asked for newest.
+- `query`/`count` take `unreadable=True`; `board_total` passes it through;
+  `GET /api/board` returns `unreadable` under the same filters as `hidden`
+  and `unconfirmed`.
+- React shows "N jobs we couldn't read." When the sort is "best", it adds
+  that they are listed after the rest. The unconfirmed line now counts
+  `unconfirmed − unreadable`, so no job is counted on both lines.
+- Nothing is deleted or hidden. The page is cut in SQL after the ordering,
+  so a page is still full.
+
+**How "unreadable" is known.** The board has no `scraped_successfully`
+column. The signal is the gate's own verdict: `undecidable` with
+`UNREADABLE_REASON`, which `judge_body` returns exactly when the stored text
+is too thin to read and nothing else decides the job. The constant is
+imported, not copied, so rewording the reason cannot silently un-sort the
+board. `test_unreadable_last` builds its rows through the real gate for the
+same reason.
+
+**Rejected: a new `readable` column.** It would need a migration and a
+writer in `record`. It would also duplicate what the gate already decides
+from the same text, and the two could disagree (Q39's shape).
+
+**What breaks if this is wrong.**
+- An unreadable posting that *also* has an unanswered requirement shows the
+  unanswered reason (the gate ranks it higher), so it is not demoted. It is
+  still badged and counted as unconfirmed.
+- A row no gate has judged yet is not called unreadable. It has no verdict,
+  and an unknown is not a value.
+- Streamlit reads the same facade, so its board gets the new order without
+  an edit (R115). It does not get the count line.
+
+**Tests.** `test_unreadable_last.py`: order under "best" (an unreadable job
+scored 90 lands below an unscored readable one); an unknown sort falls back to
+the same rule; the first page excludes it; "company" is unaffected; nothing is
+removed; the count is a subset of unconfirmed; an unjudged row is not counted;
+the route returns the count and honours filters. `test_gate_badge_renders`
+now pins both React lines.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -13253,6 +13304,131 @@ To decide: parse the HTML shape (company in `<strong>`, the apply link in
 the posting cell's `href`), or drop the source. Either way, **a source that
 returns zero rows from a non-empty page should say so in the run log**. A
 format change is exactly what that line would have caught.
+
+## Q87. Every GitHub-sourced job links to jobright.ai; matching them to the ATS copy would reach 4.5% of them
+
+**Status:** Open, diagnosed 2026-09-24 alongside R131. Nothing built, and no
+jobright.ai page was fetched.
+
+**Measured** (today's lists, through the real `search_github_newgrad`):
+- **646 of 646** GitHub listings (100%) link to `jobright.ai`. speedyapply
+  gives zero (Q86), so the jobright list is now the whole source.
+- Discovery asks for 200 (`_search_github`, `max_results=200`), and **all
+  200** are jobright links.
+- They name **350 distinct companies**. Only **29 rows (4.5%), from 4
+  companies**, are companies in the shipped ATS list
+  (`tools/assets/ats_companies.json`): Palantir 25, Nuro 2, Stripe 1,
+  Ramp 1. That is a company-name match (lowercased, punctuation stripped,
+  a trailing Inc/Technologies/AI dropped).
+- A user's learned slugs cannot add to that, because `harvest_slugs` learns
+  from apply URLs on an ATS host. A jobright link never names one.
+
+**Not measured: whether the same *title* is in that run's ATS listings.**
+This container's network policy refuses Greenhouse, Ashby and Lever. The
+29 is a ceiling: no row outside those four companies can match whatever the
+titles say. To measure it on the live instance, keep `search_ats`'s
+role-filtered listings from before the cap. Then count the jobright rows
+whose company, title and location key appears there exactly once.
+
+**The proposal: match on company plus normalized title, plus location.**
+Company and title alone are not a key:
+- Within the jobright list, **45 company+title pairs occur more than once
+  (117 rows)**. Palantir lists "Software Engineer, New Grad - Defense" in
+  Palo Alto, Washington and New York.
+- On company+title alone, one ATS posting would be attached to several
+  jobright rows, or the wrong city's requisition to each.
+
+The false-match risks that remain with location added:
+- **Loose normalization.** Stripping "(2026)", "- New Grad" or a team suffix
+  to make titles meet also makes "Software Engineer" at a large company match
+  several requisitions. Normalize case, punctuation and whitespace only, and
+  require exactly one ATS candidate. Zero or two or more candidates means no
+  match.
+- **A different requisition, same title and city.** Rare, but the result is
+  a resume tailored to the wrong posting's text, which the user cannot see.
+- **The ATS copy is gone.** jobright can list a stale posting. No match is
+  then the right answer, and the row stays unreadable (R131 sorts it last).
+
+**Where it would have to run.** `search_ats` role-filters, caps at 200 and
+discards the rest. The match needs the role-filtered set before the cap, so
+it belongs inside `search_ats` (or needs that set returned). It cannot
+match against the board afterwards.
+
+**What it would actually buy.** Those four companies are already queried
+as ATS boards, so a matched ATS copy is most likely already on the board as
+its own readable row. For them the match is **deduplication**, not rescue.
+The other 95.5% (617 rows, 346 companies) have no ATS board to match against.
+
+**Levers worth weighing against it:**
+1. Stop unreadable postings taking a run's candidate slots. Rank readable
+   ones first in discovery's cut, as R131 does on the board.
+2. Grow the ATS list with the companies jobright names. Probing a board slug
+   from a company name is a guess, with its own false-match risk. It is a
+   list edit, not a matcher.
+
+## Q88. The body gate drops most enriched jobs for a new grad, so a run writes one resume
+
+**Status:** Open, reported 2026-09-24 from a live run. Nothing built. The
+figure below is that run's log, not reproduced here.
+
+**Seen.** A new-grad profile's run enriched 10 jobs. The body gate
+(`_apply_body_gate`) hid 9, so one job reached generation and the run wrote
+one resume.
+
+**Why the count is fixed before the gate.** `discover_jobs` cuts to
+`max_jobs` (`discovery_agent.py`, `filtered_jobs[:max_jobs]`) on titles
+alone. Enrichment scrapes exactly those. The gate then reads the bodies and
+removes what rules the profile out. Nothing goes back for more, so a run's
+resume count is `max_jobs` × the pass rate. For a new grad the pass rate is
+lowest, because experience floors are the commonest thing a body states.
+
+**Proposal: enrich until N jobs pass, with a ceiling.**
+- Enrich in batches from discovery's ranked pool (which is longer than
+  `max_jobs`). Gate each batch, and stop when N jobs are shown or undecidable
+  and *readable*, since an unreadable one cannot get a resume (R61, R131).
+- A hard ceiling on scrapes per run (say 3 × N) and on wall time. Past it,
+  the run says "found K of N". A run that silently writes fewer is the
+  shape R62 forbids.
+- ATS listings arrive with `full_jd` (Q80), so they can be gated before any
+  scrape, at no cost. Only scraped sources need the loop.
+
+**Before building, check the gate rather than the loop.** If the 9 were
+hidden for "3+ years preferred" or a range such as "0-2 years", the gate is
+too strict for new grads, and a loop would only spend more scrapes to
+hide more jobs. Read the 9 reasons in that run's log first.
+
+**Costs.** More scrape requests and a longer run. A run still executes in
+the web server's process (Q85), so a longer run holds it longer. One run
+per user (R120) keeps it to one per user, not one overall.
+
+## Q89. The local embedding model is downloaded from Hugging Face on every restart
+
+**Status:** Open, reported 2026-09-24. Nothing built.
+
+**Why.** `local_embeddings.load` calls
+`StaticModel.from_pretrained(config.LOCAL_EMBEDDING_MODEL)`
+(`minishlab/potion-base-8M`). That downloads into the Hugging Face cache,
+`~/.cache/huggingface`. The Dockerfile sets no `HF_HOME`, and the Fly volume
+mounts only `/data`. So the cache sits on the machine's ephemeral disk and is
+lost on every restart and deploy. The first run after each restart waits on
+the download. If Hugging Face is slow or down, local scoring fails.
+
+**Proposal: bake it into the image.**
+- In the `runtime` stage, set `HF_HOME` to a path inside the image. Then run
+  one `from_pretrained` at build time.
+- At run time, set `HF_HUB_OFFLINE=1`, so a missing model fails loudly
+  instead of silently downloading again.
+- The build step should read the model name from `config.py` (`python -c
+  "import config; ..."`), not repeat it in the Dockerfile. A second copy of
+  the ID is the two-paths shape: changing `LOCAL_EMBEDDING_MODEL` would ship
+  an image with the old model baked in and the new one downloaded anyway.
+
+**Rejected: caching it on the `/data` volume.** It survives restarts but
+not a new volume, and it puts code-shipped assets in user-data space, which
+`tools/paths.py` keeps apart on purpose.
+
+**Related.** Q75 (N first runs load the model N times) is about memory
+within one process. This one is about the network, across restarts.
 
 ---
 

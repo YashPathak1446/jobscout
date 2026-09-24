@@ -547,6 +547,11 @@ def board(
     # tally is not a count.
     unconfirmed = board_total(user, unconfirmed=True, **criteria)
 
+    # Of those, the postings whose description could not be read (R131).
+    # "best" sorts them below every readable job, so the screen says how many
+    # it moved down.
+    unreadable = board_total(user, unreadable=True, **criteria)
+
     return {
         "jobs": [_without_jd(row)
                  for row in board_jobs(user, sort=sort, limit=limit, offset=offset,
@@ -555,6 +560,7 @@ def board(
         "total": total,
         "hidden": hidden,
         "unconfirmed": unconfirmed,
+        "unreadable": unreadable,
         "offset": offset,
         "limit": limit,
     }

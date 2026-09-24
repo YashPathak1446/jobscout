@@ -287,6 +287,9 @@ export const api = {
       hidden: number
       /** Shown jobs the gate could not decide, same filters (A4). */
       unconfirmed: number
+      /** Of those, postings whose description could not be read. The
+       *  default sort puts them below every readable job (R131). */
+      unreadable: number
       offset: number
       limit: number
     }>(
