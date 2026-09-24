@@ -10813,6 +10813,27 @@ fix.
 Against the old enrichment, the two tests that need the full text fail. The
 R61 tests (`test_no_invented_jd`) still pass.
 
+## R125. "Jobs enriched" counts jobs with a readable description
+
+**Decided 2026-09-24**, from the first live deploy. The run that could not
+read three Vanta descriptions (R124) still reported "Jobs enriched: 5" of 5
+discovered. The report counted every job enrichment returned, readable or
+not.
+
+Now the report and the run record both count readable jobs
+(`_readable_count`, over `scraped_successfully`). The report names the rest:
+"Jobs enriched: 2 (3 more kept without a readable description)". They are
+kept, scored and badged (R61, A4), and the count says they exist rather than
+subtracting them in silence.
+
+The run record's `enriched` is not displayed by either UI today. It changes
+meaning with the report, so the two agree.
+
+**Tests** (`test_enriched_count.py`): the printed line for a mixed and an
+all-readable run, and the run record through `start_run` with a stub
+pipeline. Against the old code, 2 of 3 fail; the all-readable case passes
+there by construction.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
