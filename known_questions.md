@@ -10887,6 +10887,10 @@ scenario and the one that change covers.
 
 ## R127. One posting found under two letter cases was two jobs and got two resumes
 
+**Not the cause of the live freeze first attributed to it (R130, 2026-09-24):**
+its paths are milliseconds at 2,500 listings; the freeze was the GitHub
+parser. Kept, not reverted.
+
 **Decided 2026-09-24**, from a pilot board.
 
 **What was seen.** SmartRecruiters served one Experian posting as both
@@ -10948,6 +10952,110 @@ description for Gemini; the other rungs keep theirs.
 it, and it goes to the log. That is Q83.
 
 **Test:** `test_request_key.TestTheKeyStepSaysOneThingForGemini`.
+
+## R129. Places with spaces can be entered in Preferences, one entry per chip
+
+**Decided 2026-09-24.** React only. **Numbering note:** committed as `3515441`
+with "(R127)" in its subject, a number another session had already taken for
+the duplicate-posting fix. This is the entry for that commit; the code and
+test comments say R129.
+
+**The defect.** Cities, countries and both state lists were one text box
+each. The box showed the saved list joined with ", ", and every keystroke
+re-split it on commas and trimmed each piece:
+- a space was trimmed before the next letter arrived;
+- a comma became a separator the moment it was typed.
+
+So "San Francisco", "New York", "North Carolina" and "United States" could
+not be entered.
+
+**The fix.** One `Field` component for all four lists:
+- **Entering places.** A draft is typed freely, and **Enter adds it** as one
+  chip; × removes a chip. Repeated spaces are collapsed and a duplicate (any
+  case) is ignored.
+- **Placeholders** say "Type a city, then press Enter" and the like.
+- **Separator:** Enter, not a comma, because a comma belongs to some place
+  names ("Washington, D.C.") and was the character being eaten.
+- **A typed entry is kept on blur,** so Save straight after typing keeps it.
+- **Saved lists are shown as they are.**
+
+**Matching needed no change.** `job_filter._score_us_location` compares a
+whole entry, case-insensitively, with the full state name `parse_location`
+returns. "North Carolina" matches "Raleigh, NC" and "New York" matches "New
+York, NY"; "North" + "Carolina" match nothing. Cities are never matched
+(Q84).
+
+**Tests** (`test_place_list_inputs.py`). Against the old component the
+source tests fail.
+
+**Seen in a browser.** A hosted build, Chromium, Preferences via "Edit
+setup", on a copy of Priya's profile:
+- her saved lists showed as chips, and Save with no edits left them
+  identical;
+- "San Francisco" and "New York" (Enter), and "North Carolina" as a priority
+  state, each saved as a single entry;
+- "Austin", typed without Enter before Save, was saved too.
+
+## R130. The live freeze was the GitHub parser backtracking across a whole README, not R127
+
+**Decided 2026-09-24.** The freeze was attributed to R127 because it
+appeared on R127's release after a full run had worked on v4. This finds
+the cause elsewhere, fixes it, and keeps R127.
+
+**What was seen.** On the live instance, after ATS returned 2,259 listings,
+the run froze at "🐙 Searching GitHub new grad repos...". The whole server
+stopped responding, ignored SIGINT and SIGTERM, and had to be killed.
+
+**R127 measured, not the cause.** At about 2,500 listings over a board of
+2,500:
+- dedup by `url_key`: 26 ms for 5,000;
+- `store.record`: 24-43 ms;
+- 2,500 `stored_url` lookups: 17-63 ms.
+
+The store paths also run *after* the GitHub search in `discover_jobs`, so
+they had not started when the freeze began. Only the dedup key had run, and
+it is linear.
+
+**The cause: `github_search`'s table regex over the whole document.**
+- `search_github_newgrad` ran one `re.MULTILINE` pattern with `finditer`
+  over each README. Its negated classes (`[^\]|]+`, `[^)]*`, `[^|]*`) also
+  match newlines, so a row that did not match did not fail at its own line
+  end. It ran on through the rest of the document before backtracking, from
+  every line start.
+- speedyapply's `NEW_GRAD_USA.md` has moved to HTML tables (`<a href=...>`,
+  499 rows, 157 KB), so none of its rows matches and every attempt takes the
+  slow path. Fetched from here, the parse **did not finish in 90 seconds**.
+  A traceback dump caught it in `finditer`, at `github_search.py` line 106.
+- `re` holds the interpreter lock while it matches. It ran in the run's
+  worker thread, so the main thread never got to run its signal handlers,
+  and every request stalled with it.
+- The parser has not changed since R67. The list's format changed between
+  the v4 run and the R127 run, not the code.
+
+**The fix.** `_table_rows` matches the same pattern one line at a time. It
+first skips any line without `](`, since a row's title cell must be a
+markdown link.
+- Today's two READMEs parse in 8 ms, down from never; the HTML list yields
+  no rows, as before.
+- On the jobright list the parser the old code could handle, **every
+  listing the old parser returned is still returned**. There is one more:
+  the first data row, which the whole-document match had swallowed into a
+  match that started on the header line (645 then, 646 now).
+
+**Tests** (`test_discovery_timing.py`):
+- dedup of 2,500 listings plus 2,500 case variants in under a second, the
+  timing test asked for;
+- R127's store record and lookups for 2,500 in under a second;
+- a synthetic HTML-table README of 500 rows in speedyapply's shape parses in
+  under a second, in a subprocess with a 30-second timeout, and a markdown
+  table's first row after the header is read.
+
+Against the old parser the last test hits its 30-second timeout. That is the
+freeze, reproduced in the suite.
+
+**What this does not fix: a run shares the web server's process** (Q85).
+Any step that holds the interpreter lock, or eats the CPU, freezes the site
+for everyone. The speedyapply list now yields nothing at all (Q86).
 
 ## Q31. The caches are cwd-relative and miss the volume
 
@@ -13067,6 +13175,84 @@ Keep it, cap it, or go back to a range, depending on which option is built.
 `pyproject.toml`'s `hosted` extra still says `sentry-sdk>=2.0.0`, and was left
 as it is. The image installs from `requirements.txt`; a `pip install
 .[hosted]` would not be pinned.
+
+## Q84. Cities in Preferences are never matched, and a state typed as its code matches nothing
+
+**Status:** Open, found 2026-09-24 while fixing R129. (Committed first as
+"Q82" in `2f297e4`, a number another session had already used; renumbered.)
+
+- **Cities are saved and never compared with a job's location.** The one
+  read, `job_filter` near line 854, uses `bool(cities or states_priority)`
+  to decide whether the relocation gate applies. A user who names "San
+  Francisco" and no states gets no ranking for San Francisco postings. The
+  cities do engage the "not willing to relocate" exclusion, which then
+  judges by *state*, so a city's own state is not preferred unless it is
+  also listed. That is CLAUDE.md's recurring bug: a field computed and never
+  read.
+- **States match by full name only.** `parse_location` normalises "NC" in a
+  posting to "North Carolina", but a user's entry is compared as typed, so
+  "NC" or "N.C." in Preferences matches nothing, silently. Normalise the
+  entry through the same table, or say on the screen that it takes full
+  names.
+- **Priya's committed profile has "Remote" in `cities`.** It is harmless
+  while cities are not matched, but it would count as a city once they are.
+  `remote_ok` is where that belongs.
+
+These change what is ranked or excluded, so they are scoring changes to
+measure, not UI fixes.
+
+## Q85. A run executes in the web server's own process, so a heavy step freezes the site for everyone
+
+**Status:** Open, logged 2026-09-24 at the author's request after the live
+freeze (R130). **Plan it together with the shared job index; do not build it
+now.** The shared job index is not yet written down in this log or the plan;
+this entry is to be planned alongside it when it is.
+
+**What R130 showed.** `start_run` runs the pipeline in a thread of the
+uvicorn process (a deliberate choice: callers see only a run id, so swapping
+it later changes nothing above). Python threads share one interpreter lock:
+- a step that holds it (a regex, some C extensions) or that hogs the CPU
+  (parsing, embedding a board, `pdflatex` output handling) starves every
+  request thread;
+- signal handling runs only in the main thread, so the process cannot even
+  shut down cleanly while that step runs.
+
+One user's run froze the site for every user. R130 fixed the one regex; the
+class remains.
+
+**The fix: run the pipeline in a separate process.** What has to be decided:
+- **Process or worker.** One subprocess per run, started by `start_run`, or
+  a long-lived worker process with a queue. The run registry (`runs.db`,
+  per user) already carries progress on disk, so the web process only reads
+  it. That part survives either way.
+- **Cancellation and the reaper.** A child process can be killed, which a
+  thread cannot. R120's heartbeat and startup sweep move from "thread
+  alive" to "process alive".
+- **Keys.** R113's request-carried key currently lives in memory for the
+  run (`key_in_use`). Handing it to a child without writing it to disk or
+  putting it on a command line is a design point on its own.
+- **Memory on a 1 GB machine.** A second Python process with the embedding
+  model loaded costs memory. Q75 already found five first runs loading it
+  five times. The worker model loads it once.
+- **The shared job index.** If discovery moves to a shared index across
+  users, the worker is where it is refreshed. That is why the two are
+  planned together.
+
+## Q86. The speedyapply new-grad list moved to HTML tables, so it now yields no jobs
+
+**Status:** Open, found 2026-09-24 while diagnosing R130.
+
+`github_search` reads two README sources. speedyapply's `NEW_GRAD_USA.md`
+now writes its rows as HTML (`<a href="..."><strong>Adobe</strong></a> |
+... | <a href="...">` apply image), not markdown links. The parser expects
+`[Title](url)`, so all 499 rows are skipped. Since R130 that is quick;
+before, it was the freeze. The source contributes nothing, silently: the run
+log says nothing about a source that parsed to zero.
+
+To decide: parse the HTML shape (company in `<strong>`, the apply link in
+the posting cell's `href`), or drop the source. Either way, **a source that
+returns zero rows from a non-empty page should say so in the run log**. A
+format change is exactly what that line would have caught.
 
 ---
 

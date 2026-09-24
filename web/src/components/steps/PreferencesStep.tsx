@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -53,8 +53,6 @@ function excludeOptions(years: number | null): string[] {
   return [...above, ...floors, ...EXCLUDE_ALWAYS]
 }
 
-const split = (text: string) =>
-  text.split(',').map((s) => s.trim()).filter(Boolean)
 
 /**
  * Step three: what you are looking for, and at which levels.
@@ -304,16 +302,13 @@ export function PreferencesStep({
         )}
       </div>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="cities">Cities (comma separated, optional)</Label>
-        <Input
-          id="cities"
-          value={prefs.cities.join(', ')}
-          onChange={(e) => setPrefs({ ...prefs, cities: split(e.target.value) })}
-          placeholder="San Francisco, New York"
-          className="max-w-md"
-        />
-      </div>
+      <Field
+        id="cities"
+        label="Cities (optional)"
+        value={prefs.cities}
+        onChange={(v) => setPrefs({ ...prefs, cities: v })}
+        placeholder="Type a city, then press Enter"
+      />
 
       <div className="flex items-center gap-2">
         <Checkbox
@@ -343,7 +338,7 @@ export function PreferencesStep({
               hint="Postings outside these score lower rather than being cut."
               value={prefs.countries}
               onChange={(v) => setPrefs({ ...prefs, countries: v })}
-              placeholder="United States"
+              placeholder="Type a country, then press Enter"
             />
             <Field
               id="states-priority"
@@ -351,14 +346,14 @@ export function PreferencesStep({
               hint="Discovery searches the first of these by name."
               value={prefs.states_priority}
               onChange={(v) => setPrefs({ ...prefs, states_priority: v })}
-              placeholder="California, New York"
+              placeholder="Type a state, then press Enter"
             />
             <Field
               id="states-acceptable"
               label="States you would accept"
               value={prefs.states_acceptable}
               onChange={(v) => setPrefs({ ...prefs, states_acceptable: v })}
-              placeholder="Texas, Washington"
+              placeholder="Type a state, then press Enter"
             />
             <div className="flex items-center gap-2">
               <Checkbox
@@ -451,6 +446,18 @@ function Chip({
   )
 }
 
+/**
+ * A list of places, one entry per chip (R129).
+ *
+ * This was one text box showing the list joined with ", ", re-split on
+ * commas and trimmed on every keystroke. So a space was trimmed away before
+ * the next letter arrived, and a comma was a separator the moment it was
+ * typed: "San Francisco", "New York" and "North Carolina" could not be
+ * entered. Entries now come from a draft typed freely, spaces and commas
+ * included, and **Enter adds it** as one chip; × removes one. The draft is
+ * also kept when the box loses focus, so pressing Save straight after typing
+ * does not drop what was typed. Saved lists are shown as they are.
+ */
 function Field({
   id,
   label,
@@ -466,13 +473,51 @@ function Field({
   onChange: (value: string[]) => void
   placeholder?: string
 }) {
+  const [draft, setDraft] = useState('')
+
+  function add() {
+    const entry = draft.trim().replace(/\s+/g, ' ')
+    setDraft('')
+    if (!entry) return
+    // One entry per place, whatever its case: matching ignores case.
+    if (value.some((v) => v.toLowerCase() === entry.toLowerCase())) return
+    onChange([...value, entry])
+  }
+
   return (
     <div className="space-y-1.5">
       <Label htmlFor={id}>{label}</Label>
+      {value.length > 0 && (
+        <ul className="flex max-w-md flex-wrap gap-1.5" aria-label={label}>
+          {value.map((entry) => (
+            <li
+              key={entry}
+              className="inline-flex items-center gap-1 rounded-full border bg-muted px-2.5 py-0.5 text-sm"
+            >
+              {entry}
+              <button
+                type="button"
+                aria-label={`Remove ${entry}`}
+                onClick={() => onChange(value.filter((v) => v !== entry))}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="size-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <Input
         id={id}
-        value={value.join(', ')}
-        onChange={(e) => onChange(split(e.target.value))}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            add()
+          }
+        }}
+        onBlur={add}
         placeholder={placeholder}
         className="max-w-md"
       />
