@@ -481,6 +481,9 @@ def create_profile(user_id, resume_path, name: str, force: bool = False) -> dict
         "backup_path": backup,
         "derived": derived_info,
         "id_problems": _id_problems(user_id, name, resume_path),
+        # Lines of the resume the parser could not read (R112). Shown at
+        # import, beside id_problems, so nothing is dropped unseen.
+        "parse_warnings": list(resume.warnings),
         "needs_you": {
             section: [f for f in fields if f not in derived_info]
             for section, fields in NEEDS_HUMAN.items()
@@ -651,7 +654,11 @@ def read_component_rules(user_id, name: str) -> dict:
     section name, so the added key reaches nobody iterating.
     """
     rules, parser = _component_rules(user_id, name)
-    return {**rules, "id_problems": _id_problems(user_id, name, parser=parser)}
+    return {**rules, "id_problems": _id_problems(user_id, name, parser=parser),
+            # Again here, not only at import: a profile imported before R112
+            # has never been told, and this is the screen a returning user
+            # opens.
+            "parse_warnings": list(parser.parsed_resume.warnings)}
 
 
 def _component_rules(user_id, name: str):

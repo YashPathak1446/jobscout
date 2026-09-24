@@ -9945,6 +9945,79 @@ under Windows' 260. The cut never splits a character.
 Mutations: removing the pattern fails 12 and errors 2, and removing both
 checks fails 16 and errors 3. Raising the cap fails the filename test.
 
+## R112. An escaped character dropped a whole skills category, and a line the parser cannot read is now said, not dropped
+
+**Decided 2026-09-24**, before A11. Found by the path and LaTeX audit (Q66)
+and measured before anything changed.
+
+**The defect, measured.** A resume was rendered through `tex_renderer`
+with `C# node_js 50% R&D $5M` in every field the parser reads, then parsed
+back. Two fields were wrong:
+- **Skills: every category was gone.** The value pattern `[^\\}]+` stopped
+  at the first backslash, so `C\#` never reached its closing brace and the
+  category failed to match. Nothing said so. A resume listing C#, an
+  underscore, a percentage or R&D in a skills value lost that whole line
+  from every tailored resume. On Rohan's master, the Languages line vanished.
+- **Bullets: two dollar signs became one math span.** `_clean_latex`
+  un-escaped `\$` before reading math, so `$5M and $3M` came back as
+  `5M and3M`.
+
+Headings, titles, companies, locations, education, project names and tech
+all round-tripped already. The existing property tests could not see either
+defect: they run over the masters on disk, and none has these characters in
+those places.
+
+**The fix.**
+- **Parser.** Skills are read by balanced braces (`_skill_categories`), not
+  by a pattern, so a value is read to its closing brace whatever it holds.
+  `_braced` skips escaped characters, so `\{`, `\}` and `\\` inside an
+  argument no longer unbalance it. `_clean_latex` holds `\$` aside until the
+  math spans are read, then restores it.
+- **Builder.** `_build_skills_section` escaped `&` in the label only and
+  wrote values raw. Both now go through the one escaper, since the parser
+  hands back plain text. Before, a `C#` that survived the parse would have
+  reached the `.tex` as a bare `#` and stopped the compile. It never did,
+  only because the parser dropped the category first.
+
+**Never a silent drop.** The parsed resume carries `warnings`, each also
+logged. A warning is raised for:
+- a skills category whose value cannot be read;
+- an Experience or Projects entry whose heading cannot be read (these used
+  to `continue` in silence);
+- an entry with more `\resumeItem`s than were read, with the count;
+- a section after Experience that nothing reads, such as Publications or
+  Awards, which is not carried into tailored resumes.
+
+The consumer ships in the same change: `create_profile` and
+`read_component_rules` return `parse_warnings` beside `id_problems`. Both UIs
+show them at import and again on the rules screen, so a profile imported
+before this is told too.
+
+**No regression on real masters.** Old and new parsers were run over every
+tracked `.tex`. The results are identical apart from the new, empty
+`warnings` field: no false warnings on Priya, Rohan or the preamble
+fixture.
+
+**Compiled, not only parsed.** With TeX Live installed in this container
+(the Dockerfile's package set), Rohan's master with `C#`, an underscore
+name, `50%` and `R&D` added to Languages compiles, and the PDF reads back
+with the line present. The underscore reads back as a space: that is the
+PDF text extractor reading the underscore glyph, and the `.tex` holds
+`scikit\_learn`.
+
+**Tests** (`test_escape_round_trip.py`, 13):
+- each of `# _ % & $` alone, and all together, in every field;
+- two dollars in one bullet;
+- the rendered resume compiles, where an engine exists;
+- the builder writes `C\#`, `scikit\_learn`, `R\&D` and `50\%` into
+  Rohan's Languages line;
+- one test per warning kind, plus a clean resume with none;
+- `create_profile` and `read_component_rules` both return the warnings;
+- both UIs render them in both places.
+
+Against the old parser and builder: 9 failures and 12 errors. With only the
+builder reverted, the builder test fails.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

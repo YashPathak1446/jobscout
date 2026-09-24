@@ -243,6 +243,7 @@ def screen_resume():
         c.metric("Match rules derived", counts["trigger_rules"])
 
         _show_id_problems(summary.get("id_problems"))
+        _show_parse_warnings(summary.get("parse_warnings"))
 
         if summary.get("backup_path"):
             st.caption(f"Previous profile saved as `{os.path.basename(str(summary['backup_path']))}`")
@@ -266,6 +267,22 @@ def _build(resume_path, name, force):
     st.session_state.profile_name = name
     st.session_state.setup_summary = summary
     return True
+
+
+def _show_parse_warnings(warnings) -> None:
+    """
+    Say which lines of the resume were not read (R112).
+
+    The parser used to drop them in silence: a skills category holding `C#`
+    vanished from every tailored resume. `None` is a caller that predates the
+    field, not a clean parse, so it says nothing either way.
+    """
+    if not warnings:
+        return
+    st.warning(
+        f"{len(warnings)} part(s) of your resume could not be read, so they "
+        "will not appear in tailored resumes until the resume is fixed:\n\n"
+        + "\n".join(f"- {w}" for w in warnings))
 
 
 def _show_id_problems(problems) -> None:
@@ -873,6 +890,7 @@ def screen_tuning():
 
     # Above the list, because every rule it names is on the list below it.
     _show_id_problems(rules.get("id_problems"))
+    _show_parse_warnings(rules.get("parse_warnings"))
 
     edits_tier, edits_triggers = {}, {}
     edits_always, edits_never = {}, {}

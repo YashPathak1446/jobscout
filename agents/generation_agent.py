@@ -2131,8 +2131,13 @@ Source bullets:
         lines.append("    \\small{\\item{")
 
         for i, (label, skills, _) in enumerate(ordered):
-            escaped_label = label.replace("&", "\\&")
-            value = ", ".join(skills)
+            # Both escaped, through the one escaper (R112). This escaped `&`
+            # in the label only and wrote values as they came: plain text since
+            # the parser un-escapes, so a `C#` would have reached the file as a
+            # bare `#` and stopped the compile. It never did only because the
+            # parser dropped such a category first.
+            escaped_label = self._escape_latex(label)
+            value = ", ".join(self._escape_latex(skill) for skill in skills)
             separator = " \\\\" if i < len(ordered) - 1 else ""
             lines.append(f"     \\textbf{{{escaped_label}}}{{: {value}}}{separator}")
 

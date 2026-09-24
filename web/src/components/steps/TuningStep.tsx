@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { AlertTriangle, ChevronDown } from 'lucide-react'
 
 import { IdProblems } from '@/components/IdProblems'
+import { ParseWarnings } from '@/components/ParseWarnings'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -27,6 +28,7 @@ type Rules = {
   // Undefined means the check did not run, which is not the same as no
   // problems. `IdProblems` keeps the three states apart.
   id_problems?: string[]
+  parse_warnings?: string[]
 }
 
 // The two keys of `Rules` that hold components. Named rather than reusing
@@ -137,6 +139,7 @@ export function TuningStep({
           warning a person meets only after pressing Save is attached to the
           wrong moment. */}
       <IdProblems problems={rules.id_problems} />
+      <ParseWarnings warnings={rules.parse_warnings} />
 
       {SECTIONS.map((section) => (
         <section key={section} className="space-y-2">

@@ -99,6 +99,8 @@ export type ProfileSummary = {
   // has to stay distinguishable from `[]` all the way to the screen — see
   // `IdProblems`.
   id_problems?: string[]
+  /** Lines of the resume the parser could not read (R112). */
+  parse_warnings?: string[]
 }
 
 /** The tuning screen's data: the components, and what is wrong with them. */
@@ -106,6 +108,7 @@ export type ComponentRules = {
   experiences: unknown[]
   projects: unknown[]
   id_problems?: string[]
+  parse_warnings?: string[]
 }
 
 export type Backend = {

@@ -62,6 +62,10 @@ class LatexResume:
     projects: list[LatexProject]
     skills: LatexSkills
     raw_tex: str
+    # What the parser saw and could not read, in words (R112). A line it cannot
+    # handle is reported here and logged, never dropped in silence. Shown at
+    # import and on the rules screen, beside `id_problems`.
+    warnings: list[str] = field(default_factory=list)
 
 
 # Tech keywords to auto-extract for embedding scoring
@@ -121,13 +125,22 @@ def _braced(text: str, start: int):
     if start >= len(text) or text[start] != "{":
         return None
     depth = 0
-    for i in range(start, len(text)):
+    i = start
+    while i < len(text):
+        # An escaped character is text, not syntax: `\{` and `\}` are braces
+        # a person typed, and counting them unbalanced every argument after
+        # (R112). Skipping the character after a backslash also steps over
+        # `\\`, a line break, whole.
+        if text[i] == "\\":
+            i += 2
+            continue
         if text[i] == "{":
             depth += 1
         elif text[i] == "}":
             depth -= 1
             if depth == 0:
                 return text[start + 1:i], i + 1
+        i += 1
     return None
 
 
@@ -152,6 +165,87 @@ def _span_bullets(span: str) -> list:
             if cleaned:
                 bullets.append(cleaned)
     return bullets
+
+
+def _snippet(text: str, width: int = 70) -> str:
+    """A short, one-line quote of what could not be read, for a warning."""
+    flat = " ".join(text.split())
+    return f"\"{flat[:width]}{'…' if len(flat) > width else ''}\""
+
+
+def _warn_short(warnings: list, section: str, entry: str, body: str,
+                bullets: list) -> None:
+    """Say so when an entry holds more `\\resumeItem`s than were read (R112)."""
+    block = re.search(r"\\resumeItemListStart(.*?)\\resumeItemListEnd", body, re.DOTALL)
+    if not block:
+        return
+    written = len(re.findall(r"\\resumeItem\s*\{\s*[^\s}]", block.group(1)))
+    if written > len(bullets):
+        warnings.append(
+            f"{section}: {written - len(bullets)} of {written} bullets under "
+            f"\"{entry}\" could not be read and were left out.")
+
+
+def _skill_categories(section: str, warnings: list) -> dict:
+    """
+    `\\textbf{Label}{: a, b, c}` pairs, read by balanced braces (R112).
+
+    The pattern this replaced stopped a value at the first backslash, so any
+    category holding an escaped character (`C\\#`, `scikit\\_learn`, `50\\%`,
+    `R\\&D`) failed to match and **the whole category vanished**, with no
+    message. A resume listing C# lost its Languages line from every tailored
+    resume. Now a category is read to its closing brace whatever it holds,
+    and one that still cannot be read is reported, not dropped.
+    """
+    categories = {}
+    at = 0
+    for m in re.finditer(r"\\textbf\s*\{", section):
+        if m.start() < at:
+            continue
+        label = _braced(section, m.end() - 1)
+        if not label:
+            warnings.append("Technical Skills: a category heading could not be "
+                            f"read: {_snippet(section[m.start():])}")
+            continue
+        label_raw, after = label
+        while after < len(section) and section[after].isspace():
+            after += 1
+        value = _braced(section, after)
+        if not value:
+            warnings.append(f"Technical Skills: the skills after "
+                            f"\"{_clean_latex(label_raw)}\" could not be read.")
+            at = after
+            continue
+        value_raw, at = value
+        name = _clean_latex(label_raw)
+        listed = _clean_latex(value_raw.strip().removeprefix(":")).strip()
+        listed = listed.rstrip("\\").strip()
+        if not name or not listed:
+            warnings.append("Technical Skills: a category with no name or no "
+                            f"skills was left out: {_snippet(section[m.start():at])}")
+            continue
+        categories[name] = listed
+    return categories
+
+
+# Sections the parser reads. Anything else *after* Experience is not carried
+# into a tailored resume: generation keeps the header verbatim up to
+# Experience, then rebuilds Experience, Projects and Technical Skills.
+_READ_SECTIONS = {"education", "experience", "projects", "technical skills"}
+
+
+def _unread_sections(raw: str) -> list:
+    """A warning per section after Experience that nothing reads (R112)."""
+    experience = re.search(r"\\section\*?\{Experience\}", raw)
+    if not experience:
+        return []
+    found = []
+    for m in re.finditer(r"\\section\*?\{([^}]*)\}", raw[experience.end():]):
+        name = _clean_latex(m.group(1)).strip()
+        if name.lower() not in _READ_SECTIONS:
+            found.append(f"\"{name}\" is not a section this reads, so it will "
+                         "not appear in tailored resumes.")
+    return found
 
 
 def project_keyword_text(name: str, tech: str, bullets: list[str]) -> str:
@@ -356,6 +450,10 @@ def _unwrap_math(text: str) -> str:
     return re.sub(r"\$([^$]*)\$", convert, text)
 
 
+# A private-use character: never in a resume, so it cannot collide with one.
+_ESCAPED_DOLLAR = "\ue000"
+
+
 def _clean_latex(text: str) -> str:
     """Remove LaTeX formatting commands, return plain text."""
     # Remove common commands but keep content
@@ -367,7 +465,10 @@ def _clean_latex(text: str) -> str:
     text = re.sub(r"\\textbf\{\\href\{[^}]*\}\{\\underline\{([^}]*)\}\}\}", r"\1", text)
     text = re.sub(r"\\\&", "&", text)
     text = re.sub(r"\\%", "%", text)
-    text = re.sub(r"\\\$", "$", text)
+    # An escaped dollar is held aside until the math spans are read, then
+    # restored (R112). Un-escaped first, `\$5M and \$3M` became one math span
+    # from the first dollar to the second, and came back as "5M and3M".
+    text = text.replace("\\$", _ESCAPED_DOLLAR)
     text = re.sub(r"\\_", "_", text)
     text = re.sub(r"\\#", "#", text)
     text = re.sub(r"\\texttt\{([^}]*)\}", r"\1", text)
@@ -382,6 +483,7 @@ def _clean_latex(text: str) -> str:
     # meant the string in memory was still partly LaTeX.
     text = re.sub(r"\$\|?\$", "|", text)
     text = _unwrap_math(text)
+    text = text.replace(_ESCAPED_DOLLAR, "$")
     text = re.sub(r"\\small\s*", "", text)
     text = text.replace("--", "–")
     return text.strip()
@@ -491,6 +593,9 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
     with open(tex_path, "r", encoding="utf-8") as f:
         raw = f.read()
 
+    # Everything below that meets a line it cannot read says so here (R112).
+    warnings: list[str] = []
+
     # ===== HEADING =====
     name = ""
     name_match = re.search(r"\\textbf\{\\Huge \\scshape ([^}]+)\}", raw)
@@ -560,12 +665,17 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
         for span in _entries(exp_section, "\\resumeSubheading"):
             match = heading_pattern.match(span)
             if not match:
+                warnings.append(
+                    "Experience: an entry's heading could not be read, so the "
+                    f"entry was left out: {_snippet(span)}")
                 continue
             title = _clean_latex(match.group(1))
             dates = _clean_latex(match.group(2))
             company = _clean_latex(match.group(3))
             location = _clean_latex(match.group(4))
             bullets = _span_bullets(span[match.end():])
+            _warn_short(warnings, "Experience", title or company,
+                        span[match.end():], bullets)
 
             # Assigned in one pass over the whole pool below (Q34) -- whether
             # this company repeats is not knowable from one entry.
@@ -603,12 +713,13 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
             while at < len(span) and span[at].isspace():
                 at += 1
             first = _braced(span, at)
-            if not first:
+            second = _braced(span, first[1]) if first else None
+            if not first or not second:
+                warnings.append(
+                    "Projects: an entry's heading could not be read, so the "
+                    f"entry was left out: {_snippet(span)}")
                 continue
             heading_raw, at = first
-            second = _braced(span, at)
-            if not second:
-                continue
             dates_raw, heading_end = second
             dates = _clean_latex(dates_raw)
 
@@ -639,6 +750,7 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
                 tech_part = _clean_latex(tech_match.group(1))
 
             bullets = _span_bullets(span[heading_end:])
+            _warn_short(warnings, "Projects", name_part, span[heading_end:], bullets)
 
             proj_id = ""  # likewise, assigned in the pass below
             all_text = project_keyword_text(name_part, tech_part, bullets)
@@ -662,15 +774,12 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
     )
     if skills_match:
         skills_section = skills_match.group(1)
-        # The value group stops at a closing brace as well as a backslash.
-        # With only [^\\]+ the final category ran past its own "}" and picked
-        # up the section's trailing braces, so the last category always ended
-        # in LaTeX residue ("Agile/Scrum}\n    }").
-        for m in re.finditer(r"\\textbf\{([^}]+)\}\{:\s*([^\\}]+)\}", skills_section):
-            label = _clean_latex(m.group(1))
-            value = _clean_latex(m.group(2)).strip().rstrip("\\").strip()
-            if label and value:
-                skills_categories[label] = value
+        skills_categories = _skill_categories(skills_section, warnings)
+
+    warnings += _unread_sections(raw)
+
+    for warning in warnings:
+        logger.warning(f"Resume parse: {warning}")
 
     # One pass per pool, now that every member is known. An experience is
     # identified by its employer and told apart by its title; a project is
@@ -702,6 +811,7 @@ def parse_latex_resume(tex_path: str) -> LatexResume:
         projects=projects,
         skills=LatexSkills(categories=skills_categories),
         raw_tex=raw,
+        warnings=warnings,
     )
 
 
