@@ -12961,6 +12961,41 @@ that is measured by replaying the same corpus both ways and reading the top
 or build it. Lever, Workable and SmartRecruiters need checking separately.
 SmartRecruiters' listing call carries no description at all.
 
+## Q81. Sentry chooses its own integrations from whatever is installed
+
+**Status:** Open, found 2026-09-24 while fixing R126.
+
+R126's cause was an integration nobody enabled: sentry-sdk switches on
+`GoogleGenAIIntegration` when google-genai is importable, and it reported
+every handled 503. R126 disables that one. The mechanism that brought it is
+still there. With the app loaded and a DSN set, the SDK enables, as of
+2.70.0:
+
+`argv, atexit, dedupe, excepthook, fastapi, httpx, huggingface_hub, logging,
+modules, starlette, stdlib, threading`.
+
+- `huggingface_hub` arrives because the local embedding model's library
+  depends on it. It was not chosen, and what it captures has not been
+  checked. It is most likely inference calls this app does not make, but
+  that is not verified.
+- `requirements.txt` says `sentry-sdk>=2.0.0`. So the next release can add
+  another auto-enabling integration for a library already installed, and it
+  would start reporting on the next deploy without a line changing here. It
+  is R80's "count them" risk, pointed at error reporting.
+- Every integration also carries data to Sentry. `_scrub` covers what is
+  sent, but a new integration can add fields R119 never looked at.
+
+**Options:**
+1. `auto_enabling_integrations=False` and name the ones wanted (FastAPI,
+   Starlette, logging, threading; perhaps httpx for breadcrumbs). Also pin
+   or cap sentry-sdk.
+2. Keep auto-enabling, and add a test that fails when the enabled set
+   differs from a reviewed list. That is `test_api_payload`'s allow-list
+   pattern, applied to integrations.
+
+The second is cheap and catches the next surprise at upgrade time rather
+than in production. The first removes the class.
+
 ---
 
 # Out of scope
