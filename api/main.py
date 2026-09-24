@@ -98,6 +98,7 @@ from agents.orchestrator import (
     YEARS_EXPERIENCE_MAX,
 )
 from scripts.init_profile import (
+    BadProfileName,
     ProfileInvalid,
     ProfileLimit,
     create_profile,
@@ -693,6 +694,8 @@ def profile_create(request: ProfileRequest, user: Optional[str] = Depends(_calle
         return create_profile(user, resume_path, request.name, force=request.force)
     except (FileExistsError, ProfileLimit) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except BadProfileName as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # surfaced, not swallowed
         raise HTTPException(
             status_code=400,
@@ -710,7 +713,8 @@ def profile_read(name: str, user: Optional[str] = Depends(_caller)) -> dict:
             "preferences": read_preferences(user, name),
             "components": read_component_rules(user, name),
         }
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, BadProfileName) as exc:
+        # A name that cannot be a profile is one that does not exist (R111).
         raise HTTPException(status_code=404, detail=NO_SUCH_PROFILE) from exc
     except ValueError as exc:
         # A stored resume path that resolves outside this account (R108).
@@ -794,7 +798,8 @@ def profile_update(name: str, request: ProfileUpdate, user: Optional[str] = Depe
             detail="These fields cannot be changed here: " + ", ".join(refused))
     try:
         path = update_profile_fields(user, name, request.updates)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, BadProfileName) as exc:
+        # A name that cannot be a profile is one that does not exist (R111).
         raise HTTPException(status_code=404, detail=NO_SUCH_PROFILE) from exc
     except ProfileInvalid as exc:
         # Nothing was written. A string detail, not FastAPI's error list, so
@@ -839,7 +844,8 @@ def components_write(name: str, request: ComponentRules,
     try:
         saved = write_component_rules(user, name, request.importance, request.triggers,
                                       request.always, request.never)
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, BadProfileName) as exc:
+        # A name that cannot be a profile is one that does not exist (R111).
         raise HTTPException(status_code=404, detail=NO_SUCH_PROFILE) from exc
     return {"saved": name, "id_problems": saved["id_problems"]}
 

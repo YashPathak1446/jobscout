@@ -50,7 +50,8 @@ from tools.profile.derivation import (  # noqa: E402
     derive_personal_info,
     merge_conditional_triggers,
 )
-from tools.profile.profile_loader import list_available_profiles  # noqa: E402
+from tools.profile.profile_loader import (  # noqa: E402
+    BadProfileName, list_available_profiles, profile_file)
 from tools.resume.resume_parser import ResumeParser  # noqa: E402
 
 # Ships with the package; it is a starter, not one of the user's profiles.
@@ -191,6 +192,20 @@ def profiles_dir(user_id) -> Path:
     return _loader_dir(user_id)
 
 
+def profile_name_problem(name: str):
+    """
+    Why `name` cannot be a profile name, in words, or None if it can (R111).
+
+    For a UI to say so before reading a resume. The same check `create_profile`
+    enforces, so the screen cannot pass a name the save will refuse.
+    """
+    try:
+        profile_file(name, profiles_dir(None))
+    except BadProfileName as exc:
+        return str(exc)
+    return None
+
+
 def _profile_file(user_id, name: str, must_exist: bool = True) -> Path:
     """
     One user's profile file, with its directory made on the way.
@@ -202,8 +217,10 @@ def _profile_file(user_id, name: str, must_exist: bool = True) -> Path:
     user's home is created by their first write.
     """
     where = profiles_dir(user_id)
+    # The name is checked before anything is made: a refused name must not
+    # leave even an empty directory behind (R111).
+    path = profile_file(name, where)
     where.mkdir(parents=True, exist_ok=True)
-    path = where / f"{name}.json"
     if must_exist and not path.exists():
         raise FileNotFoundError(f"No profile named '{name}'.")
     return path

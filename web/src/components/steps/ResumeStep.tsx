@@ -28,6 +28,8 @@ import { api, type Extraction, type ProfileSummary, type ResumeSchema } from '@/
  * format, so there is nothing a model guessed at. A PDF or Word file stops at
  * the confirmation screen, always.
  */
+const PROFILE_NAME = /^[a-z0-9_]{1,40}$/
+
 export function ResumeStep({
   profiles,
   profileLimit,
@@ -61,6 +63,9 @@ export function ResumeStep({
   const name = full ? profiles[0] : typedName
 
   const clash = Boolean(name) && profiles.includes(name)
+  // The server's rule (`profile_loader.PROFILE_NAME`, R111), copied so the
+  // screen says so before a resume is read; a test holds the two equal.
+  const nameOk = PROFILE_NAME.test(name)
 
   async function read() {
     if (!file || !name) return
@@ -189,6 +194,11 @@ export function ResumeStep({
               ? 'Your account holds one profile, so a new resume replaces this one.'
               : 'Used for the profile file and generated resume filenames.'}
           </p>
+          {name && !nameOk && (
+            <p className="text-sm text-destructive">
+              Use 1 to 40 lowercase letters, digits or underscores, like jane_doe.
+            </p>
+          )}
         </div>
 
         {/* Overwriting is never implicit. Rebuilding discards every rule the
@@ -219,7 +229,7 @@ export function ResumeStep({
 
         <Button
           onClick={read}
-          disabled={!file || !name || (clash && !replace) || busy !== null}
+          disabled={!file || !name || !nameOk || (clash && !replace) || busy !== null}
         >
           {busy ? (
             <Loader2 className="size-4 animate-spin" />

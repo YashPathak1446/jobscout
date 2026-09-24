@@ -9882,6 +9882,69 @@ and an empty registry; health equal to `RUN_LIMITS`; the cap for 0, 3 and
 `None`; a source check on both UIs. Removing the check fails 16 subtests,
 and reverting to `or` fails the zero test.
 
+## R111. A profile name is a name, checked where it becomes a file; resume filenames are capped
+
+**Decided 2026-09-24.** The first of the two cross-account findings in the
+path audit (Q66).
+
+**The defect.** `init_profile._profile_file` and the loader's `_load_from`
+each joined a profile name to the profiles folder as given. A signed-in
+hosted user could name a new profile so that it landed in another account's
+partition. That was reproduced over HTTP before this change.
+- It was a write only: a new file, never an overwrite, because the backup
+  step refused the odd path.
+- It also bypassed R109, since the sender's own count stayed at zero.
+- It locked the victim out: the planted file filled their one profile.
+
+**The fix.** `profile_loader.profile_file(name, directory)` is the one
+resolver, and both the importer and the loader go through it:
+1. the name must match `PROFILE_NAME`, `[a-z0-9_]{1,40}`;
+2. behind that, the resolved file must lie inside the resolved folder, by
+   path component. That is R108's shape, kept so that a later loosening of
+   the pattern cannot quietly reopen this.
+
+A bad name raises `BadProfileName` before any directory is made. On create it
+is a 400 with the rule in words. On read, PATCH and component writes it is
+the same 404 as a profile that does not exist.
+
+**No hyphen, deliberately.** The author's example allowed one. The schema's
+`user_id` validator, which the name becomes, refuses a hyphen, so
+`jane-doe` would have been writable and then never loaded. The pattern
+matches what can load.
+
+**It applies to reads too, in both modes.** A local profile whose name has
+capitals, a hyphen or a dot will not load until it is renamed; the error
+says what a name may be. The committed fixtures and the author's names fit.
+Reads are checked as well because a rule on writes alone leaves the loader
+as the second path.
+
+**The screens say so first.** Streamlit asks `profile_name_problem` and
+disables Read. React holds a copy of the pattern, pinned equal to the
+Python one by a test. Neither reads a resume under a name the save will
+refuse.
+
+**Resume filenames are capped** at 120 UTF-8 bytes before the hash suffix.
+`isalnum` keeps non-ASCII letters, and a scraped title of 200 two-character
+Japanese words came to 1220 bytes, past ext4's 255-byte limit. 120 bytes
+keeps `<name>_<hash>.aux` under 255 on every filesystem, and a full path
+under Windows' 260. The cut never splits a character.
+
+**Tests** (`test_profile_names.py`, 13):
+- accepted and refused names, including `..`, slashes, a NUL, capitals,
+  hyphens, 41 characters and non-strings;
+- the loader and the importer both refuse, and the importer leaves no
+  directory behind;
+- over HTTP, hosted: the planting request is a 400 and neither account gains
+  a profile; A cannot overwrite B's existing profile even with `force`, and
+  B's file is byte-identical with no backup beside it; B can still create
+  their own afterwards; bad names on GET, PATCH and PUT are 404;
+- React's pattern equals Python's, and Streamlit gates on the helper;
+- the filename cap in bytes and at a character boundary, an ordinary name
+  unchanged, path characters flattened.
+
+Mutations: removing the pattern fails 12 and errors 2, and removing both
+checks fails 16 and errors 3. Raising the cap fails the filename test.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

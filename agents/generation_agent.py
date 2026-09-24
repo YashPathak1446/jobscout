@@ -104,6 +104,10 @@ def _degraded_reason(exc: Exception) -> str:
             f"not a Gemini outage.")
 
 
+# The readable part of a generated resume's filename, before its hash (R111).
+FILENAME_MAX_BYTES = 120
+
+
 class GenerationAgent:
     """
     Resume Generation Agent - Tailors resumes for each job.
@@ -1889,6 +1893,16 @@ Source bullets:
 
         # Remove any non-alphanumeric except underscore
         filename = "".join(c for c in filename if c.isalnum() or c == "_")
+
+        # Capped in UTF-8 bytes, not characters (R111). `isalnum` keeps CJK
+        # and other non-ASCII letters at up to 4 bytes each, and a posting
+        # title is scraped text of any length: 200 repetitions of a two-letter
+        # Japanese word came to 1220 bytes, past ext4's 255-byte limit, and
+        # the write failed. 120 bytes plus the hash suffix and `.tex`/`.aux`
+        # leaves room on every filesystem this runs on, and keeps a path well
+        # under Windows' 260-character default.
+        filename = (filename.encode("utf-8")[:FILENAME_MAX_BYTES]
+                    .decode("utf-8", errors="ignore").rstrip("_")) or "resume"
 
         # Eight hex characters: unique across far more postings than discovery
         # can reach, and short enough to keep the readable part readable.

@@ -54,6 +54,7 @@ from scripts.init_profile import (
     ProfileInvalid,
     create_profile,
     extract_resume,
+    profile_name_problem,
     read_component_rules,
     read_personal,
     WORK_AUTHORIZATION_QUESTIONS,
@@ -190,6 +191,11 @@ def screen_resume():
         help="Used for the profile file and generated resume filenames.",
     )
 
+    # Said before the resume is read, not after (R111).
+    name_problem = profile_name_problem(name) if name else None
+    if name_problem:
+        st.error(name_problem)
+
     # Overwriting is never implicit. Building a profile discards every rule the
     # owner tuned by hand, and one profile was already lost that way (R30).
     clash = bool(name) and name in existing
@@ -203,7 +209,8 @@ def screen_resume():
     confirmed = st.checkbox(f"Yes, replace '{name}'") if clash else False
 
     if st.button("Read my resume", type="primary",
-                 disabled=not (uploaded and name) or (clash and not confirmed)):
+                 disabled=not (uploaded and name) or bool(name_problem)
+                 or (clash and not confirmed)):
         with st.spinner("Reading your resume..."):
             try:
                 extracted = extract_resume(None, uploaded.getvalue(), uploaded.name)
