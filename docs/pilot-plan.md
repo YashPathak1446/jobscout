@@ -176,10 +176,11 @@ board, and a capture of real remote strings.
    only in POST bodies, sent with `/api/resume/extract` too, and scrubbed
    from logs, error messages, run records and files. Q63's interim sentence
    is at `ResumeStep`'s "Yes, replace" checkbox.
-   - **Left from this item, not part of Q58:** the free-tier data-use
-     sentence, from Google's current terms, read at build time.
-4. **A8:** the per-user event log (including `reached_key_step` / `key_saved`)
-   and the success criterion.
+   - ~~The free-tier data-use sentence~~, done in R117's follow-ups. It is
+     on the Key step, linked to Google's terms. Q69 is what those terms add.
+4. ~~**A8:**~~ done minimal (R118): the server-side event log, `admin.py
+   events` and the success criterion below. The client-side funnel events
+   (`reached_key_step` / `key_saved`) and the feedback button are Q70.
 5. **A9:** Sentry, with the key scrubbed.
 6. **A10:** concurrency, the stale-run reaper (Q49: a startup sweep across
    every partition, `queued` too) and machine size.
@@ -797,9 +798,8 @@ Departures and additions:
 
 - **The walker found a real defect.** SQLite left the deleted email in
   `accounts.db`'s free pages. `secure_delete` is now on.
-- **There are no event-log rows to delete yet.** A8 has not been built. Its
-  table lives under `users/<id>/`, so the tree removal covers it, and the
-  walker fails if it does not.
+- **The event log (A8, R118) lives at `users/<id>/data/events.db`**, so the
+  tree removal covers it, and the walker fails if it does not.
 - **Refused while a run is live** (409). `delete-user --ignore-active-runs`
   handles a run that a crash left marked `running`, since the registry never
   clears one.
@@ -911,8 +911,41 @@ run finished, resumes generated, status changed, key saved, key step abandoned,
 onboarding step reached. Counts and timestamps only, no content. Covered by the
 A6 deletion walker.
 
-**A success criterion, written before the invite so it cannot be renegotiated:**
-each friend applies with **≥5 generated resumes within two weeks**. Below that,
+**Built minimal, as R118 (2026-09-24).** What was built is below. The rest
+of this section is the original plan, kept for its reasoning. What was not
+built is Q70.
+
+- One table, `events`, in `users/<id>/data/events.db`. Six events:
+  `account_created` (at the first redeem, not at a reset's), `resume_imported`
+  (`model` / `pattern` / `tex`), `run_started`, `run_finished` (`ok` /
+  `failed:<ExceptionClass>`), `resume_generated` (`valid` / `needs_review`)
+  and `job_marked` (`applied` / `rejected`). A row holds the user id, the
+  event, a short reason and a timestamp, nothing else, and the store refuses
+  any reason outside those lists.
+- `python scripts/admin.py events` prints each account's counts, the
+  furthest stage it reached, and whether it met the criterion below.
+
+### The success criterion (decided 2026-09-24, before the invite)
+
+**At least 3 of the friends complete a run and mark at least one job applied
+or rejected within the first week.**
+
+- "Complete a run" is `run_finished: ok`. A run that failed does not count.
+  A run that finished having written no resumes does count, because the
+  friend still reached the board.
+- "Within the first week" is within 7 days of that friend's
+  `account_created`.
+- `admin.py events` prints this per friend as yes, no, or **unknown**.
+  Unknown means there is no creation event to count from, i.e. an account
+  redeemed before R118. Unknown is not a no.
+
+This **replaces** the criterion first written here: each friend applies with
+≥5 generated resumes within two weeks. That one needed every friend to
+succeed, and it counted applications, which the log can only see if friends
+mark them. The new one asks for 3 friends and counts marks directly.
+
+The earlier criterion, kept for its reasoning: each friend applies with
+**≥5 generated resumes within two weeks**. Below that,
 the failure modes separate cleanly — they never finished onboarding (funnel),
 they finished and did not run (discovery), or they ran and did not use the
 output (tailoring quality). Each points at different work.

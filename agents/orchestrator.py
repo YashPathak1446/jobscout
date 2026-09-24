@@ -446,8 +446,13 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
     # home failed to clean up (WinError 32), and Python 3.13 warned about
     # the unclosed database at exit. A connection's life is now the life of
     # whoever uses it.
+    from tools.jobs import event_log
+
     with _registry(user_id) as registry:
         run_id = registry.create(profile_name)
+    # With the registry row, not in the worker: a run the thread never starts
+    # was still asked for, and "started, never finished" is what says so (A8).
+    event_log.record(user_id, "run_started")
 
     def worker():
         # The key is scrubbed from every log line and run record for as long
@@ -501,9 +506,19 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
                 "pdf_problems": sorted({r["pdf_problem"] for r in results
                                         if r.get("pdf_problem")}),
             }, output_dir=getattr(orchestrator, "output_path", ""))
+            # One per resume, then the run (R118). A `failed` resume was not
+            # generated, so it has no event; the run is still `ok`.
+            for result in results:
+                if result.get("status") in ("valid", "needs_review"):
+                    event_log.record(user_id, "resume_generated", result["status"])
+            event_log.record(user_id, "run_finished", "ok")
         except Exception as exc:                      # the worker owns nothing else
             logger.exception("Background run failed")
             registry.fail(run_id, f"{type(exc).__name__}: {exc}")
+            # The class name only: the message can hold a URL, a line of a job
+            # description, or (scrubbed, but still) where a key was.
+            event_log.record(user_id, "run_finished",
+                             f"failed:{type(exc).__name__}")
         finally:
             registry.close()
 
@@ -589,11 +604,18 @@ def set_job_status(user_id, url: str, status: str) -> bool:
     False when the job is not on this user's board, and nothing is written —
     the route turns that into the same 404 `/api/job` gives (A5).
     """
+    from tools.jobs import event_log
+
     store = _board(user_id)
     try:
-        return store.set_status(url, status)
+        changed = store.set_status(url, status)
     finally:
         store.close()
+    # Only a mark that landed, and only the two A8 counts (R118). A job that
+    # is not on this board changed nothing, so it is not an event either.
+    if changed and status in ("applied", "rejected"):
+        event_log.record(user_id, "job_marked", status)
+    return changed
 
 
 def seniority_levels() -> list:
@@ -727,7 +749,13 @@ def redeem_invite(code: str, email: str, passphrase: str) -> str:
     `ValueError`, as is a malformed email), each with a message for the person.
     """
     from tools.accounts import issue_session, redeem
-    return issue_session(redeem(code, email, passphrase))
+    from tools.jobs import event_log
+
+    user_id = redeem(code, email, passphrase)
+    # Once per account: a reset is redeemed here too, and re-opens an account
+    # rather than creating one (A8).
+    event_log.record(user_id, "account_created", once=True)
+    return issue_session(user_id)
 
 
 def account_email(user_id) -> Optional[str]:
@@ -752,6 +780,24 @@ def list_accounts() -> list:
     """Every account: `user_id`, `email` (None until redeemed) and `created_at`."""
     from tools.accounts import list_accounts as listing
     return listing()
+
+
+def pilot_events() -> list:
+    """
+    Every account's A8 event counts, for `scripts/admin.py events` (R118).
+
+    One entry per account, redeemed or not, with its email, its counts by
+    event (and reason), and whether it met the pilot's success criterion in
+    its first week: `True`, `False`, or `None` when there is no creation
+    event to count from. Each partition is read on its own; nothing here
+    merges one user's rows into another's.
+    """
+    from tools.accounts import list_accounts as listing
+    from tools.jobs import event_log
+
+    return [{"user_id": account["user_id"], "email": account["email"],
+             **event_log.summarise(event_log.read(account["user_id"]))}
+            for account in listing()]
 
 
 def reset_passphrase(user_id: str) -> str:
@@ -792,8 +838,8 @@ def delete_user_data(user_id: str, *, ignore_active_runs: bool = False) -> dict:
 
     Order: the row first, so no new request is served as this user, then the
     tree. If the tree fails half-way the error propagates and a second call
-    finishes it — both steps are idempotent. The A8 event log will live under
-    `users/<id>/`, so the tree is where its rows go too.
+    finishes it — both steps are idempotent. The A8 event log lives under
+    `users/<id>/data/events.db` (R118), so the tree is where its rows go too.
 
     Not covered, and stated so "deleted" never means more than it does: Fly
     volume snapshots and anything outside the data home (logs, Sentry).

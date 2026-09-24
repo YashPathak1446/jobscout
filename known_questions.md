@@ -10341,6 +10341,96 @@ typechecked, linted and built, not exercised in a browser.
   the invite goes out. The same section also says not to submit personal
   information, which is Q69.
 
+## R118. The pilot's event log: who got how far, counted server-side (A8)
+
+**Decided 2026-09-24.** Pilot plan A8, minimal. Only the list the author
+gave was built. The rest of the plan's A8 is Q70.
+
+### What is recorded
+
+One table, `events`, in each user's own partition
+(`users/<id>/data/events.db`, `tools/jobs/event_log.py`). Columns: user id,
+event, reason and timestamp. Six events, each written from the facade, so
+both UIs and every route write them the same way:
+
+| event | reason | written |
+|---|---|---|
+| `account_created` | — | `redeem_invite`, **once per account** |
+| `resume_imported` | `model` / `pattern` / `tex` | `extract_resume`, on success |
+| `run_started` | — | `start_run`, with the registry row |
+| `run_finished` | `ok` / `failed:<ExceptionClass>` | the run's worker |
+| `resume_generated` | `valid` / `needs_review` | the worker, one per resume |
+| `job_marked` | `applied` / `rejected` | `set_job_status`, when it changed a row |
+
+`python scripts/admin.py events` prints, per account: the counts, the
+furthest stage reached, the last event, and whether the account met the
+success criterion. The criterion is now written in docs/pilot-plan.md A8:
+at least 3 friends complete a run and mark at least one job applied or
+rejected within the first week.
+
+### Choices, and what breaks if they are wrong
+
+- **Content cannot get in, by construction.** Every event name comes from a
+  fixed list, and so does every reason except a failed run's. A failed run's
+  reason is `failed:` plus the exception's class name, checked against a
+  pattern. The store **raises** on anything else rather than trimming it:
+  a reason that breaks the rule means content was passed, and that should
+  fail where it happened.
+  - Rejected: a free-text reason run through `redact_keys` and a length
+    cap. A redactor catches a key and not a line of a job description, and
+    a failed run's message is exactly where job text shows up (A9 says so).
+  - If this is wrong: a failed run's reason is less specific than its
+    message. The message is still in the run record.
+- **`account_created` is written at redeem, once.** An invite is not yet an
+  account. A passphrase reset is redeemed through the same function (Q45),
+  so a plain insert would record a second creation and restart that
+  friend's first week. The write is `INSERT … WHERE NOT EXISTS`. Rejected:
+  a column on `accounts.db`. That is a schema change to the one global
+  store, made to answer a question the partition already answers.
+- **An import records what read the resume, not what was asked to.** The
+  reason comes from `_extraction.read_by`, not from `rung`. A Gemini rung
+  whose call failed read the resume by pattern, and the log says pattern.
+  Mutation-checked.
+- **`run_started` is written in `start_run`**, beside the registry row,
+  not in the worker. A run whose thread never starts was still asked for,
+  and a start with no finish after it is how that shows.
+- **A `failed` resume writes no `resume_generated`.** It was not generated.
+  The run is still `ok`. So resumes generated can be fewer than resumes
+  attempted, and this log does not show the gap. The run record does.
+- **Nothing is recorded for the unscoped user** (the checkout, the CLI, local
+  mode). `admin.py events` reads accounts, and the checkout has none, so an
+  event written there would be read by nothing. That is the recurring bug.
+  `event_log.db_path(None)` raises, and `record(None, …)` does nothing.
+- **A storage failure is logged and swallowed; a bad event is not.** A
+  friend's import or run should not fail because counting it failed. A
+  disallowed event or reason still raises (above).
+- **"Unknown" is a third answer to the criterion.** An account redeemed
+  before this change has no `account_created`, so there is no week to count
+  from. `admin.py` prints `unknown`, not `no`.
+
+### Tests
+
+`tests/test_event_log.py`, 21 tests, through the routes a friend uses:
+- account created at redeem and not at invite, and once across a reset;
+- an import by model, by pattern, by a failed model (pattern), a `.tex`, and
+  a refused key (no event);
+- a run: started before the worker runs; a real mock pipeline whose events
+  match the run's own counts; a failed run records the class and not the
+  message;
+- applied and rejected each recorded once; `seen` and a URL not on the board
+  record nothing;
+- two users: the one who marked has the event and the other has none, the
+  rows name their owner, and `pilot_events` does not merge them. Nothing is
+  written for the unscoped user;
+- a model import and a failing run, both with the key on the request: the
+  file's raw bytes contain no key, no resume line and nothing from the
+  model's reply. The store refuses content as a reason;
+- the summary's criterion inside and outside the week, a failed run not
+  counting, and unknown not being no; `admin.py events` output.
+
+**Mutation-checked:** dropping `once`, recording a mark that changed no row,
+and reading the import path from `rung` each fail at least one test.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -12168,6 +12258,29 @@ question for the pilot and for the paid product:
 
 **Carries over (R114)?** Yes. It is about what the hosted product sends to
 a third party on a user's behalf.
+
+## Q70. The rest of the planned A8: client-side funnel events and the feedback button
+
+**Status:** Open, logged 2026-09-24 when A8 was built minimal (R118).
+
+Pilot-plan A8 as first written asked for more than R118 built:
+- **Client-side funnel events:** `reached_key_step` / `key_saved`, and
+  "onboarding step reached" for each wizard step. Abandonment is read as an
+  arrival with nothing after it. With the server-side events alone, a
+  friend who opened the wizard and quit before importing is invisible: no
+  row is ever written for them.
+- **A feedback button** that opens a prefilled email.
+
+Each needs an endpoint the browser writes to, and a vocabulary on it as
+strict as R118's, so a client cannot put content in. Not built because A8
+was asked for minimal.
+
+Also left: `admin.py events` shows unredeemed invites as `unknown`, the
+same as accounts redeemed before R118. The invite list already tells them
+apart, but the events view does not.
+
+**Carries over (R114)?** Yes. A paid product needs its funnel measured more
+than a pilot does.
 
 ---
 

@@ -284,9 +284,20 @@ def extract_resume(user_id, file_bytes: bytes, filename: str, backend: str = Non
     key is scrubbed from every log line and message while it is in use.
     """
     from config import key_in_use
+    from tools.jobs import event_log
 
     with key_in_use(gemini_key):
-        return _extract_resume(user_id, file_bytes, filename, backend, gemini_key)
+        extracted = _extract_resume(user_id, file_bytes, filename, backend,
+                                    gemini_key)
+    # Which reader built what the person will confirm (A8, R118): the model,
+    # the pattern floor, or nothing, for a .tex. From `_extraction`, which
+    # says what did read it, not `rung`, which says what was asked to.
+    if extracted["kind"] == "latex":
+        path = "tex"
+    else:
+        path = (extracted["schema"].get("_extraction") or {}).get("read_by")
+    event_log.record(user_id, "resume_imported", path)
+    return extracted
 
 
 def _extract_resume(user_id, file_bytes, filename, backend, gemini_key) -> dict:

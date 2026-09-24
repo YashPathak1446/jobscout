@@ -198,7 +198,9 @@ re-discovery. `tools/cache/job_cache.py` is a seven-day dedup tracker built to
 *forget*. `data/runs.db` is run progress. All three live in each user's
 partition (R90). The fourth, `tools/accounts.py`'s `data/accounts.db`, is the
 one **global** store (hosted mode only): it is how a request learns which
-user it is, so it cannot live under one.
+user it is, so it cannot live under one. A fifth, `data/events.db`
+(`tools/jobs/event_log.py`, R118), is the pilot's per-user event log: hosted
+users only, fixed event and reason vocabularies, no content.
 
 **Configuration is one file.** `config.py` holds the Gemini fallback chain, the
 embedding model and backend, and the cache settings. `resolve_backend` holds the
