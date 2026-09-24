@@ -13084,6 +13084,20 @@ leave them; show the pair as one row with both histories; or merge only
 pairs where neither copy has a user-set status. Worth counting how many
 hosted boards actually hold a pair before choosing.
 
+## Q83. "The backend every measurement in this project used" is still shown outside the Key step
+
+**Status:** Open, found 2026-09-24 while building R128.
+
+R128 removed it from React's Key step only. The same text comes from
+`llm_backends.DESCRIPTIONS["gemini"]` via `backend_status`, and is still
+shown by:
+- React's Run step (`RunStep.tsx`, under "Bullets will be rewritten by gemini");
+- Streamlit's backend panel (frozen, R115).
+
+Rewording the string in `llm_backends.py` would fix both at once and would
+also change the log line. Decide whether the description is user copy or a
+developer note; if user copy, reword it there.
+
 ## Q62. A non-remote location with no country is still shown as eligible, and the board gate ignores `exclude_countries`
 
 **Status:** Open, backlog from R105 (2026-09-23). Found while fixing Q55;
