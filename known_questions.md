@@ -12747,6 +12747,30 @@ was "fix only what's listed".
 A comment in the deploy config is read at the moment somebody is deciding
 what to set. That is why a stale one here costs more than one in code.
 
+## Q79. After the invite: a sectioned layout instead of a wizard with a board behind it
+
+**Status:** Open, logged 2026-09-24 by the author. **After the invite**; R122
+is the minimal fix for now.
+
+The React app is two views: a six-step wizard, and a board reached from it.
+R122 made a returning user land on the board, with "Edit setup" back into
+the wizard. That is enough for a pilot. It is not a product layout for
+someone who comes back daily. The author's sections:
+- **applied jobs,** the ones marked applied, with their dates (the board's
+  status history already records them);
+- **resumes,** every tailored resume with its job, downloadable;
+- **tracking,** status over time and ghosting (the board already computes
+  `ghosted`);
+- **profile settings,** the wizard's screens as editable settings pages,
+  not a sequence.
+
+**To decide:** whether "run" is a section or an action available
+everywhere; whether the wizard survives only for the first visit; and what
+Streamlit does. Per R115 it does nothing: it stays as it is.
+
+**Constraint from R114:** it is the paid product's layout, so it is built
+once and for React, after the pilot shows what friends actually open.
+
 ---
 
 # Out of scope
