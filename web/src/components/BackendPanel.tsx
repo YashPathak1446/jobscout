@@ -108,7 +108,10 @@ export function BackendPanel({
                 measured, so expect rougher bullets than this project's notes
                 describe.
               </p>
-            ) : (
+            ) : chosen === 'gemini' ? null : (
+              // For Gemini the headline is the whole message (R128). The
+              // shared description adds "the backend every measurement in
+              // this project used", which is our history, not their choice.
               <p>{backend.description}</p>
             )}
             {backend.forced && (

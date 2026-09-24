@@ -10933,6 +10933,22 @@ in both orders and in one batch, a query differing in case staying two jobs,
 a pre-R127 board with both copies gaining no third, and a discovery run end
 to end on Priya's profile. Without the fix the module does not import.
 
+## R128. The Key step's Gemini alert says only who rewrites the bullets
+
+**Decided 2026-09-24.** React only (R115).
+
+Under "Bullets will be rewritten by Google Gemini." the Key step printed
+the rung's shared description: "Google Gemini — the backend every
+measurement in this project used (gemini-3.5-flash)". That is the project's
+history, not something a user decides on. `BackendPanel` now renders no
+description for Gemini; the other rungs keep theirs.
+
+**Not changed:** the description string itself
+(`llm_backends.DESCRIPTIONS["gemini"]`). The Run step and Streamlit also show
+it, and it goes to the log. That is Q83.
+
+**Test:** `test_request_key.TestTheKeyStepSaysOneThingForGemini`.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
