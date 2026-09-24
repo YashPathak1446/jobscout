@@ -166,6 +166,9 @@ board, and a capture of real remote strings.
    - The free-tier data-use sentence, from Google's current terms, read at
      build time.
    - The key in `localStorage`, sent only in POST bodies, with "forget key".
+   - **Send that key with `/api/resume/extract` too** (R113): a hosted import
+     reads no key from the environment, so without it every PDF or Word
+     upload uses the pattern floor.
    - **Q63's interim sentence**, at `ResumeStep`'s "Yes, replace" checkbox:
      jobs already on your board keep the scores from your previous resume,
      and only newly found jobs are scored against this one. Replacing is the
@@ -1042,15 +1045,15 @@ they reach either front end.
   | `agent_preferences.max_jobs_to_generate` | profile, default 10 | The resume cap when `max_resumes` is 0 | Now server-set only: R107 refuses it on PATCH |
   | `agent_preferences.max_jobs_to_discover` / `max_jobs_to_enrich` | profile | **Nothing.** Read only by `profile_loader`'s summary print. The run uses the request's `max_jobs` | n/a, computed and never read (CLAUDE.md's recurring bug) |
   | `max_retries`, `retry_on_validation_fail`, `fallback_to_snippet`, `discovery_source_priority` | profile | Nothing in production code | n/a, never read |
-  | `backend` / `agent_preferences.llm_backend` | run body / profile | Which rung writes | Yes. Harmless while no operator key is in the environment (`fly.toml`: decision 4). **If a `GROQ_API_KEY` or `OPENAI_API_KEY` is ever set as a Fly secret, any user's run spends it** (`llm_backends.env_openai_key`) |
+  | `backend` / `agent_preferences.llm_backend` | run body / profile | Which rung writes | **Closed by R113:** hosted mode reads no key from the environment; a run uses the key it was sent, or none |
   | Resume upload | `POST /api/resume/extract` | Whole file read into memory, then PDF/DOCX parsing | **Yes, no size limit** (`await file.read()`) |
   | Runs in flight per user | `start_run` | Threads on one machine | **No limit today**; the first bullet above |
   | ATS slugs searched | `ats_companies.json`, per user | Discovery fan-out; grows as discovery learns slugs | Server-written only; not user-editable, but unbounded growth |
   | Discovery per-source caps | constants (ATS 200, Serper 10, Adzuna 15) | Upstream fetches | Server constants |
 
-  Done: the run-size bounds (R110). Left for A10: an upload size cap, one
-  active run per user (above), and hosted runs never reading an operator key
-  (proposed after R110, not yet built).
+  Done: the run-size bounds (R110) and hosted runs never reading an
+  operator key (R113). Left for A10: an upload size cap and one active run
+  per user (above).
 
 - **Trimming streamlit forces a dependency split, and that has to be decided
   here.** `requirements.txt` is deliberately the install list for people running

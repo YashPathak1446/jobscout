@@ -10018,6 +10018,56 @@ PDF text extractor reading the underscore glyph, and the `.tex` holds
 Against the old parser and builder: 9 failures and 12 errors. With only the
 builder reverted, the builder test fails.
 
+## R113. A hosted instance uses the key a request carries, or none, never one from its environment
+
+**Decided 2026-09-24**, at the author's request (proposed after R110).
+
+**Where it goes in the precedence chain: nowhere, and that is the point.**
+`resolve_backend`'s chain (`--backend` > `JOBSCOUT_LLM_BACKEND` > profile >
+`LLM_BACKEND` > auto) picks a *rung*, and is unchanged. Keys are resolved by
+two other functions, and only they read the environment:
+- `config.resolve_api_key(explicit)` for Gemini. Every Gemini client goes
+  through `gemini_client` (R101), and embeddings choose their backend by
+  asking it.
+- `llm_backends.env_openai_key()` for the OpenAI-compatible rungs. It had
+  no request path at all.
+
+Both now ask `config.environment_keys_allowed()`, which is true only in
+local mode. The key chain becomes:
+- **local:** the request's key > the environment's > none (unchanged);
+- **hosted:** the request's key > none.
+
+A test walks the syntax tree and requires exactly those two files to read
+any provider key variable, so a third reader fails the build.
+
+**What a hosted user gets, stated because it follows from this:**
+- **Bullets:** Gemini with the key they send; otherwise the `none` rung.
+  The OpenAI-compatible rungs are never available, because a request
+  carries a Gemini key only. Adding one is A7b's business (Q60).
+- **Embeddings:** always potion. `active_backend` chooses Gemini only when
+  `resolve_api_key()` finds a key, and the request's key never reached
+  embeddings anyway (the A7 finding).
+- **Import:** a PDF or Word upload is read by the pattern floor, because
+  `/api/resume/extract` carries no key. The key a friend saves in the
+  browser (Q58) will need to be sent with the extract request for their
+  import to use a model. That is noted for Q58.
+- **A CLI run on the server** (`fly ssh console`) inherits
+  `JOBSCOUT_MODE=hosted` and ignores any key in the environment. That is
+  intended.
+
+**On Fly today nothing changes:** no operator key is set (decision 4). This
+pins that state, rather than relying on nobody ever setting a secret.
+
+**An unrecognised mode raises**, as it does at boot (`HostingMisconfigured`),
+rather than being read as local.
+
+**Tests** (`test_hosted_keys.py`, 7): local reads the environment; hosted
+does not; the request's key wins in both; an unknown mode raises; a hosted
+`backend_status` with keys in the environment reports `none`; hosted
+embeddings stay local; exactly the two readers. Mutations: removing the
+Gemini guard fails 4, removing the OpenAI one fails 2, and a planted third
+reader fails the tree walk.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
