@@ -11284,6 +11284,38 @@ there. The copy covers the gap:
   jobs are scored against this one. It is true today and stays true until
   this is fixed, so it needs no hedge.
 
+## Q64. `stored_path` checks an absolute path against the user's home, and joins a relative one unchecked
+
+**Status:** Open, found 2026-09-24 while inventorying R107. **Not reachable
+over HTTP since R107**, which is why it is a Q and not an emergency. Decide
+before A12.
+
+`tools/paths.stored_path` exists to keep a profile's `master_resume_path`
+inside its user's partition. Its docstring says an out-of-home path would be
+"the partition's whole purpose undone by one string". It enforces that for
+absolute paths only:
+
+```python
+if not path.is_absolute():
+    return user_home(user_id) / path      # no resolve, no containment check
+```
+
+`stored_path("../bob/data/master_resumes/r.tex", user_id="alice")` resolves
+to `users/bob/data/master_resumes/r.tex`. Checked by running it.
+
+**What could write such a path.** Until R107, `PATCH /api/profile/{name}`.
+Now: `create_profile`, which writes a server-chosen relative path; a
+hand-edited file, which in hosted mode means someone with the volume already;
+and any future route or import that stores a path. The guard sits in the
+resolver so that the writers do not have to be trusted, and it is the
+resolver that has the gap.
+
+**The fix is one check,** applied to both branches: resolve, then require the
+home among its parents when `user_id` is set. Unscoped stays as it is: the
+CLI's user owns the whole disk. A test resolves `..`, a symlink out of the
+home, and a plain relative path. It is small and I would take it as its own R
+whenever you say.
+
 ---
 
 # Out of scope
