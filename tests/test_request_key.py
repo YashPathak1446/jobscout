@@ -506,5 +506,21 @@ class TestAHostedPageOffersNothingLocal(unittest.TestCase):
         self.assertIn("!(mode === 'hosted' && value === 'ollama')", run)
 
 
+class TestTheKeyStepSaysOneThingForGemini(unittest.TestCase):
+    """
+    R128. The Key step's Gemini alert is its headline and nothing else: the
+    shared description's "the backend every measurement in this project
+    used" is the project's history, not something a user chooses on.
+    """
+
+    PANEL = ROOT / "web" / "src" / "components" / "BackendPanel.tsx"
+
+    def test_gemini_skips_the_description(self):
+        panel = self.PANEL.read_text(encoding="utf-8")
+        self.assertIn("gemini: 'Bullets will be rewritten by Google Gemini.'", panel)
+        skip = panel.index("chosen === 'gemini' ? null :")
+        self.assertLess(skip, panel.index("<p>{backend.description}</p>"))
+
+
 if __name__ == "__main__":
     unittest.main()

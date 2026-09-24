@@ -30,6 +30,7 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from tools import paths
 
@@ -88,6 +89,9 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
 CREATE INDEX IF NOT EXISTS idx_jobs_score  ON jobs(score);
 CREATE INDEX IF NOT EXISTS idx_jobs_seen   ON jobs(last_seen);
+-- R127: the lookup `_find` makes for every discovered job, so a board of
+-- thousands is not scanned once per posting.
+CREATE INDEX IF NOT EXISTS idx_jobs_url_lower ON jobs(lower(url));
 
 -- When each status was set, not just what it is now.
 --
@@ -113,6 +117,23 @@ CREATE INDEX IF NOT EXISTS idx_history_url ON status_history(url, changed_at);
 # before `gate_verdict` existed are backfilled once by `_migrate`, so this is
 # the only reading of NULL anywhere.
 _VERDICT = "COALESCE(gate_verdict, 'shown')"
+
+
+def url_key(url: str) -> str:
+    """
+    What makes two apply URLs the same posting (R127).
+
+    SmartRecruiters served one Experian posting as both
+    `jobs.smartrecruiters.com/experian/...` and `/Experian/...`, and the board
+    stored two jobs and wrote two resumes. Scheme, host and path are compared
+    case-folded; the query and fragment are kept as written, because an
+    `?id=` or `?gh_jid=` value is an identifier whose case is not ours to
+    fold. Used only for comparison: the URL stored and shown is the one
+    discovery first found.
+    """
+    parts = urlsplit((url or "").strip())
+    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(),
+                       parts.path.lower(), parts.query, parts.fragment))
 
 
 def _now() -> str:
@@ -152,9 +173,7 @@ class JobStore:
             if not url:
                 continue
 
-            row = self._db.execute(
-                "SELECT url, full_jd FROM jobs WHERE url = ?", (url,)
-            ).fetchone()
+            row = self._find(url)
 
             if row is None:
                 self._db.execute(
@@ -170,18 +189,47 @@ class JobStore:
             else:
                 # Only fill a JD that is missing; never overwrite a good one
                 # with an empty re-discovery.
+                # The row's own URL, not the incoming one: they can differ in
+                # case (R127), and the stored one is the job's identity.
                 incoming = getattr(job, "full_jd", "") or ""
                 if incoming and not row["full_jd"]:
                     self._db.execute(
                         "UPDATE jobs SET last_seen = ?, full_jd = ? WHERE url = ?",
-                        (stamp, incoming, url))
+                        (stamp, incoming, row["url"]))
                 else:
                     self._db.execute(
-                        "UPDATE jobs SET last_seen = ? WHERE url = ?", (stamp, url))
+                        "UPDATE jobs SET last_seen = ? WHERE url = ?",
+                        (stamp, row["url"]))
                 updated += 1
 
         self._db.commit()
         return {"added": added, "updated": updated}
+
+    def _find(self, url: str):
+        """
+        The stored row for this posting, matched by `url_key` (R127).
+
+        An exact match wins. A board that already holds two case variants
+        keeps both — nothing is deleted — and a later match goes to the one
+        first seen. `lower()` narrows through the index; `url_key` decides,
+        because it keeps the query's case and SQLite's `lower()` does not.
+        """
+        exact = self._db.execute(
+            "SELECT url, full_jd FROM jobs WHERE url = ?", (url,)).fetchone()
+        if exact is not None:
+            return exact
+        key = url_key(url)
+        for row in self._db.execute(
+                "SELECT url, full_jd FROM jobs WHERE lower(url) = lower(?)"
+                " ORDER BY first_seen, rowid", (url,)):
+            if url_key(row["url"]) == key:
+                return row
+        return None
+
+    def stored_url(self, url: str):
+        """The URL this posting is stored under, or None if it is not (R127)."""
+        row = self._find(url)
+        return row["url"] if row is not None else None
 
     # Columns added after the first release. `CREATE TABLE IF NOT EXISTS` is a
     # no-op against a database that already exists, so a new column reaches
