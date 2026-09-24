@@ -702,6 +702,10 @@ def profile_read(name: str, user: Optional[str] = Depends(_caller)) -> dict:
         }
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=NO_SUCH_PROFILE) from exc
+    except ValueError as exc:
+        # A stored resume path that resolves outside this account (R108).
+        # Refused in words, not as a 500.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class ProfileUpdate(BaseModel):

@@ -110,6 +110,44 @@ class TestTheSeam(_MovedHome):
         with self.assertRaises(ValueError):
             paths.stored_path(str(bob), user_id="alice")
 
+    def test_a_relative_path_cannot_climb_out_of_its_home(self):
+        """
+        Q64: the containment check ran on absolute paths only, so this
+        resolved to `users/bob/...` and the pipeline would have read it.
+        """
+        with self.assertRaises(ValueError) as caught:
+            paths.stored_path("../bob/data/master_resumes/b.tex", user_id="alice")
+        self.assertIn("outside this account", str(caught.exception))
+        # A `..` that stays inside the home is still just a path.
+        self.assertEqual(
+            paths.stored_path("data/x/../master_resumes/a.tex", user_id="alice"),
+            self.home / "users" / "alice" / "data" / "x" / ".." / "master_resumes"
+            / "a.tex")
+
+    def test_a_symlink_out_of_the_home_is_followed_and_refused(self):
+        bob = self.home / "users" / "bob" / "data" / "master_resumes"
+        bob.mkdir(parents=True)
+        (bob / "b.tex").write_text("bob's resume", encoding="utf-8")
+        alice = self.home / "users" / "alice" / "data" / "master_resumes"
+        alice.mkdir(parents=True)
+        link = alice / "mine.tex"
+        try:
+            link.symlink_to(bob / "b.tex")
+        except (OSError, NotImplementedError):
+            self.skipTest("this platform cannot create symlinks")
+        with self.assertRaises(ValueError):
+            paths.stored_path("data/master_resumes/mine.tex", user_id="alice")
+        with self.assertRaises(ValueError):
+            paths.stored_path(str(link), user_id="alice")
+
+    def test_a_sibling_whose_name_extends_the_id_is_not_inside_it(self):
+        """By path component, not by string prefix: `bobby` is not in `bob`."""
+        bobby = self.home / "users" / "bobby" / "data" / "master_resumes" / "x.tex"
+        for stored in ("../bobby/data/master_resumes/x.tex", str(bobby)):
+            with self.subTest(stored=stored):
+                with self.assertRaises(ValueError):
+                    paths.stored_path(stored, user_id="bob")
+
 
 class TestEveryStoreIsPerUser(_MovedHome):
 

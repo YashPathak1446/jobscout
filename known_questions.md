@@ -9758,6 +9758,42 @@ sends nothing else in either.
   (the source test); dropping `willing_to_relocate` gives 2 (route and
   source).
 
+## R108. A stored resume path is resolved before it is trusted, relative or absolute
+
+**Decided 2026-09-24.** Resolves Q64.
+
+`paths.stored_path` is where a profile's `master_resume_path` becomes a file
+location, and every reader goes through it: the orchestrator's
+`master_resume_path`, `init_profile`'s component editor, the probe and the
+path snapshot. Scoped (`user_id` set), it now:
+1. joins a relative path to the user's home, as before;
+2. **resolves** the result (`..` collapsed, symlinks followed);
+3. requires `is_relative_to(user_home(user_id).resolve())`, a comparison
+   by path component, so `users/bobby` is not inside `users/bob`;
+4. otherwise raises `ValueError` ("points outside this account's own files,
+   so it was not read"). There is no fallback, because there is no right
+   file to fall back to.
+
+A run surfaces that message as its failure. `GET /api/profile/{name}`, which
+reads the path through the component editor, answers 422 with it instead of
+a 500.
+
+**Unscoped is unchanged:** the CLI's user owns the disk and may keep a
+resume anywhere. That exemption is pinned by an existing test. The returned
+path is the joined one, not the resolved one, so `path_snapshot verify` is
+unmoved. Reading it follows the same symlinks the check followed, and no
+hosted route can create a symlink.
+
+**Tests** (`test_scope_seam`): alice → `../bob/...`, relative and through a
+symlink planted in alice's folder pointing at bob's file, refused both as
+the relative spelling and as the absolute one; `bob` vs `bobby`, relative
+and absolute; and an in-home `..`, which still resolves.
+- All three tests fail against the old code.
+- A string-prefix mutation (`startswith`) fails the sibling test on both
+  spellings.
+- The old absolute check already compared by component, so it was right for
+  `bobby`. The relative branch never reached any check.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -11286,9 +11322,8 @@ there. The copy covers the gap:
 
 ## Q64. `stored_path` checks an absolute path against the user's home, and joins a relative one unchecked
 
-**Status:** Open, found 2026-09-24 while inventorying R107. **Not reachable
-over HTTP since R107**, which is why it is a Q and not an emergency. Decide
-before A12.
+**Status:** Resolved 2026-09-24 by R108. Found while inventorying R107,
+which had already closed the HTTP route to it.
 
 `tools/paths.stored_path` exists to keep a profile's `master_resume_path`
 inside its user's partition. Its docstring says an out-of-home path would be
