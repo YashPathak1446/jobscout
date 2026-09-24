@@ -10673,6 +10673,54 @@ four-job account and driven in Chromium through sign-in, showed "Scored 78
 Q63's "display state computed once in the facade" would have prevented this
 class of bug. This is the minimal fix, not that one.
 
+## R122. A returning user signs in to their board, not an empty wizard
+
+**Decided 2026-09-24**, from the first live deploy. React routing only; no
+session, cookie, account or auth code was touched.
+
+**What was seen.** Signing in landed every account on the wizard's first
+step, empty, with nothing leading to the board. A returning friend's jobs,
+resumes and marks looked gone, though the data was on the server.
+
+**The cause.** In `App.tsx`, `view` started as `'setup'` and sign-in set it to
+`'setup'` again, so nothing asked whether the account had a profile. The
+wizard's "Your jobs" button appears only when it is handed a profile, and
+after sign-in it never was.
+
+**The fix.**
+- **Where a signed-in hosted account starts.** After sign-in, and on a
+  page load already signed in, `openHome()` asks `/api/health` for the
+  account's profiles. It opens the board when there is one and the wizard
+  when there is none.
+- **While that is unknown**, a brief "Opening your jobs…" shows neither the
+  wizard nor a board. If health fails, the wizard opens: it works either
+  way, since its resume step offers an existing profile.
+- **"Edit setup"** is the board's button that was labelled "Back to setup".
+  It opens the wizard on the account's profile.
+- **Prefilled: yes, because it was straightforward.** Each step already
+  loads the saved profile when given its name. The only change was the
+  wizard's `furthest`: it now starts at the last step when opened on a
+  profile, so every step is reachable. The key comes from the browser, as
+  before.
+- **Local mode is unchanged.**
+
+**Tests** (`test_returning_user_lands_on_board.py`, source-level): sign-in
+and an existing session both call `openHome`; a profile opens the board and
+none opens the wizard; the unknown beat renders neither; "Edit setup"
+exists; every step is reachable. Against the old code, 5 fail and 1 errors.
+
+**Seen in a browser.** The built React, served in hosted mode and driven in
+Chromium through the real sign-in form:
+- the account with a board landed on it, with "Edit setup";
+- "Edit setup" opened the wizard with all six steps enabled, and About you
+  showed the saved location (Boston, Massachusetts);
+- a new account with no profile landed on the wizard.
+
+**Who it affects:** every hosted user after their first visit. A friend who
+imported a resume and closed the tab before running now lands on an empty
+board with "Edit setup", not a fresh wizard. The layout Q79 describes is the
+fuller answer.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user

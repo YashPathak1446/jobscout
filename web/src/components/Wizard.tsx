@@ -42,7 +42,11 @@ export function Wizard({
   const [step, setStep] = useState(0)
   // The furthest screen reached, so stepping back does not strand someone
   // behind screens they have already completed.
-  const [furthest, setFurthest] = useState(0)
+  //
+  // Opened on an existing profile ("Edit setup" from the board, R122), every
+  // step is already done, so every step is reachable; each one loads what the
+  // profile holds. Otherwise only the first, as before.
+  const [furthest, setFurthest] = useState(profile ? STEPS.length - 1 : 0)
   const [profiles, setProfiles] = useState<string[] | null>(null)
   const [profileLimit, setProfileLimit] = useState<number | null>(null)
   const [summary, setSummary] = useState<ProfileSummary | null>(null)
