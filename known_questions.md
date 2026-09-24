@@ -12610,6 +12610,34 @@ it. It was not in A10's list.
   before any poll, so this is local mode only (a Streamlit process that died).
   Carries over only if the product ever runs more than one process.
 
+## Q77. Three more stores leave their connection open when setting up fails
+
+**Status:** Open, found 2026-09-24 while fixing the run registry's copy of
+this. The author scoped that fix to the registry and the sweep.
+
+`RunRegistry.__init__` opened its SQLite connection and then ran the schema.
+On a corrupt file the schema step raised inside the constructor, where no
+caller's `with` or `finally` can reach, so the connection stayed open. On
+Windows the file could then not be deleted (WinError 32). The registry now
+closes it on that path. The same shape is in three other stores, found by
+listing every `sqlite3.connect` under `tools/`:
+- `tools/jobs/job_store.py`, `JobStore.__init__`: connect, then
+  `executescript`, `_migrate`, `commit`;
+- `tools/jobs/event_log.py`, `EventLog.__init__`: connect, then
+  `executescript`;
+- `tools/accounts.py`, `_connect()`: connect, then `PRAGMA`, the schema and
+  a column migration, before the connection is returned.
+
+**The fix is the registry's:** close on any exception between the connect
+and the return. Worth one helper, since four copies of a
+close-on-failure block would be the two-paths bug times four, and a test
+that corrupts each store's file and checks, by tracking `sqlite3.connect`,
+that nothing is left open.
+
+**Who meets it:** a corrupt store on the volume, which should not happen,
+and Windows tests that corrupt one on purpose. `accounts.db` matters most,
+because every request opens it.
+
 ---
 
 # Out of scope
