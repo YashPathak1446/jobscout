@@ -12638,6 +12638,27 @@ that nothing is left open.
 and Windows tests that corrupt one on purpose. `accounts.db` matters most,
 because every request opens it.
 
+## Q78. Two comments in `fly.toml` describe code that has moved
+
+**Status:** Open, found 2026-09-24 checking `fly.toml` for A12. The
+configuration itself is right; only comments are stale, and the A12 brief
+was "fix only what's listed".
+
+- **The `GOOGLE_API_KEY` paragraph predates R113.** It says a key "is
+  deliberately not set", and that if one is ever set its name is
+  `GOOGLE_API_KEY`. Both read as if setting one would work. Since R113 a
+  hosted instance ignores every model key in its environment, and Q67 makes
+  setting one a decision about paid plans, not a secret to add. The
+  paragraph should say that and point at R113 and Q67, and name A12's "no
+  LLM keys as Fly secrets" check.
+- **`orchestrator.py:701` is a line reference** in the `[[mounts]]`
+  comment, for where `master_resume_path` is joined to the data home. That
+  join moved to `paths.stored_path` (R86, R108), and line 701 is no longer
+  it. Name the function, not the line.
+
+A comment in the deploy config is read at the moment somebody is deciding
+what to set. That is why a stale one here costs more than one in code.
+
 ---
 
 # Out of scope
