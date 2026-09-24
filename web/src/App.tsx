@@ -3,7 +3,7 @@ import { ArrowLeft } from 'lucide-react'
 
 import { Board } from '@/components/Board'
 import { SignIn } from '@/components/SignIn'
-import { Wizard } from '@/components/Wizard'
+import { STEPS, Wizard } from '@/components/Wizard'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { api, SIGNED_OUT, type Session } from '@/lib/api'
@@ -14,8 +14,36 @@ export default function App() {
   // wrong screen, and a sign-in form on a laptop is a claim about the app.
   const [session, setSession] = useState<Session | null>(null)
   const [sessionError, setSessionError] = useState<string | null>(null)
-  const [view, setView] = useState<'signin' | 'setup' | 'board'>('setup')
+  // 'home' is "signed in, not yet known whether this account has a board"
+  // (R122). Showing the wizard for that beat would tell a returning user
+  // their data is gone; showing the board would tell a new one they have
+  // one. It resolves to 'board' or 'setup' as soon as health answers.
+  const [view, setView] = useState<'signin' | 'home' | 'setup' | 'board'>('setup')
   const [profile, setProfile] = useState<string | null>(null)
+  // The wizard's opening step: undefined is its first, and the board's empty
+  // state asks for Run (R123).
+  const [wizardStep, setWizardStep] = useState<number | undefined>(undefined)
+
+  // Where a signed-in hosted account starts (R122): its board when it has a
+  // profile, the wizard only when it has none. Signing in used to land every
+  // account on the wizard's first step, empty, with no way to its board, so
+  // a returning friend's jobs, resumes and marks looked gone.
+  function openHome() {
+    setView('home')
+    api
+      .health()
+      .then((h) => {
+        if (h.profiles.length > 0) {
+          setProfile(h.profiles[0])
+          setView('board')
+        } else {
+          setView('setup')
+        }
+      })
+      // Could not tell: the wizard, which works either way (its resume step
+      // offers an existing profile), rather than a board that may be empty.
+      .catch(() => setView('setup'))
+  }
 
   useEffect(() => {
     api
@@ -23,6 +51,7 @@ export default function App() {
       .then((s) => {
         setSession(s)
         if (s.mode === 'hosted' && s.user === null) setView('signin')
+        else if (s.mode === 'hosted') openHome()
       })
       .catch((e: Error) => setSessionError(e.message))
   }, [])
@@ -54,6 +83,14 @@ export default function App() {
     )
   }
 
+  if (view === 'home') {
+    return (
+      <div className="mx-auto max-w-md px-6 pt-24">
+        <p className="text-sm text-muted-foreground">Opening your jobs…</p>
+      </div>
+    )
+  }
+
   if (view === 'signin') {
     return (
       <div className="min-h-screen bg-background">
@@ -61,7 +98,7 @@ export default function App() {
           onSignedIn={(email) => {
             setSession({ mode: 'hosted', user: { email } })
             setProfile(null)
-            setView('setup')
+            openHome()
           }}
         />
       </div>
@@ -90,9 +127,16 @@ export default function App() {
       {view === 'board' ? (
         <>
           <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-6 pt-6">
-            <Button variant="ghost" size="sm" onClick={() => setView('setup')}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setWizardStep(undefined)
+                setView('setup')
+              }}
+            >
               <ArrowLeft className="size-4" />
-              Back to setup
+              Edit setup
             </Button>
             {profile && (
               <span className="text-sm text-muted-foreground">
@@ -100,7 +144,16 @@ export default function App() {
               </span>
             )}
           </div>
-          <Board />
+          <Board
+            onStartRun={
+              profile
+                ? () => {
+                    setWizardStep(STEPS.indexOf('Run'))
+                    setView('setup')
+                  }
+                : undefined
+            }
+          />
         </>
       ) : (
         <Wizard
@@ -108,6 +161,7 @@ export default function App() {
           profile={profile}
           onProfile={setProfile}
           onOpenBoard={() => setView('board')}
+          initialStep={wizardStep}
         />
       )}
     </div>

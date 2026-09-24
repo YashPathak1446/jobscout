@@ -409,6 +409,11 @@ def _reap(registry, every_foreign: bool = False) -> list:
                              every_foreign=every_foreign)
 
 
+def _readable_count(enriched_jobs) -> int:
+    """Enriched jobs whose description could be read (R124)."""
+    return sum(1 for job in enriched_jobs if job.get("scraped_successfully"))
+
+
 def reap_stale_runs() -> int:
     """
     The startup sweep: every partition's dead runs marked failed (R120, Q49).
@@ -578,7 +583,8 @@ def start_run(user_id, profile_name, api_key="", max_jobs=20, max_resumes=3,
                 # only report zero and call it success — which is what it did,
                 # on the last screen a first-time user sees.
                 "discovered": len((state or {}).get("discovered_jobs") or []),
-                "enriched": len((state or {}).get("enriched_jobs") or []),
+                # With a readable description, as the report counts (R124).
+                "enriched": _readable_count((state or {}).get("enriched_jobs") or []),
                 "analysed": len((state or {}).get("analysis_results") or []),
                 "generated": len(results),
                 "valid": sum(1 for r in results if r.get("status") == "valid"),
@@ -2015,7 +2021,15 @@ class JobScoutOrchestrator:
         _console_print()
         _console_print("📊 Results:")
         _console_print(f"  Jobs discovered: {len(self.state['discovered_jobs'])}")
-        _console_print(f"  Jobs enriched: {len(self.state['enriched_jobs'])}")
+        # Readable only (R124). This counted every job enrichment returned, so
+        # a run whose page scrapes all failed still said "5 of 5 enriched".
+        # The rest are kept and scored, and said, not subtracted in silence.
+        enriched = self.state['enriched_jobs'] or []
+        readable = _readable_count(enriched)
+        kept = len(enriched) - readable
+        _console_print(f"  Jobs enriched: {readable}"
+                       + (f" ({kept} more kept without a readable description)"
+                          if kept else ""))
         _console_print(f"  Jobs analyzed: {len(self.state['analysis_results'])}")
         for line in self._scoring_lines():
             _console_print(f"  {line}")

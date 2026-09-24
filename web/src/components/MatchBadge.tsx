@@ -77,6 +77,27 @@ export function MatchBadge({
 
   const tier = band(score, bands)
 
+  // Scored, but not yet comparable (R121). Bands need enough scored jobs to
+  // divide (`JobStore.MIN_FOR_BANDS`), so a new account's first run has
+  // scores and no bands. This fell through to "Not scored" below: a claim
+  // that analysis never looked at a job it had scored and written a resume
+  // for. Streamlit's label already showed the number alone here.
+  if (!tier && score !== null && score !== undefined) {
+    return (
+      <span
+        className={cn(
+          'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5',
+          'text-xs font-medium tabular-nums',
+          className,
+        )}
+        title={`Scored ${score.toFixed(1)}. Strong, typical and weak appear once more of your jobs are scored.`}
+      >
+        Scored
+        <span className="opacity-60">{score.toFixed(0)}</span>
+      </span>
+    )
+  }
+
   if (!tier) {
     return (
       <span

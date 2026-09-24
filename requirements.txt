@@ -43,7 +43,10 @@ uvicorn[standard]>=0.27.0
 
 # Error reporting for the hosted API (A9, R119). Inert unless SENTRY_DSN is set:
 # nothing is imported or sent from a checkout, the CLI or the test suite.
-sentry-sdk>=2.0.0
+# Pinned to the version R126 was tested on: the SDK enables integrations on
+# its own from what is installed, and a new release can add one (Q81). Revisit
+# the pin when Q81 is done.
+sentry-sdk==2.70.0
 
 # Optional: Development
 # pytest>=7.0.0

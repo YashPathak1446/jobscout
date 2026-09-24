@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.search import JobListing
 from tools.scraping import mock_scrape_jd
-from tools.scraping.jd_scraper import scrape_jd
+from tools.scraping.jd_scraper import MIN_JD_LENGTH, extract_requirements, scrape_jd
 from tools.cache.job_cache import JobCache, cache_dir as job_cache_dir
 
 logger = logging.getLogger(__name__)
@@ -223,6 +223,26 @@ class EnrichmentAgent:
         # The mock itself is fine and stays; `--mock` is a thing a person asks
         # for. Using it when nobody asked is R47's distinction exactly: "you
         # chose this" has to look different from "this broke".
+        # The posting's own text from the ATS API, when discovery has it
+        # (R124). Greenhouse (`?content=true`) and Ashby (`descriptionPlain`)
+        # return the full job description with the listing, and `_listing`
+        # keeps it as `full_jd`, but nothing here read it: a failed page
+        # scrape fell back to `description`, the first 300 characters, and
+        # marked the job unreadable. On the first live deploy all three
+        # Ashby jobs (Vanta) were scored on that snippet and given no resume,
+        # with their full text on the listing. First-party text, so readable,
+        # and never invented: absent or short, the old path below still runs.
+        api_text = (getattr(job, "full_jd", "") or "").strip()
+        if len(api_text) >= MIN_JD_LENGTH:
+            logger.info(f"   📄 Page scrape failed; using the posting from "
+                        f"{job.source}'s API ({len(api_text)} chars)")
+            return {
+                "full_jd": api_text,
+                "requirements": extract_requirements(api_text),
+                "scraped_successfully": True,
+                "scraper_used": f"ats_api ({job.source})",
+            }
+
         logger.warning("   ⚠️  Scrape failed — keeping the short description, "
                        "not inventing one")
         return {

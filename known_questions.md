@@ -10633,6 +10633,258 @@ threshold forced to 0 so all 6 surviving jobs got a resume and a
 - the app sweeps on startup
 - React's run screen handles the 409
 
+## R121. A scored job on a small board said "Not scored"
+
+**Decided 2026-09-24**, from the first live deploy.
+
+**What was seen.** A new, keyed account's first run scored 4 jobs and wrote
+a valid resume for one (Twilio). The React board said "Not scored" for every
+job. A keyless account on the same deploy showed scores.
+
+**The cause: board size, not the key.** Traced through analysis, the
+store, the payload and the badge:
+- The scores were stored, with their bar.
+- `JobStore.score_bands` returns nothing until `MIN_FOR_BANDS` (8) jobs are
+  scored, because quartiles over fewer are noise. The keyed account was new
+  and had 4; the keyless one had more than 8.
+- `MatchBadge` asked `band(score, bands)` for strong / typical / weak, got
+  none, and fell through to "Not scored": the label for a job analysis
+  never looked at.
+
+"Too few to compare yet" was rendered as "never scored", which is CLAUDE.md's
+unknown-is-never-a-value rule again. Streamlit's label already showed the
+number alone in this case; only React fell through.
+
+**The fix, React only.** A job with a score and no band shows a neutral
+"Scored 78" badge, whose tooltip says the bands appear once more jobs are
+scored. "Not scored" is now reached only when there is no score. Below-bar
+rows are unchanged (R106).
+
+**Tests** (`test_small_board_scores.py`):
+- through the hosted API, a four-job board carries all four scores and
+  empty bands;
+- in the badge's source, a known score is handled before "Not scored" is
+  considered. That test fails on the old badge.
+
+**Seen in a browser.** The built React, served in hosted mode with that
+four-job account and driven in Chromium through sign-in, showed "Scored 78
+/ 71 / 66 / 52" and no "Not scored".
+
+Q63's "display state computed once in the facade" would have prevented this
+class of bug. This is the minimal fix, not that one.
+
+## R122. A returning user signs in to their board, not an empty wizard
+
+**Decided 2026-09-24**, from the first live deploy. React routing only; no
+session, cookie, account or auth code was touched.
+
+**What was seen.** Signing in landed every account on the wizard's first
+step, empty, with nothing leading to the board. A returning friend's jobs,
+resumes and marks looked gone, though the data was on the server.
+
+**The cause.** In `App.tsx`, `view` started as `'setup'` and sign-in set it to
+`'setup'` again, so nothing asked whether the account had a profile. The
+wizard's "Your jobs" button appears only when it is handed a profile, and
+after sign-in it never was.
+
+**The fix.**
+- **Where a signed-in hosted account starts.** After sign-in, and on a
+  page load already signed in, `openHome()` asks `/api/health` for the
+  account's profiles. It opens the board when there is one and the wizard
+  when there is none.
+- **While that is unknown**, a brief "Opening your jobs…" shows neither the
+  wizard nor a board. If health fails, the wizard opens: it works either
+  way, since its resume step offers an existing profile.
+- **"Edit setup"** is the board's button that was labelled "Back to setup".
+  It opens the wizard on the account's profile.
+- **Prefilled: yes, because it was straightforward.** Each step already
+  loads the saved profile when given its name. The only change was the
+  wizard's `furthest`: it now starts at the last step when opened on a
+  profile, so every step is reachable. The key comes from the browser, as
+  before.
+- **Local mode is unchanged.**
+
+**Tests** (`test_returning_user_lands_on_board.py`, source-level): sign-in
+and an existing session both call `openHome`; a profile opens the board and
+none opens the wizard; the unknown beat renders neither; "Edit setup"
+exists; every step is reachable. Against the old code, 5 fail and 1 errors.
+
+**Seen in a browser.** The built React, served in hosted mode and driven in
+Chromium through the real sign-in form:
+- the account with a board landed on it, with "Edit setup";
+- "Edit setup" opened the wizard with all six steps enabled, and About you
+  showed the saved location (Boston, Massachusetts);
+- a new account with no profile landed on the wizard.
+
+**Who it affects:** every hosted user after their first visit. A friend who
+imported a resume and closed the tab before running now lands on an empty
+board with "Edit setup", not a fresh wizard. The layout Q79 describes is the
+fuller answer.
+
+## R123. An empty board says so and offers the first run
+
+**Decided 2026-09-24**, React only.
+
+The board's list said "No jobs match these filters" whenever it was empty.
+On a first visit, which R122 now lands on the board, that blamed filters
+nobody had set and offered no way to the run that fills the board. Now three
+cases, each claiming only what is known:
+- **nothing stored** (`stats.total === 0`): "No jobs yet — run your first
+  search", plus a line on what a search does, and a **Run your first
+  search** button that opens the wizard on its Run step. The button appears
+  only when there is a profile to run.
+- **jobs stored, none matching the filters:** the filter message, with the
+  stored count, as before.
+- **counts not arrived or failed:** "No jobs to show.", neither claim.
+
+The button goes through `App`, which owns the board/wizard switch.
+`Wizard` gained an optional `initialStep`. "Edit setup" still opens the first
+step.
+
+**Tests** (`test_empty_board.py`, source-level): the three branches and the
+wiring. Against the old code, all fail.
+
+**Seen in a browser.** The built React, hosted mode, Chromium, signing in
+through the form:
+- an account with a profile and no jobs showed the empty state and not the
+  filter message;
+- its button opened the wizard on Run, with "Jobs to look at" on screen;
+- a four-job account searching for a term matching nothing showed the
+  filter message and not the empty state.
+
+## R124. A failed page scrape now uses the posting's full text from the ATS API, which discovery already had
+
+**Decided 2026-09-24**, from the first live deploy.
+
+**What was seen.** All three Ashby jobs (Vanta, `jobs.ashbyhq.com/vanta/...`)
+were logged "no description could be read" and given no resume. The summary
+still said 5 of 5 enriched (R125 fixes that count).
+
+**What was found.**
+- **Discovery had the full description.** `ats_search._ashby` reads
+  Ashby's posting API, which returns `descriptionPlain`, and `_listing`
+  keeps it as `JobListing.full_jd`. Greenhouse's `?content=true` does the
+  same.
+- **Enrichment never read `full_jd`.** It scraped every job's page, and when
+  that failed it fell back to `description`, which `_listing` cuts to the
+  first 300 characters. The Vanta jobs were scored on that snippet and
+  marked unreadable (R61), with their full text on the listing: CLAUDE.md's
+  recurring bug, a field computed and never read.
+
+**Why the page scrape failed on Fly: not established.** This container's
+network proxy refuses Ashby (403 at the tunnel), so the page could not be
+fetched here. Discovery reached Ashby's API from Fly, so Ashby is not
+blocked from Fly outright.
+- **Reasoned, unverified:** `jobs.ashbyhq.com` pages are a client-side app,
+  and `_scrape_ashby` looks for description `div`s and a `__NEXT_DATA__`
+  blob. If the served HTML has neither, it falls to the generic scraper and
+  fails.
+- **To settle it on the instance:** `fly ssh console`, `cd /app && python`,
+  then fetch one Vanta job URL with `tools.scraping.jd_scraper._SESSION`.
+  Print the status, whether `__NEXT_DATA__` or `__appData` is in the text,
+  and what `scrape_jd(url)` returns.
+
+The fix below does not depend on the answer.
+
+**The fix, contained to the failure path.** In
+`EnrichmentAgent._real_scrape`, when the page scrape fails and the listing's
+`full_jd` is at least `MIN_JD_LENGTH`:
+- it is used as the job description, with requirements extracted from it;
+- it is marked readable (`scraper_used: "ats_api (<source>)"`), since it is
+  the employer's own posting text, not a snippet and not an invention.
+
+Unchanged:
+- **A job whose scrape works.** Its scored text is unchanged, so no
+  measurement moves.
+- **A job with no or short API text.** It still fails honestly, per R61.
+
+**Not done, logged as Q80:** the module's docstring says API-sourced jobs
+"skip [enrichment] entirely". Doing that would change the text scored for
+every Greenhouse and Ashby job, so it is a scoring change to measure, not a
+fix.
+
+**Tests** (`test_ats_description_fallback.py`):
+- a failed scrape with API text is readable and uses the whole text;
+- a working scrape is untouched;
+- no or short API text still fails, with nothing invented;
+- a listing without the field takes the old path;
+- Ashby's discovery really does fill `full_jd`.
+
+Against the old enrichment, the two tests that need the full text fail. The
+R61 tests (`test_no_invented_jd`) still pass.
+
+## R125. "Jobs enriched" counts jobs with a readable description
+
+**Decided 2026-09-24**, from the first live deploy. The run that could not
+read three Vanta descriptions (R124) still reported "Jobs enriched: 5" of 5
+discovered. The report counted every job enrichment returned, readable or
+not.
+
+Now the report and the run record both count readable jobs
+(`_readable_count`, over `scraped_successfully`). The report names the rest:
+"Jobs enriched: 2 (3 more kept without a readable description)". They are
+kept, scored and badged (R61, A4), and the count says they exist rather than
+subtracting them in silence.
+
+The run record's `enriched` is not displayed by either UI today. It changes
+meaning with the report, so the two agree.
+
+**Tests** (`test_enriched_count.py`): the printed line for a mixed and an
+all-readable run, and the run record through `start_run` with a stub
+pipeline. Against the old code, 2 of 3 fail; the all-readable case passes
+there by construction.
+
+## R126. A Gemini 503 that generation survived was reported to Sentry as an unhandled error
+
+**Decided 2026-09-24**, from the first live deploy's Sentry project.
+
+**What was seen.** Two events, "ServerError: This model is currently
+experiencing high demand", tagged Unhandled on `/api/run`, with only
+google-genai frames. The run's log showed the 503 handled: generation fell
+back from gemini-3.5-flash to gemini-3.1-flash-lite and wrote a valid resume.
+
+**What reported it: sentry-sdk's own google-genai integration.**
+- sentry-sdk (2.70.0 here) enables `GoogleGenAIIntegration` automatically
+  whenever google-genai is installed. We never asked for it.
+- It wraps `Models.generate_content`, and on any exception calls
+  `_capture_exception` with `mechanism={"type": "google_genai", "handled":
+  False}`, then re-raises. So every 503 became an "unhandled" event before
+  our fallback ever saw it.
+- The `/api/run` tag is the request's scope, carried into the run thread.
+- Reproduced before the fix: a 503 raised inside google-genai (its request
+  method patched, no network) and caught by the caller produced exactly one
+  event, mechanism `google_genai`, `handled: False`.
+
+**A second, smaller source.** `rate_limiter.retry_with_backoff` logged "Max
+retries exceeded" at ERROR when one model's retries ran out. Its only caller,
+generation, then moves on to the next model. The logging integration sends
+ERROR records as events, so a fallback that went on to succeed could still
+be reported.
+
+**The fix.**
+- `start_error_reporting` passes `disabled_integrations=[GoogleGenAI
+  Integration()]` (guarded for an SDK that lacks it).
+- The retry helper logs WARNING; its raise carries the failure.
+
+Our code keeps deciding what a failure is:
+- a model falling back logs WARNING (already);
+- every model exhausted logs ERROR ("Gemini tailoring failed"), which is
+  still sent;
+- a request that actually fails is still reported by the web framework's
+  integration.
+
+**Tests** (`test_handled_fallbacks_stay_quiet.py`). Each scenario runs in its
+own process (`tests/sentry_probe.py`), because the SDK is process-global,
+with a fake DSN and a capturing transport; nothing is sent. The scenarios:
+- **`POST /api/run` during a Gemini 503:** 200, the run finishes, no event.
+- **A direct handled 503:** no event.
+- **One model's 429 retries running out:** no event.
+- **Every model exhausted:** one event (positive control).
+- **A route that really raises:** a 500 and one event (positive control).
+
+Reverting either change alone fails two tests, each time the `/api/run`
+scenario and the one that change covers.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -12658,6 +12910,99 @@ was "fix only what's listed".
 
 A comment in the deploy config is read at the moment somebody is deciding
 what to set. That is why a stale one here costs more than one in code.
+
+## Q79. After the invite: a sectioned layout instead of a wizard with a board behind it
+
+**Status:** Open, logged 2026-09-24 by the author. **After the invite**; R122
+is the minimal fix for now.
+
+The React app is two views: a six-step wizard, and a board reached from it.
+R122 made a returning user land on the board, with "Edit setup" back into
+the wizard. That is enough for a pilot. It is not a product layout for
+someone who comes back daily. The author's sections:
+- **applied jobs,** the ones marked applied, with their dates (the board's
+  status history already records them);
+- **resumes,** every tailored resume with its job, downloadable;
+- **tracking,** status over time and ghosting (the board already computes
+  `ghosted`);
+- **profile settings,** the wizard's screens as editable settings pages,
+  not a sequence.
+
+**To decide:** whether "run" is a section or an action available
+everywhere; whether the wizard survives only for the first visit; and what
+Streamlit does. Per R115 it does nothing: it stays as it is.
+
+**Constraint from R114:** it is the paid product's layout, so it is built
+once and for React, after the pilot shows what friends actually open.
+
+## Q80. The ATS module promises that API-sourced jobs skip scraping; enrichment scrapes them all
+
+**Status:** Open, found 2026-09-24 while diagnosing R124. A scoring change,
+so it needs measuring before it is built.
+
+`tools/search/ats_search.py`'s docstring says "The JD comes with the job.
+Greenhouse honours `?content=true` and Ashby returns `descriptionPlain`, so
+discovery and enrichment collapse into one call ... ATS-sourced jobs skip it
+entirely." Enrichment has never done that: it scrapes every job's page, and
+since R124 uses the API text only when the scrape fails.
+
+**Doing what the docstring says** would:
+- remove the slowest, most breakable stage for every Greenhouse and Ashby
+  job;
+- remove a request per job from the instance's egress;
+- stop depending on page formats that change.
+
+**It would also change the text every such job is scored on** (API plain
+text instead of cleaned page HTML), and so every score. By R67's practice
+that is measured by replaying the same corpus both ways and reading the top
+10, before and after.
+
+**Until then, the docstring is a claim the code does not keep:** correct it,
+or build it. Lever, Workable and SmartRecruiters need checking separately.
+SmartRecruiters' listing call carries no description at all.
+
+## Q81. Sentry chooses its own integrations from whatever is installed
+
+**Status:** Open, found 2026-09-24 while fixing R126.
+
+R126's cause was an integration nobody enabled: sentry-sdk switches on
+`GoogleGenAIIntegration` when google-genai is importable, and it reported
+every handled 503. R126 disables that one. The mechanism that brought it is
+still there. With the app loaded and a DSN set, the SDK enables, as of
+2.70.0:
+
+`argv, atexit, dedupe, excepthook, fastapi, httpx, huggingface_hub, logging,
+modules, starlette, stdlib, threading`.
+
+- `huggingface_hub` arrives because the local embedding model's library
+  depends on it. It was not chosen, and what it captures has not been
+  checked. It is most likely inference calls this app does not make, but
+  that is not verified.
+- `requirements.txt` says `sentry-sdk>=2.0.0`. So the next release can add
+  another auto-enabling integration for a library already installed, and it
+  would start reporting on the next deploy without a line changing here. It
+  is R80's "count them" risk, pointed at error reporting.
+- Every integration also carries data to Sentry. `_scrub` covers what is
+  sent, but a new integration can add fields R119 never looked at.
+
+**Options:**
+1. `auto_enabling_integrations=False` and name the ones wanted (FastAPI,
+   Starlette, logging, threading; perhaps httpx for breadcrumbs). Also pin
+   or cap sentry-sdk.
+2. Keep auto-enabling, and add a test that fails when the enabled set
+   differs from a reviewed list. That is `test_api_payload`'s allow-list
+   pattern, applied to integrations.
+
+The second is cheap and catches the next surprise at upgrade time rather
+than in production. The first removes the class.
+
+**Interim pin (2026-09-24):** `requirements.txt` now says
+`sentry-sdk==2.70.0`, the version R126 was tested on, so no release changes
+the enabled set before this is decided. **When Q81 is done, revisit the pin.**
+Keep it, cap it, or go back to a range, depending on which option is built.
+`pyproject.toml`'s `hosted` extra still says `sentry-sdk>=2.0.0`, and was left
+as it is. The image installs from `requirements.txt`; a `pip install
+.[hosted]` would not be pinned.
 
 ---
 
