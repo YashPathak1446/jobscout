@@ -95,6 +95,7 @@ from agents.orchestrator import (
     session_user,
     set_job_status,
     sign_in,
+    start_error_reporting,
     start_run,
     run_limits,
     run_status,
@@ -152,6 +153,10 @@ def _warn_if_local_mode_is_listening_widely(argv=None) -> bool:
               "refused. If this is a deploy, set JOBSCOUT_MODE=hosted and "
               "JOBSCOUT_SESSION_SECRET.", host)
     return True
+
+# Before the app exists, so Sentry's FastAPI integration sees it built. Off
+# unless SENTRY_DSN is set: a checkout and the test suite send nothing (A9).
+start_error_reporting()
 
 app = FastAPI(title="JobScout", version="1.0.0")
 

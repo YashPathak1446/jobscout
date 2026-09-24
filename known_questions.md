@@ -10431,6 +10431,84 @@ rejected within the first week.
 **Mutation-checked:** dropping `once`, recording a mark that changed no row,
 and reading the import path from `rung` each fail at least one test.
 
+## R119. Sentry on the hosted API, with the key scrubbed (A9)
+
+**Decided 2026-09-24.** Pilot plan A9, minimal. Only the list the author
+gave was built; what else turned up is Q71 and Q72.
+
+### What it does
+
+`tools/error_reporting.start_error_reporting()`, re-exported by the facade
+and called by `api/main.py` before the app is built. Backend only.
+
+- **Off unless `SENTRY_DSN` is set.** Without it nothing is imported and
+  nothing is sent, so a checkout, the CLI and the suite report nothing. Set
+  but `sentry-sdk` missing, it raises at boot: a deploy that asked for
+  reporting and silently has none is the failure A5 made loud for the mode.
+- `send_default_pii=False`, `include_local_variables=False`,
+  `max_request_body_size="never"`, and `LoggingIntegration(level=WARNING)`,
+  so logging below WARNING leaves no breadcrumb. Events from ERROR up, the
+  default.
+- **`before_send` scrubs every string in the event**, keys of dicts
+  included, through R117's `redact_keys`, and drops the request's headers
+  and cookies. Every string rather than a field list, because a list is
+  R80's "count them" with a credential at stake. If it raises, Sentry drops
+  the event rather than sending it unscrubbed (checked in the SDK source).
+- **`before_breadcrumb` runs the same scrub.** Not in the list, and added
+  because the list's own item needs it: a breadcrumb is sent with a *later*
+  event, and by then the run that held the key may have released it, so
+  `before_send` alone would not know the key. The test for it failed
+  without this.
+
+### Choices, and what breaks if they are wrong
+
+- **Chosen:** the scrub knows only keys that are held (`key_in_use`).
+  **Rejected:** a pattern for "looks like a key". R101 refuses to check a
+  key's prefix or length because Google has changed both. **If wrong:** an
+  exception that carries a key *out* of `key_in_use` reaches Sentry after
+  the key is released, unscrubbed. No route does this today; nothing
+  enforces it. That is Q71, with a reproduction.
+- **Chosen:** `sentry-sdk` in `requirements.txt` (which the image installs)
+  and as a `hosted` extra in `pyproject.toml`. **Rejected:** a core
+  dependency, since `pip install jobscout` for the CLI has no use for it.
+  **If wrong:** someone runs the API from a wheel with `SENTRY_DSN` set and
+  no extra; it refuses to boot and says why.
+- **Chosen:** no `traces_sample_rate`, so no performance data. The SDK
+  auto-enables its `google_genai`, `httpx` and `huggingface_hub`
+  integrations; with tracing off they add breadcrumbs and no spans, and the
+  breadcrumbs are scrubbed.
+- **Who it affects:** only an instance with `SENTRY_DSN` set, which is the
+  hosted one. `SENTRY_DSN` is on A12's deploy checklist, as a Fly secret.
+
+### Tests
+
+`tests/test_error_reporting.py`, 9. Events are kept by a transport in the
+test, and the options are the module's own; only the transport is swapped.
+Each assertion reads the whole serialized event.
+- With a key held: an exception whose message and a local both hold it
+  produces an event with no key and `[your key]` in its place; the same
+  through `logger.exception`, the way a failed run logs; a breadcrumb
+  written while held and sent after release.
+- Frames carry no `vars`, and a local's value is nowhere in the event.
+- An INFO line leaves no breadcrumb; a WARNING line does.
+- A real FastAPI 500 with the key in a header and the form body, and a
+  session cookie: the event has no headers, cookies, body, client address
+  or user, and none of the three values.
+- No DSN, an empty one or a blank one: `sentry_sdk.init` is not called and
+  no client is active. A DSN without the package raises. `api/main.py`
+  starts it before `FastAPI(`.
+
+**Mutation-checked, one at a time:** locals on, body `"always"`, PII on, no
+`before_send`, no `before_breadcrumb`, breadcrumbs from INFO, headers kept,
+and no DSN check each fail at least one test. Keeping cookies alone passes,
+because the SDK already omits them without PII; with PII also on, it fails.
+The first run of this check replaced the option's name in the docstring
+rather than the call, and "passed" three mutations. Re-derived, per R81.
+
+Source context lines are sent (they are code). A test that plants a value
+as a literal therefore finds it in the event through the source, not the
+data, so the tests build planted values at run time.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
@@ -12302,6 +12380,51 @@ apart, but the events view does not.
 
 **Carries over (R114)?** Yes. A paid product needs its funnel measured more
 than a pilot does.
+
+## Q71. An exception that carries a key out of `key_in_use` reaches Sentry unscrubbed
+
+**Status:** Open, logged 2026-09-24 while building R119.
+
+R117's scrub knows a key only while it is held. Sentry's FastAPI integration
+captures an unhandled exception in its middleware, after the route has
+returned, so after any `with key_in_use(key):` inside the route has exited.
+Reproduced while writing R119's tests: a route that raises
+`RuntimeError(f"model refused {api_key}")` inside `key_in_use` sent the key
+in the exception's value.
+
+No real path does this today. The extract route catches every exception and
+answers a 4xx `from None`, which Sentry does not report, and the run worker
+logs its failure while it holds the key. But nothing enforces either, and a
+new route that lets a model error escape would leak the key it was given.
+
+Possible fixes: `key_in_use` scrubs an exception's `args` on the way out;
+the API holds the request's key for the whole request (a dependency), so it
+is still held when the middleware captures; or a test that walks the routes
+for a key-taking one without a catch-all.
+
+**Carries over (R114)?** Yes. It is about what a hosted error report sends.
+
+## Q72. What Sentry still receives: resume and job text in exception values, and a DSN in `.env`
+
+**Status:** Open, logged 2026-09-24 while building R119.
+
+- **Exception values are not truncated.** Pilot-plan A9 asked for it:
+  `run_registry.fail` puts `f"{type(exc).__name__}: {exc}"` into an error,
+  and exceptions here quote scrape URLs, JD fragments and bullets (R81's
+  validation error quoted one). A resume bullet is personal information,
+  and Q69's reasoning applies to Sentry too. Not built because it was not in
+  the list for A9.
+- **A `SENTRY_DSN` in `.env` reports from a checkout and from the suite.**
+  `config` calls `load_dotenv()`. The suite has no shared setup where a guard
+  could clear it: `discover -s tests` names modules `test_x`, so
+  `tests/__init__.py` never runs, and twenty modules import the API. A12's
+  checklist says to set it as a Fly secret, never in `.env`. A guard in code
+  would be, for example, starting Sentry only in hosted mode.
+- **Source context lines are sent.** They are code, not data, and this repo
+  is public, so nothing is exposed that is not already. Noted so nobody
+  reads a planted literal found through them as a leak.
+
+**Carries over (R114)?** Yes. The paid product sends error reports too.
 
 ---
 

@@ -37,6 +37,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # `redact_keys` is re-exported for the API's error responses (R117).
 from config import key_in_use, redact_keys  # noqa: F401
+# The API's error reporting, off unless SENTRY_DSN is set (A9, R119).
+from tools.error_reporting import start_error_reporting  # noqa: F401
 from tools.paths import outputs_root, stored_path
 from tools.profile import load_profile
 # Re-exported for both views: the largest `years_experience` the schema takes,

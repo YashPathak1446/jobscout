@@ -56,11 +56,15 @@ PROJECT_PACKAGES = {"agents", "tools", "scripts", "config"}
 #                from its error responses (R117); the rule itself lives in
 #                `config`, and the facade applies it to runs and imports, so
 #                Streamlit's are scrubbed without it being edited.
+#
+#   start_error_reporting  Streamlit is frozen (R115). Sentry is for the
+#                hosted backend, which is the API; off without SENTRY_DSN (A9).
 HTTP_ONLY = {"board_job", "user_outputs_root"} | {
     "SESSION_COOKIE", "SESSION_TTL_SECONDS", "EmailTaken", "InviteRefused",
     "PassphraseRefused", "account_email", "check_hosting", "hosting_mode",
     "redeem_invite", "session_user", "sign_in",
-    "RunInProgress", "delete_user_data"} | {"RunSizeRefused"} | {"redact_keys"}
+    "RunInProgress", "delete_user_data"} | {"RunSizeRefused"} | {"redact_keys"} | {
+    "start_error_reporting"}
 
 
 def _facade_imports(tree):

@@ -973,6 +973,10 @@ truncates exception values — `run_registry.fail(run_id, f"{type(exc).__name__}
 {exc}")` already puts scrape URLs and JD fragments into an error string Sentry
 would capture verbatim.
 
+**Built minimal, 2026-09-24 (R119).** The key scrub, no PII, no locals, no
+request body, no headers or cookies. Truncating exception values was not in
+the list that was built, and is Q72.
+
 ### A9b. "0 discovered" has to say why — `_fetch` to both UIs (1–1½ days)
 
 The half of A0 that did not ship there. Numbered `b` rather than renumbering
@@ -1216,6 +1220,12 @@ real. Then invite.
   `DEEPSEEK_API_KEY`. R113 already ignores them in hosted mode; this keeps
   the instance from holding a key nothing should read, and keeps Q67's
   reversal a decision rather than a leftover.
+- **`SENTRY_DSN` is a Fly secret** (A9, R119): `fly secrets set
+  SENTRY_DSN=...`, and `fly secrets list` shows it. Without it the instance
+  reports nothing, silently. Then raise one error on the instance and see it
+  arrive in Sentry with no key, header, cookie or request body in it. Set it
+  as a secret, never in `.env`: `config` loads `.env`, so a DSN there would
+  also report from a checkout and from the test suite (Q72).
 
 **Discovery breadth last, after the invite is proven:** enable Adzuna
 (`adzuna_search.py` is fully implemented and needs only `ADZUNA_APP_ID` /

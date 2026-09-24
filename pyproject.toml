@@ -55,6 +55,10 @@ dependencies = [
 # with a Gemini key instead — but it is what makes JobScout work for someone
 # who has no key at all, so it is the extra worth installing.
 local = ["model2vec>=0.9.0"]
+# Error reporting for the hosted API (A9, R119). Off unless SENTRY_DSN is set,
+# so a local install has no use for it. The image installs requirements.txt,
+# which lists it.
+hosted = ["sentry-sdk>=2.0.0"]
 dev = ["ruff>=0.4.0"]
 
 [project.urls]
