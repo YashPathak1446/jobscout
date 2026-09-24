@@ -11316,6 +11316,53 @@ CLI's user owns the whole disk. A test resolves `..`, a symlink out of the
 home, and a plain relative path. It is small and I would take it as its own R
 whenever you say.
 
+## Q65. Sixty-two of the sixty-four skips are missing data, and thirty-six of those test code, not data
+
+**Status:** Open, inventoried 2026-09-24 on a clean clone (1430 run, 64
+skipped, 14 errors). No fixes yet. Belongs with A11b: the image runs the
+suite from a clone, so these are the tests that never run there. The 14
+errors are Q35's and are not counted here.
+
+**By cause:**
+
+| Cause | Skips | Tests |
+|---|---:|---|
+| Platform: no LaTeX engine | 2 | `test_latex_escaping.TestTheRenderedGlyph` |
+| Dependency or network | 0 | none |
+| **Data: `yash_pathak`'s profile or resume, testing a mechanism** | **36** | `test_component_editor` (16: `TestComponentEditor` 9, `TestAlwaysAndNeverInclude` 7), `test_pipeline_integration` (9: `TestPipelineDrivenLikeTheUI` 7, `TestReviewBeforeGenerating` 2), `test_fabrication_guards.TestFactualFieldsAreRestored` (5), `test_silent_degradation` (5: `TestTheFloorRecordsWhyItWasReached` 3, `TestTheUserIsToldInTheSummary` 2), `test_import_confirmation.TestLatexSkipsConfirmation` (1) |
+| Data: `yash_pathak`'s profile, pinning *his* behaviour | 7 | `test_location_country.TestTheFilterNowExcludesIt` (3), `test_experience_profile.TestTheAuthorsProfileIsUnchanged` (2, one also needs the frozen baseline), `test_seniority_queries.TestTheRealProfileIsUnaffected` (1), `test_board_gate.TestAgainstTheRealStore` (1, also needs a real `jobs.db`) |
+| Data: frozen baselines or real runs (gitignored contents) | 19 | `test_posting_facts.TestAgainstTheRealPostings` (6), `test_body_gate.TestAgainstTheRealPostings` (3), `test_eligibility_gate.TestAgainstTheRealRun` (3), `test_selection_report.TestAgainstTheRealRun` (3), `test_job_score_blend.TestAgainstTheRealCorpus` (2), `test_score_shape_independence.TestTheAuthorsScoresDoNotMove` (1), `test_skill_evidence.TestAgainstTheRealRun` (1) |
+
+**Flagged: all 62 data skips.** None is about platform, dependency or
+network. They split into three kinds that want different answers:
+
+1. **The 36 are the payload test's shape (R106's correction).** They test
+   code (the component editor, the fabrication guards, the degradation
+   record, the pipeline driven as the UI drives it) and take yash's profile
+   only because it was the one on disk. On a clone they skip, so the
+   mechanisms they guard have never been tested in CI or the image. Most look
+   portable to a committed fixture. Two cautions:
+   - `test_component_editor` also skips with "profile has no authored project
+     rules", and Priya has no projects, so it may want Rohan.
+   - Porting to Priya is porting to a fixture written here (R77, R78). That
+     is fine for mechanism tests, but it is the reason not to port the next
+     group.
+2. **The 7 are about yash's profile on purpose.** "The author's profile is
+   unchanged" is a legacy-migration check, which is what CLAUDE.md says his
+   profile is for. They should keep skipping without it, but say *whose*
+   profile they need: the message reads "needs a real profile", and Priya,
+   who is committed, is a real profile by any reading of that sentence.
+   `test_location_country`'s 3 are the exception to check: they test that a
+   Brazilian posting is excluded, which is a mechanism and may belong in
+   group 1.
+3. **The 19 are measurements** against frozen, gitignored corpora. They
+   cannot run on a clone without committing employers' posting text (R60),
+   so skipping is correct. They could say which baseline they want, as the
+   `baseline.py` verifier already does.
+
+**The count, for A11b:** porting group 1 would take a clone from 64 skips to
+28, and the image would run 36 more tests of code it ships.
+
 ---
 
 # Out of scope
