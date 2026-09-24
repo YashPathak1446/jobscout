@@ -19,6 +19,14 @@ get thrown away.
 **No fixed date, and no feature compromises.** Work runs in the background
 alongside other projects. Estimates below are focused-work days, not calendar.
 
+**The pilot is a beta (R114).** The real product is the React app with full
+accounts and authorization, and the friends pilot is its first users, not a
+separate thing. **During the pilot, build a fix only if it carries over into
+that product; otherwise log it in `known_questions.md` and defer it.** A
+guard on the hosted partition carries over; a workaround for one friend's
+machine or one pilot-only shortcut does not.
+
+
 ---
 
 ## Load-bearing decisions

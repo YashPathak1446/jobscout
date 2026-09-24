@@ -48,6 +48,12 @@ gets discovered* rather than only what gets ranked, there is no shared half
 - `app.py` is a view layer and imports only `agents.orchestrator` and
   `scripts.init_profile`. `tests/test_ui_contract.py` fails the build otherwise,
   and it enforces the same rule on `api/main.py`.
+- **The pilot is a beta; the product is React with full accounts and
+  authorization (R114).** Build a fix during the pilot only if it carries over
+  into that product. Otherwise log it in `known_questions.md` and defer it.
+  Ask of every change: does this survive the move from invited friends to
+  paying users? A guard on the hosted partition does; a workaround for one
+  friend's setup does not.
 
 ## Working with me
 

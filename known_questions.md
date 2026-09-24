@@ -10068,6 +10068,29 @@ embeddings stay local; exactly the two readers. Mutations: removing the
 Gemini guard fails 4, removing the OpenAI one fails 2, and a planted third
 reader fails the tree walk.
 
+## R114. The pilot is a beta: build only what carries into the product
+
+**Decided 2026-09-24 by the author.** Recorded in CLAUDE.md ("Working here")
+and at the top of `docs/pilot-plan.md`.
+
+The real product is the React app with full accounts and authorization. The
+friends pilot is a beta of it, not a separate thing to polish. **A fix is
+built during the pilot only if it carries over into that product;
+otherwise it is logged here and deferred.**
+
+- **Carries over, so build it:** the partition and path guards (R108, R111),
+  one profile per account (R109), run bounds (R110), the parse warnings
+  (R112), the key policy's guards (R113).
+- **Does not carry over, so log it:** a workaround for one friend's machine,
+  a copy tweak only the pilot will see, anything that exists because five
+  people are invited rather than signing up.
+
+**What breaks if wrong:** a friend meets a pilot-only rough edge that was
+logged rather than fixed. That is the cost accepted: they are beta users,
+and a rough edge is feedback the pilot exists to collect. The opposite
+error, pilot-only polish, spends the $10/month project's scarce hours on
+code that is thrown away at launch.
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
