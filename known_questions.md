@@ -12553,6 +12553,23 @@ for a key-taking one without a catch-all.
 
 **Carries over (R114)?** Yes. The paid product sends error reports too.
 
+## Q73. The rest of pilot plan A10: auto-stop guard, upload cap, dependency split
+
+**Status:** Open, logged 2026-09-24 while building R120. The plan's A10 section
+lists three more items that were not in the list R120 built:
+
+- **A test that fails on `auto_stop_machines != "off"` or
+  `min_machines_running < 1`** in `fly.toml`. Nothing checks it today, and
+  enabling auto-stop kills in-flight runs silently. R120 would reap them
+  afterwards, but a reap is not a run.
+- **An upload size cap.** `POST /api/resume/extract` still does
+  `await file.read()` with no limit (R107's table).
+- **The `requirements.txt` split for the container.** R120's measurement
+  shows it saves image disk, not resident memory, so it no longer bears on
+  machine size. It still bears on image size and build time.
+
+**Carries over (R114)?** Yes, all three.
+
 ---
 
 # Out of scope
