@@ -13068,6 +13068,30 @@ Keep it, cap it, or go back to a range, depending on which option is built.
 as it is. The image installs from `requirements.txt`; a `pip install
 .[hosted]` would not be pinned.
 
+## Q82. Cities in Preferences are never matched, and a state typed as its code matches nothing
+
+**Status:** Open, found 2026-09-24 while fixing R127.
+
+- **Cities are saved and never compared with a job's location.** The one
+  read, `job_filter` near line 854, uses `bool(cities or states_priority)`
+  to decide whether the relocation gate applies. A user who names "San
+  Francisco" and no states gets no ranking for San Francisco postings. The
+  cities do engage the "not willing to relocate" exclusion, which then
+  judges by *state*, so a city's own state is not preferred unless it is
+  also listed. That is CLAUDE.md's recurring bug: a field computed and never
+  read.
+- **States match by full name only.** `parse_location` normalises "NC" in a
+  posting to "North Carolina", but a user's entry is compared as typed, so
+  "NC" or "N.C." in Preferences matches nothing, silently. Normalise the
+  entry through the same table, or say on the screen that it takes full
+  names.
+- **Priya's committed profile has "Remote" in `cities`.** It is harmless
+  while cities are not matched, but it would count as a city once they are.
+  `remote_ok` is where that belongs.
+
+These change what is ranked or excluded, so they are scoring changes to
+measure, not UI fixes.
+
 ---
 
 # Out of scope
