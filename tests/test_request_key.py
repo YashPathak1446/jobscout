@@ -457,6 +457,18 @@ class TestThePageSendsAndKeepsTheKey(unittest.TestCase):
         self.assertIn("On the free tier, Google may use what you send it", step)
         self.assertIn("resume and the job descriptions", step)
 
+    def test_the_key_page_says_the_free_tier_asks_for_no_personal_data(self):
+        # Q69. JSX joins lines, so the check is on the words, not the layout.
+        step = " ".join(self.read("components/steps/KeyStep.tsx").split())
+        self.assertIn("Google's free-tier terms ask you not to send personal "
+                      "information, and your resume is personal information.", step)
+        self.assertIn("Without a key, everything except bullet rewriting works "
+                      "and nothing goes to Google", step)
+        self.assertIn("A paid key isn't used this way.", step)
+        # Exact only when hosted: a local instance also reads GOOGLE_API_KEY.
+        self.assertIn("mode === 'local'", step)
+        self.assertIn("unless this machine has GOOGLE_API_KEY set", step)
+
 
 class TestAHostedPageOffersNothingLocal(unittest.TestCase):
     """

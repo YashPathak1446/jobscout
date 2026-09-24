@@ -34,11 +34,15 @@ export function KeyStep({
   return (
     <div className="space-y-6">
       <div>
+        {/* Q69: without a key is a complete way to use this, and the
+            privacy-preserving one on the free tier. The heading offers two
+            choices rather than one step and a skip. */}
         <h2 className="text-xl font-semibold tracking-tight">
-          Your Gemini key (optional)
+          With a Gemini key, or without one
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          A key lets Google Gemini rewrite your bullets for each job.
+          Both work. With a key, Google Gemini rewrites your bullets for each
+          job. Without one, your bullets are used exactly as you wrote them.
         </p>
       </div>
 
@@ -118,6 +122,20 @@ export function KeyStep({
             <ExternalLink className="size-3" />
           </a>
           .
+        </p>
+        {/* Q69. The same "Unpaid Services" section asks users not to send
+            personal information. "Nothing goes to Google" is exact on a
+            hosted instance, where a request's key is the only key and
+            scoring is local (R113). A local one also uses GOOGLE_API_KEY
+            from the environment, so there it is qualified. */}
+        <p className="text-muted-foreground">
+          Google's free-tier terms ask you not to send personal information,
+          and your resume is personal information. Without a key, everything
+          except bullet rewriting works and nothing goes to Google
+          {mode === 'local'
+            ? ' (unless this machine has GOOGLE_API_KEY set, which is then used instead)'
+            : ''}
+          . A paid key isn't used this way.
         </p>
         {apiKey && (
           <Button variant="outline" size="sm" onClick={onForget}>

@@ -12239,6 +12239,7 @@ and its key handling, not pilot workarounds.
 ## Q69. Google's free-tier terms say not to submit personal information, and a resume is personal information
 
 **Status:** Open, logged 2026-09-24 while wording R117's data-use sentence.
+Interim wording on the Key step the same day (below); the fix is not built.
 
 The Gemini API terms' "Unpaid Services" section says content is used to
 improve Google's products, and that human reviewers may read it. The page
@@ -12258,6 +12259,26 @@ question for the pilot and for the paid product:
 
 **Carries over (R114)?** Yes. It is about what the hosted product sends to
 a third party on a user's behalf.
+
+**Interim wording, 2026-09-24 (React only, R115).** The Key step keeps
+R117's data-use sentence and adds the terms' own ask: *"Google's free-tier
+terms ask you not to send personal information, and your resume is personal
+information. Without a key, everything except bullet rewriting works and
+nothing goes to Google. A paid key isn't used this way."* The heading now
+offers two choices ("With a Gemini key, or without one") rather than an
+optional step, so the no-key path reads as a normal choice.
+
+"Nothing goes to Google" is exact on a hosted instance: the request's key is
+the only key and scoring is local (R113). A local instance also uses
+`GOOGLE_API_KEY` from the environment (`config.resolve_api_key`), so there
+the sentence carries a qualifier naming it. Locally the machine's owner set
+that variable, so the qualifier tells them something they did.
+
+**Still open.** Wording is disclosure, not a fix. The after-invite fix is
+**strip contact details before model calls**: name, email, phone and links
+removed from what generation sends, since generation does not need them.
+The import is harder, because reading contact details is part of its job;
+that half needs its own answer.
 
 ## Q70. The rest of the planned A8: client-side funnel events and the feedback button
 
