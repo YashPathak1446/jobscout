@@ -170,41 +170,46 @@ board, and a capture of real remote strings.
 2. ~~Q54's label~~, done (R106): every score is stored with its bar, and
    both UIs label a job under it "below your bar" with its score. Jobs under
    the bar no longer take a slot in every run.
-3. **Q58's copy, with the cheap rest of A7:**
-   - A plain statement, next to the key field, of what changes between
-     postings without a key (which entries, which of your own bullets, skills
-     order) and what does not (the wording).
-   - The free-tier data-use sentence, from Google's current terms, read at
-     build time.
-   - The key in `localStorage`, sent only in POST bodies, with "forget key".
-   - **Send that key with `/api/resume/extract` too** (R113): a hosted import
-     reads no key from the environment, so without it every PDF or Word
-     upload uses the pattern floor.
-   - **Q63's interim sentence**, at `ResumeStep`'s "Yes, replace" checkbox:
-     jobs already on your board keep the scores from your previous resume,
-     and only newly found jobs are scored against this one. Replacing is the
-     only path since R109 (one profile per hosted account).
+3. ~~Q58's copy~~, done (R117). The Key step comes first in the wizard and
+   says how to get a free key, what works without one, and where the key
+   goes. The key is kept in `localStorage` (guarded, with "Forget key"), sent
+   only in POST bodies, sent with `/api/resume/extract` too, and scrubbed
+   from logs, error messages, run records and files. Q63's interim sentence
+   is at `ResumeStep`'s "Yes, replace" checkbox.
+   - **Left from this item, not part of Q58:** the free-tier data-use
+     sentence, from Google's current terms, read at build time.
 4. **A8:** the per-user event log (including `reached_key_step` / `key_saved`)
    and the success criterion.
 5. **A9:** Sentry, with the key scrubbed.
 6. **A10:** concurrency, the stale-run reaper (Q49: a startup sweep across
    every partition, `queued` too) and machine size.
-7. **A11:** resume pre-flight on the friends' real resumes. Read the PDFs:
-   R104's 12-bullet page is not yet confirmed to fit one page for a real
-   senior's resume.
-8. **A11b: a clean clone runs green.** It stays before A12, because
-   `docker build --target verify` runs the suite from a clone, where the 14
-   `yash_pathak` tests error.
-9. **A12:** deploy, acceptance (gated on the `none` row), invite.
+7. **A12:** deploy, acceptance (gated on the `none` row), invite.
+
+**The invite depends on Q58, A8, A9, A10 and A12.** A11 and A11b moved
+after it (2026-09-24, the author's call). Two things that move gives up:
+- **A12's container gate.** `docker build --target verify` runs the suite
+  in an image built from a clone. Until A11b, that suite errors on tests
+  that have nothing to do with the container: 14 on a clone, and more in
+  the image, where `.dockerignore` keeps Priya and Rohan out. So A12 either
+  deploys with that gate knowingly red, reading those errors as Q35's and
+  not the image's, or A11b comes back before it.
+- **A11's first-impression check.** A friend's resume is now first read by
+  the parser when the friend uploads it. R112's parse warnings and the
+  R33 confirmation screen are what catch a bad read in the meantime.
 
 **After the invite:**
+- **A11:** resume pre-flight on the friends' real resumes. Read the PDFs:
+  R104's 12-bullet page is not yet confirmed to fit one page for a real
+  senior's resume.
+- **A11b: a clean clone runs green,** which also turns A12's container gate
+  green (see above).
 - **Q53, the null set:** anchor each resume against a fixed set of unrelated
   postings. Its triggers have fired (R99).
 - **Q63, stale scores after a resume change:** decide it with Q53, because
   both change what a stored score means. The fix computes each row's display
-  state once, in the facade. It was scheduled before A11, but A11 runs before
-  any friend has a board. A friend replacing their resume after the invite
-  is the first real trigger, and Q58's sentence covers that until then.
+  state once, in the facade. A friend replacing their resume after the
+  invite is the first real trigger, and Q58's sentence (R117) covers that
+  until then.
 - **A7b, a second free provider (Q60):**
   - Flash is 20 requests a day per key (Q61), so a friend gets 3–6 tailored
     resumes a day.
@@ -1074,7 +1079,7 @@ they reach either front end.
   which in A10; discovering it at `docker build` is how this becomes a deploy-day
   surprise.
 
-### A11. Resume pre-flight on the friends' real resumes (½ day)
+### A11. Resume pre-flight on the friends' real resumes (½ day) — **after the invite**
 
 **Both import paths, for every resume (2026-09-24).** Run each friend's
 resume through import twice: with a key (model extraction) and without one
@@ -1084,8 +1089,9 @@ The two are forks that one machine always takes the same side of. Compare
 the two profiles field by field, and read the `parse_warnings` each import
 reports (R112): anything they list is left out of every tailored resume.
 
-Before inviting, run each friend's actual resume through `extract_resume`
-locally and read the output. The pool spans CS students to 10-year engineers, so
+Run each friend's actual resume through `extract_resume` locally and read
+the output. *This said "before inviting" until 2026-09-24, when A11 moved
+after the invite; see the remaining order for what that gives up.* The pool spans CS students to 10-year engineers, so
 formats and lengths vary far beyond Jake's template. Two specific things to
 look at: whether the parser produces a sane profile, and whether the
 3-experience / 1-page defaults make sense for someone with ten years — that is
@@ -1093,7 +1099,7 @@ R74's bullet-budget problem waiting to happen. *It happened: Q59, which is now
 item 1 of the remaining order, ahead of this.* Cheap, and it is the last chance
 to find a parser bug before it costs a first impression.
 
-### A11b. A clean clone runs green (½ day) — before A12, because the image is a clone
+### A11b. A clean clone runs green (½ day) — **after the invite**, so A12's container gate is red until it lands
 
 **Fixture users move to `tests/fixtures/users/` (2026-09-24, Q65).** The
 `verify` stage copies `tests/` and `baselines/`, and `.dockerignore`
@@ -1111,10 +1117,11 @@ their own.** Checking the Q34 commit out into a fresh worktree and running the
 suite gives **14 errors and 66 skips**. The author's working tree gives 1 skip
 and no errors. The suite has never been run anywhere else.
 
-This sits before A12 and not after because **`docker build --target verify`
-runs the suite inside an image built from a clone** (Verification step 2). That
-step would fail on 14 tests that have nothing to do with the container, and the
-natural reading of a red container build is that the container is wrong.
+This sat before A12 because **`docker build --target verify` runs the suite
+inside an image built from a clone** (Verification step 2). That step fails on
+tests that have nothing to do with the container, and the natural reading of a
+red container build is that the container is wrong. **It moved after the
+invite on 2026-09-24**, so until it lands, A12 reads those errors as Q35's.
 
 #### What the 14 are
 
@@ -1256,9 +1263,10 @@ End-to-end, in order:
 1. `python -m agents.orchestrator --profile priya_raghunathan --max-jobs 5 --mock`
    still passes unscoped — the checkout fork must not move.
 2. `docker build --target verify` — baselines plus `acceptance.py --rung none`
-   inside the container, 3 of 3. **A11b first:** the image is built from a
-   clone, and a clone currently fails 14 tests that have nothing to do with
-   the container (Q35).
+   inside the container, 3 of 3. **Red on the suite until A11b**, which is
+   now after the invite: the image is built from a clone, and a clone fails
+   14 tests that have nothing to do with the container (Q35). Read those as
+   Q35's; baselines and acceptance must still pass.
 3. Two-user acceptance: create a second account, run both under `--mock`,
    assert the A2 tests pass.
 4. `DELETE /api/account` then the residue walker.
