@@ -708,6 +708,57 @@ class ProfileUpdate(BaseModel):
     updates: dict[str, Any]
 
 
+# Everything `PATCH /api/profile/{name}` may write: exactly what the two
+# screens that call it save. That is Preferences (`job_preferences`) and
+# About you (`personal_info`). A dict is a section whose own keys are checked;
+# `True` is a leaf, whose value the schema validates on save.
+#
+# An allow-list, not a denylist, for the payload test's reason: the route used
+# to merge any dict it was sent. So a hand-built request could set
+# `agent_preferences.max_jobs_to_generate` (run cost, A10), the scoring
+# threshold (Q63), or `resume_preferences.master_resume_path`, which a
+# relative `..` walked into another user's partition. A field reaches this
+# list when a screen starts saving it, in the same change.
+PROFILE_PATCHABLE: dict[str, Any] = {
+    "job_preferences": {
+        "target_roles": True,
+        "years_experience": True,
+        "seniority": True,
+        "exclude_keywords": True,
+        "locations": {
+            "cities": True,
+            "remote_ok": True,
+            "countries": True,
+            "states_priority": True,
+            "states_acceptable": True,
+            "willing_to_relocate": True,
+        },
+    },
+    "personal_info": {
+        "location": True,
+        "work_authorization": {
+            "us_person": True,
+            "needs_sponsorship": True,
+            "holds_clearance": True,
+        },
+    },
+}
+
+
+def _unpatchable(updates: Any, allowed: dict, prefix: str = "") -> list[str]:
+    """Every dotted path in `updates` that `allowed` does not name."""
+    if not isinstance(updates, dict):
+        return [prefix.rstrip(".") or "updates"]
+    refused = []
+    for key, value in updates.items():
+        rule = allowed.get(key)
+        if rule is None:
+            refused.append(f"{prefix}{key}")
+        elif isinstance(rule, dict):
+            refused += _unpatchable(value, rule, f"{prefix}{key}.")
+    return refused
+
+
 @app.patch("/api/profile/{name}")
 def profile_update(name: str, request: ProfileUpdate, user: Optional[str] = Depends(_caller)) -> dict:
     """
@@ -718,7 +769,15 @@ def profile_update(name: str, request: ProfileUpdate, user: Optional[str] = Depe
     `locations`' seven fields, and a wholesale replace dropped `countries`,
     which the schema requires — walking the wizard left a profile that would
     not load. A form must not destroy what it never showed (R30).
+
+    Only the fields in `PROFILE_PATCHABLE` are written. Anything else is a 400
+    naming each refused field, and nothing is written.
     """
+    refused = _unpatchable(request.updates, PROFILE_PATCHABLE)
+    if refused:
+        raise HTTPException(
+            status_code=400,
+            detail="These fields cannot be changed here: " + ", ".join(refused))
     try:
         path = update_profile_fields(user, name, request.updates)
     except FileNotFoundError as exc:

@@ -1033,6 +1033,27 @@ they reach either front end.
   ~290 MB of a 565 MB site-packages tree. Verify the saving against Fly's
   current pricing at deploy rather than against the numbers here.
 
+- **What sets a run's size, and whether the server trusts it** (inventoried
+  2026-09-24, R107). "Trusted" means the server takes the value as given.
+
+  | Input | Where | What it drives | Trusted? |
+  |---|---|---|---|
+  | `max_jobs` | `POST /api/run` body, default 20 | Discovery's output cap, then one scrape per job (server egress and time) and one embedding per job (potion CPU, or the user's Gemini quota) | **Yes, unbounded.** React's input says 1–100 and Streamlit's slider 5–50; both are client-side only |
+  | `max_resumes` | `POST /api/run` body, default 3 | LLM calls (user's key) and **one `pdflatex` compile per resume**, the heaviest server CPU per unit | **Yes, unbounded.** 0 falls through to the profile's `max_jobs_to_generate`; a negative value slices from the end |
+  | `agent_preferences.max_jobs_to_generate` | profile, default 10 | The resume cap when `max_resumes` is 0 | Now server-set only: R107 refuses it on PATCH |
+  | `agent_preferences.max_jobs_to_discover` / `max_jobs_to_enrich` | profile | **Nothing.** Read only by `profile_loader`'s summary print. The run uses the request's `max_jobs` | n/a, computed and never read (CLAUDE.md's recurring bug) |
+  | `max_retries`, `retry_on_validation_fail`, `fallback_to_snippet`, `discovery_source_priority` | profile | Nothing in production code | n/a, never read |
+  | `backend` / `agent_preferences.llm_backend` | run body / profile | Which rung writes | Yes. Harmless while no operator key is in the environment (`fly.toml`: decision 4). **If a `GROQ_API_KEY` or `OPENAI_API_KEY` is ever set as a Fly secret, any user's run spends it** (`llm_backends.env_openai_key`) |
+  | Resume upload | `POST /api/resume/extract` | Whole file read into memory, then PDF/DOCX parsing | **Yes, no size limit** (`await file.read()`) |
+  | Runs in flight per user | `start_run` | Threads on one machine | **No limit today**; the first bullet above |
+  | ATS slugs searched | `ats_companies.json`, per user | Discovery fan-out; grows as discovery learns slugs | Server-written only; not user-editable, but unbounded growth |
+  | Discovery per-source caps | constants (ATS 200, Serper 10, Adzuna 15) | Upstream fetches | Server constants |
+
+  A10 therefore adds server-side bounds on `max_jobs` and `max_resumes` (at
+  least Streamlit's 50 and 10, and refuse ≤ 0), an upload size cap, and a
+  test that fails when an operator key is set in hosted mode, or a rule that
+  hosted runs never read one.
+
 - **Trimming streamlit forces a dependency split, and that has to be decided
   here.** `requirements.txt` is deliberately the install list for people running
   the app locally, not a dev manifest — and `app.py` is one of the two supported

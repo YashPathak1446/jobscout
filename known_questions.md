@@ -9708,6 +9708,56 @@ generation. Only jobs that passed get resumes.
     1426**, with 0 skips raised from `setUpClass`. The 64 remaining skips are
     individual tests, each counted as run.
 
+## R107. `PATCH /api/profile/{name}` writes only what the two wizard screens save
+
+**Decided 2026-09-24**, at the author's request, before Q58.
+
+**What it was.** The route merged any dict it was sent into the profile,
+validated the result against the schema, and wrote it. The schema checks
+types, not authority. So a hand-built request could set:
+- `agent_preferences.max_jobs_to_generate`: the run's resume cap whenever
+  `max_resumes` is 0 (`orchestrator.py:1348`), so a run cost the server
+  could not bound;
+- `agent_preferences.scoring_threshold`: Q63's lowered-bar case, with no
+  screen offering it;
+- `resume_preferences.master_resume_path`: **a cross-partition read.**
+  `paths.stored_path` checks an *absolute* path against the user's home but
+  joins a *relative* one without resolving it, so
+  `../<other id>/data/master_resumes/x.tex` resolved into another user's
+  partition. The pipeline would have read that resume and written its
+  contents into PDFs served to the caller. Verified by resolving that string
+  for `alice`: it lands in `users/<other id>/`. The path gap itself is Q64.
+
+**What it is.** `api/main.py`'s `PROFILE_PATCHABLE` names every field the
+route may write. Anything else is a **400** naming each refused path, and
+nothing is written. A request mixing allowed and refused fields writes none
+of it.
+
+**Chosen over the literal ask.** The request was "the fields the Preferences
+screen saves". About you (`AboutYouStep.save`) saves through the same route:
+`personal_info.location` and the three `work_authorization` answers. A list
+of Preferences' fields alone would have made About you's Save a 400 for
+every user, the dead-button failure (R72, R75) with a server behind it. So
+the list is both screens' fields. Neither screen sends
+`locations.exclude_countries`, and it is refused.
+
+**Where it lives, and what it does not cover.** In `api/main.py`, because
+it is a policy of the HTTP surface. `update_profile_fields` is unchanged, so
+Streamlit, which calls it in-process for one local user, can still save the
+fields its own screens show. The list applies in both modes: the React app
+sends nothing else in either.
+
+**Both directions tested** (`tests/test_profile_patch.py`):
+- both screens' payloads save; six refused requests are 400s that name the
+  field and leave the file byte-identical; a mixed request writes nothing;
+- a source test reads the object literal each screen passes to
+  `api.updateProfile` and requires every key on the list at its depth. A
+  screen that starts saving a new field fails this test rather than failing
+  for users.
+- Mutations: no guard gives 7 failures; dropping `holds_clearance` gives 1
+  (the source test); dropping `willing_to_relocate` gives 2 (route and
+  source).
+
 ## Q31. The caches are cwd-relative and miss the volume
 
 **Status:** Resolved 2026-09-22 by R90 (A3). All four resolve per user
