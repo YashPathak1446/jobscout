@@ -11486,6 +11486,46 @@ network. They split into three kinds that want different answers:
 **The count, for A11b:** porting group 1 would take a clone from 64 skips to
 28, and the image would run 36 more tests of code it ships.
 
+### Ported, 2026-09-24: fabrication guards and silent degradation (10 of the 36)
+
+At the author's request, the rest of group 1 waits until after the invite.
+- `test_fabrication_guards.TestFactualFieldsAreRestored` (5) and
+  `test_silent_degradation`'s two classes (5) now run once per committed
+  fixture, **Priya and Rohan**, as `…ForPriya` / `…ForRohan` subclasses of
+  one base: 20 tests where there were 10 skips.
+- Priya has no projects and Rohan has four, so the verbatim floor is walked
+  with and without a projects section. A guard fails if either stops being
+  true.
+- A fixture that loses the component a test relies on now **fails**; it used
+  to skip ("this profile does not have the expected component").
+- Each test reads its fixture through a temporary `JOBSCOUT_HOME` seeded by
+  `tests/fixture_home.py`, not the checkout's own `user_profiles/`, so it
+  resolves paths the way a user's data does.
+- Mutations: disabling `_restore_factual_fields` fails 6 (three per
+  fixture); dropping the `_verbatim_reason` assignment fails 2.
+- A clean clone now runs 1460 tests with 52 data skips, down from 62. (This
+  container also got a TeX engine for R108's audit: the two
+  `TestTheRenderedGlyph` skips now run, and `test_no_engine_is_a_skip_not_a_
+  failure` skips instead, because an engine is present.)
+
+**They do not yet run in the image, and porting cannot make them.** The
+`verify` stage copies `tests/` and `baselines/` only, and `.dockerignore`
+excludes `user_profiles/` and `data/` whole, committed fixtures included. So
+in the image every test that reads Priya or Rohan from the checkout hits
+`FileNotFoundError`: these ten, and about 15 modules that already read Priya
+that way. That is A11b's business, and larger than Q65. The smallest fix I
+see:
+- move the fixture users' committed files under `tests/fixtures/users/`
+  (already in the image's `verify` stage); or
+- re-include the four files in `.dockerignore`, `COPY` them in `verify` only,
+  and keep `runtime` shipping none.
+
+The first keeps "never ship anyone's data" true by construction. It also
+means `--profile priya_raghunathan` on the CLI needs the fixture copied in,
+and acceptance's seeding (A12) reads from the new place. Not built here; it
+needs a Docker build to verify, and this container has no daemon.
+
+
 ---
 
 # Out of scope

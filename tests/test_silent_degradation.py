@@ -95,30 +95,35 @@ class TestExtractionSaysWhichHappened(unittest.TestCase):
         self.assertIn("no key resolved", text)
 
 
-class TestTheFloorRecordsWhyItWasReached(unittest.TestCase):
+class _TheFloorRecordsWhyItWasReached:
     """
     `_verbatim_tailor` produces byte-identical output whether it was chosen or
     fallen back to. The reason is the only thing separating them.
+
+    Run once per committed fixture (Q65); it used `yash_pathak` and skipped
+    everywhere else.
     """
 
+    FIXTURE = None
+
     def setUp(self):
-        from agents.generation_agent import GenerationAgent
-        from tools.profile import load_profile
-        from tools.resume import ResumeParser
+        from tests.fixture_home import FIXTURES, fixture_home, generation_agent_for
 
-        if not (ROOT / "user_profiles" / "yash_pathak.json").exists():
-            self.skipTest("needs a real profile; skipped on a clean clone")
-
-        profile = load_profile("yash_pathak", user_id=None)
-        parser = ResumeParser(profile.resume_preferences.master_resume_path,
-                              skip_embeddings=True, user_id=None)
-        self.agent = GenerationAgent(profile, parser, generate_pdf=False)
-        self.selected = {"experiences": ["exp_sorenson_communications"],
-                         "projects": []}
+        home = fixture_home(self.FIXTURE)
+        home.__enter__()
+        self.addCleanup(home.__exit__, None, None, None)
+        self.agent, parser = generation_agent_for(self.FIXTURE)
+        # Rohan has projects and Priya has none, so between them the floor is
+        # walked with and without a projects section.
+        self.selected = {"experiences": [FIXTURES[self.FIXTURE]],
+                         "projects": [p.id for p in parser.parsed_resume.projects[:1]]}
+        self.assertEqual(bool(self.selected["projects"]), self.HAS_PROJECTS,
+                         f"{self.FIXTURE}'s projects changed; pick another fixture")
 
     def test_a_chosen_floor_carries_no_reason(self):
         tailored = self.agent._verbatim_tailor({}, self.selected)
         self.assertNotIn("_verbatim_reason", tailored)
+        self.assertTrue(tailored["experiences"], "the floor wrote nothing")
 
     def test_a_fallen_back_floor_carries_one(self):
         tailored = self.agent._verbatim_tailor(
@@ -133,24 +138,34 @@ class TestTheFloorRecordsWhyItWasReached(unittest.TestCase):
         chosen = self.agent._verbatim_tailor({}, self.selected)
         fallen = self.agent._verbatim_tailor({}, self.selected, reason="x")
         self.assertEqual(chosen["experiences"], fallen["experiences"])
+        self.assertEqual(chosen["projects"], fallen["projects"])
 
 
-class TestTheUserIsToldInTheSummary(unittest.TestCase):
+class TestTheFloorRecordsWhyItWasReachedForPriya(_TheFloorRecordsWhyItWasReached,
+                                                 unittest.TestCase):
+    FIXTURE = "priya_raghunathan"
+    HAS_PROJECTS = False
+
+
+class TestTheFloorRecordsWhyItWasReachedForRohan(_TheFloorRecordsWhyItWasReached,
+                                                 unittest.TestCase):
+    FIXTURE = "rohan_deshmukh"
+    HAS_PROJECTS = True
+
+
+class _TheUserIsToldInTheSummary:
     """A log line nobody reads is not much better than silence."""
 
+    FIXTURE = None
+
     def _summary_for(self, results):
-        import json
-        import tempfile
         from agents.orchestrator import JobScoutOrchestrator
-        from tools.profile import load_profile
+        from tests.fixture_home import fixture_home
 
-        if not (ROOT / "user_profiles" / "yash_pathak.json").exists():
-            self.skipTest("needs a real profile; skipped on a clean clone")
-
-        with tempfile.TemporaryDirectory() as tmp:
+        with fixture_home(self.FIXTURE) as home:
             orchestrator = JobScoutOrchestrator(
-                profile_name="yash_pathak", user_id=None, output_dir=tmp,
-                generate_pdf=False)
+                profile_name=self.FIXTURE, user_id=None,
+                output_dir=str(home / "outputs"), generate_pdf=False)
             orchestrator.state["generation_results"] = results
             orchestrator.state["discovered_jobs"] = []
             orchestrator.state["analysis_results"] = []
@@ -172,6 +187,16 @@ class TestTheUserIsToldInTheSummary(unittest.TestCase):
     def test_a_clean_run_does_not_cry_wolf(self):
         text = self._summary_for([self._result()])
         self.assertNotIn("not rewritten", text)
+
+
+class TestTheUserIsToldInTheSummaryForPriya(_TheUserIsToldInTheSummary,
+                                            unittest.TestCase):
+    FIXTURE = "priya_raghunathan"
+
+
+class TestTheUserIsToldInTheSummaryForRohan(_TheUserIsToldInTheSummary,
+                                            unittest.TestCase):
+    FIXTURE = "rohan_deshmukh"
 
 
 if __name__ == "__main__":

@@ -131,34 +131,33 @@ class TestInventedMetricsAreCaught(unittest.TestCase):
         self.assertFalse(any("does not appear" in e for e in result.errors))
 
 
-class TestFactualFieldsAreRestored(unittest.TestCase):
+class _FactualFieldsAreRestored:
     """
     Dates, company and title are records, not writing.
 
     The LaTeX builder reads them straight out of the model's reply, so a
     hallucinated date reaches the page. Taking them back from the master
     removes the class instead of detecting it.
+
+    Run once per committed fixture (Q65). This used `yash_pathak`, which is
+    not committed, so it skipped everywhere but the author's machine.
     """
 
+    FIXTURE = None
+
     def setUp(self):
-        from agents.generation_agent import GenerationAgent
-        from tools.profile import load_profile
-        from tools.resume import ResumeParser
+        from tests.fixture_home import FIXTURES, fixture_home, generation_agent_for
 
-        source = ROOT / "user_profiles" / "yash_pathak.json"
-        if not source.exists():
-            self.skipTest("needs a real profile; skipped on a clean clone")
-
-        profile = load_profile("yash_pathak", user_id=None)
-        parser = ResumeParser(profile.resume_preferences.master_resume_path,
-                              skip_embeddings=True, user_id=None)
-        self.agent = GenerationAgent(profile, parser, generate_pdf=False)
-        self.real = parser.get_experience_by_id("exp_sorenson_communications")
-        if self.real is None:
-            self.skipTest("this profile does not have the expected component")
+        home = fixture_home(self.FIXTURE)
+        home.__enter__()
+        self.addCleanup(home.__exit__, None, None, None)
+        self.agent, parser = generation_agent_for(self.FIXTURE)
+        self.exp_id = FIXTURES[self.FIXTURE]
+        self.real = parser.get_experience_by_id(self.exp_id)
+        self.assertIsNotNone(self.real, f"{self.FIXTURE} lost {self.exp_id}")
 
     def _restore(self, **overrides):
-        entry = {"id": "exp_sorenson_communications", "bullets": ["A bullet."]}
+        entry = {"id": self.exp_id, "bullets": ["A bullet."]}
         entry.update(overrides)
         tailored = {"experiences": [entry], "projects": []}
         self.agent._restore_factual_fields(tailored)
@@ -166,6 +165,7 @@ class TestFactualFieldsAreRestored(unittest.TestCase):
 
     def test_a_hallucinated_date_is_replaced(self):
         """R44's actual output: "Summer 2022" for work done in 2025."""
+        self.assertNotEqual(self.real.dates, "Summer 2022")
         self.assertEqual(self._restore(dates="Summer 2022")["dates"], self.real.dates)
 
     def test_a_changed_company_is_replaced(self):
@@ -192,6 +192,16 @@ class TestFactualFieldsAreRestored(unittest.TestCase):
                     "projects": []}
         self.agent._restore_factual_fields(tailored)
         self.assertEqual(tailored["experiences"][0]["dates"], "Summer 2022")
+
+
+class TestFactualFieldsAreRestoredForPriya(_FactualFieldsAreRestored,
+                                           unittest.TestCase):
+    FIXTURE = "priya_raghunathan"
+
+
+class TestFactualFieldsAreRestoredForRohan(_FactualFieldsAreRestored,
+                                           unittest.TestCase):
+    FIXTURE = "rohan_deshmukh"
 
 
 if __name__ == "__main__":
